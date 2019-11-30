@@ -136,6 +136,7 @@ enum Token : int {
   tok_bracket_close = '}',
   tok_sbracket_open = '[',
   tok_sbracket_close = ']',
+  tok_ampersand = '&',
   tok_percent = '%',
   tok_plus = '+',
   tok_minus = '-',
@@ -158,19 +159,18 @@ enum Token : int {
   tok_cmp_ge = -92, // >=
   tok_cmp_ne = -93, // <>
 
-  // primary
+  // names and literals
   tok_identifier = -100,
   tok_symbol = -101,
-  tok_number = -102,
-  tok_decimal_digit_string = -103,
-  tok_binary_digit_string = -104,
-  tok_octal_digit_string = -105,
-  tok_hex_digit_string = -106,
-  tok_string_literal = -107,
+  tok_integer_literal = -102,
+  tok_real_number_literal = -103,
+  tok_string_literal = -104,
 
   // errors
   tok_error_symbol = -901,
-  tok_error_string = -907,
+  tok_error_integer = -902,
+  tok_error_real = -903,
+  tok_error_string = -904,
 };
 
 /// The Lexer is an abstract base class providing all the facilities that the
@@ -217,10 +217,19 @@ public:
     return stringValue;
   }
 
-  /// Return the current number (prereq: getCurToken() == tok_number)
-  double getValue() {
-    assert(curTok == tok_number);
-    return numVal;
+  int64_t getIntegerValue() {
+    assert(curTok == tok_integer_literal);
+    return intVal;
+  }
+
+  float getRealNumberValue() {
+    assert(curTok == tok_real_number_literal);
+    return realVal;
+  }
+
+  llvm::StringRef getStringValue() {
+    assert(curTok == tok_string_literal);
+    return stringValue;
   }
 
   /// Return the location for the beginning of the current token.
@@ -270,178 +279,191 @@ private:
     // reserved word or identifier
     if (isalpha(lastChar) || lastChar == '_') {
       stringValue = (char)lastChar;
-      while (isalnum((lastChar = Token(getNextChar()))) || lastChar == '_')
+      std::string lower { (char)tolower(lastChar) };
+      while (isalnum((lastChar = Token(getNextChar()))) || lastChar == '_') {
         stringValue += (char)lastChar;
+        lower += (char)tolower(lastChar);
+      }
 
-      if (stringValue == "and")
+      if (lower == "and")
         return tok_and;
-      if (stringValue == "any")
+      if (lower == "any")
         return tok_any;
-      if (stringValue == "array")
+      if (lower == "array")
         return tok_array;
-      if (stringValue == "begin")
+      if (lower == "begin")
         return tok_begin;
-      if (stringValue == "block_db")
+      if (lower == "block_db")
         return tok_block_db;
-      if (stringValue == "block_fb")
+      if (lower == "block_fb")
         return tok_block_fb;
-      if (stringValue == "block_fc")
+      if (lower == "block_fc")
         return tok_block_fc;
-      if (stringValue == "block_sdb")
+      if (lower == "block_sdb")
         return tok_block_sdb;
-      if (stringValue == "bool")
+      if (lower == "bool")
         return tok_bool;
-      if (stringValue == "by")
+      if (lower == "by")
         return tok_by;
-      if (stringValue == "byte")
+      if (lower == "byte")
         return tok_byte;
-      if (stringValue == "case")
+      if (lower == "case")
         return tok_case;
-      if (stringValue == "char")
+      if (lower == "char")
         return tok_char;
-      if (stringValue == "const")
+      if (lower == "const")
         return tok_const;
-      if (stringValue == "continue")
+      if (lower == "continue")
         return tok_continue;
-      if (stringValue == "counter")
+      if (lower == "counter")
         return tok_counter;
-      if (stringValue == "data_block")
+      if (lower == "data_block")
         return tok_data_block;
-      if (stringValue == "date")
+      if (lower == "date")
         return tok_date;
-      if (stringValue == "date_and_time")
+      if (lower == "date_and_time")
         return tok_date_and_time;
-      if (stringValue == "dint")
+      if (lower == "dint")
         return tok_dint;
-      if (stringValue == "div")
+      if (lower == "div")
         return tok_div;
-      if (stringValue == "do")
+      if (lower == "do")
         return tok_do;
-      if (stringValue == "dt")
+      if (lower == "dt")
         return tok_dt;
-      if (stringValue == "dword")
+      if (lower == "dword")
         return tok_dword;
-      if (stringValue == "else")
+      if (lower == "else")
         return tok_else;
-      if (stringValue == "elsif")
+      if (lower == "elsif")
         return tok_elsif;
-      if (stringValue == "en")
+      if (lower == "en")
         return tok_en;
-      if (stringValue == "eno")
+      if (lower == "eno")
         return tok_eno;
-      if (stringValue == "end_case")
+      if (lower == "end_case")
         return tok_end_case;
-      if (stringValue == "end_const")
+      if (lower == "end_const")
         return tok_end_const;
-      if (stringValue == "end_data_block")
+      if (lower == "end_data_block")
         return tok_end_data_block;
-      if (stringValue == "end_for")
+      if (lower == "end_for")
         return tok_end_for;
-      if (stringValue == "end_function")
+      if (lower == "end_function")
         return tok_end_function;
-      if (stringValue == "end_function_block")
+      if (lower == "end_function_block")
         return tok_end_function_block;
-      if (stringValue == "end_if")
+      if (lower == "end_if")
         return tok_end_if;
-      if (stringValue == "end_label")
+      if (lower == "end_label")
         return tok_end_label;
-      if (stringValue == "end_type")
+      if (lower == "end_type")
         return tok_end_type;
-      if (stringValue == "end_organization_block")
+      if (lower == "end_organization_block")
         return tok_end_organization_block;
-      if (stringValue == "end_repeat")
+      if (lower == "end_repeat")
         return tok_end_repeat;
-      if (stringValue == "end_struct")
+      if (lower == "end_struct")
         return tok_end_struct;
-      if (stringValue == "end_var")
+      if (lower == "end_var")
         return tok_end_var;
-      if (stringValue == "end_while")
+      if (lower == "end_while")
         return tok_end_while;
-      if (stringValue == "exit")
+      if (lower == "exit")
         return tok_exit;
-      if (stringValue == "false")
+      if (lower == "false")
         return tok_false;
-      if (stringValue == "for")
+      if (lower == "for")
         return tok_for;
-      if (stringValue == "function")
+      if (lower == "function")
         return tok_function;
-      if (stringValue == "function_block")
+      if (lower == "function_block")
         return tok_function_block;
-      if (stringValue == "goto")
+      if (lower == "goto")
         return tok_goto;
-      if (stringValue == "if")
+      if (lower == "if")
         return tok_if;
-      if (stringValue == "int")
+      if (lower == "int")
         return tok_int;
-      if (stringValue == "label")
+      if (lower == "label")
         return tok_label;
-      if (stringValue == "mod")
+      if (lower == "mod")
         return tok_mod;
-      if (stringValue == "nil")
+      if (lower == "nil")
         return tok_nil;
-      if (stringValue == "not")
+      if (lower == "not")
         return tok_not;
-      if (stringValue == "of")
+      if (lower == "of")
         return tok_of;
-      if (stringValue == "ok")
+      if (lower == "ok")
         return tok_ok;
-      if (stringValue == "or")
+      if (lower == "or")
         return tok_or;
-      if (stringValue == "organization_block")
+      if (lower == "organization_block")
         return tok_organization_block;
-      if (stringValue == "pointer")
+      if (lower == "pointer")
         return tok_pointer;
-      if (stringValue == "real")
+      if (lower == "real")
         return tok_real;
-      if (stringValue == "repeat")
+      if (lower == "repeat")
         return tok_repeat;
-      if (stringValue == "return")
+      if (lower == "return")
         return tok_return;
-      if (stringValue == "s5time")
+      if (lower == "s5time")
         return tok_s5time;
-      if (stringValue == "string")
+      if (lower == "string")
         return tok_string;
-      if (stringValue == "struct")
+      if (lower == "struct")
         return tok_struct;
-      if (stringValue == "then")
+      if (lower == "then")
         return tok_then;
-      if (stringValue == "time")
+      if (lower == "time")
         return tok_time;
-      if (stringValue == "timer")
+      if (lower == "timer")
         return tok_timer;
-      if (stringValue == "time_of_day")
+      if (lower == "time_of_day")
         return tok_time_of_day;
-      if (stringValue == "to")
+      if (lower == "to")
         return tok_to;
-      if (stringValue == "tod")
+      if (lower == "tod")
         return tok_tod;
-      if (stringValue == "true")
+      if (lower == "true")
         return tok_true;
-      if (stringValue == "type")
+      if (lower == "type")
         return tok_type;
-      if (stringValue == "until")
+      if (lower == "until")
         return tok_until;
-      if (stringValue == "var")
+      if (lower == "var")
         return tok_var;
-      if (stringValue == "var_input")
+      if (lower == "var_input")
         return tok_var_input;
-      if (stringValue == "var_in_out")
+      if (lower == "var_in_out")
         return tok_var_in_out;
-      if (stringValue == "var_output")
+      if (lower == "var_output")
         return tok_var_output;
-      if (stringValue == "var_temp")
+      if (lower == "var_temp")
         return tok_var_temp;
-      if (stringValue == "while")
+      if (lower == "while")
         return tok_while;
-      if (stringValue == "word")
+      if (lower == "word")
         return tok_word;
-      if (stringValue == "void")
+      if (lower == "void")
         return tok_void;
-      if (stringValue == "xor")
+      if (lower == "xor")
         return tok_xor;
 
       return tok_identifier;
     }
+
+    if (lastChar == '#') { // identifier, escapes reserved words
+      stringValue = "";
+      while (isalnum((lastChar = Token(getNextChar()))) || lastChar == '_') {
+        stringValue += (char)lastChar;
+      }
+      return tok_identifier;
+    }
+
+    // MARK: strings and symbols
 
     if (lastChar == '\'') { // String literal
       stringValue = "";
@@ -489,18 +511,83 @@ private:
       return tok_symbol;
     }
 
-    if (isdigit(lastChar) || lastChar == '.') { // Number: [0-9.]+
-      std::string NumStr;
-      do {
-        NumStr += lastChar;
-        lastChar = Token(getNextChar());
-      } while (isdigit(lastChar) || lastChar == '.');
+    // MARK: number literals
 
-      numVal = strtod(NumStr.c_str(), nullptr);
-      return tok_number;
+    if (isdigit(lastChar) || lastChar == '-') { // Number: [0-9.]+
+      std::string numStr;
+
+      if (lastChar == '-') {
+        numStr = "-";
+        lastChar = Token(getNextChar());
+        if (!isdigit(lastChar))
+          return Token('-');
+      }
+
+      enum State { Decimal, Binary, Octal, Hex, Real, Exponent } state = Decimal;
+      do {
+        if (lastChar == '_')
+          lastChar = Token(getNextChar());
+        if (isdigit(lastChar)) {
+          numStr += lastChar;
+        } else if (isxdigit(lastChar) && state == Hex) {
+          numStr += lastChar;
+        } else if (lastChar == '#' && state == Decimal) {
+          if (numStr == "2")
+            state = Binary;
+          else if (numStr == "8")
+            state = Octal;
+          else if (numStr == "16")
+            state = Hex;
+          else
+            return tok_error_integer;
+          numStr = "";
+        } else if (lastChar == '.' && state == Decimal) {
+          lastChar = Token(getNextChar());
+          if (lastChar == '.') {
+            // not a single dot
+            lastChar = tok_range;
+            break;
+          }
+          numStr += '.';
+          state = Real;
+          continue; // we already got the next char
+        } else if ((lastChar == 'e' || lastChar == 'E') && (state == Decimal || state == Real)) {
+          numStr += 'e';
+          state = Exponent;
+        }
+        lastChar = Token(getNextChar());
+      } while (isdigit(lastChar) || lastChar == '.' || lastChar == '_' || lastChar == 'e' || lastChar == 'E');
+
+      switch (state) {
+      case Decimal:
+        intVal = stoll(numStr);
+        return tok_integer_literal;
+      case Binary:
+        intVal = stoll(numStr, nullptr, 2);
+        return tok_integer_literal;
+      case Octal:
+        intVal = stoll(numStr, nullptr, 8);
+        return tok_integer_literal;
+      case Hex:
+        intVal = stoll(numStr, nullptr, 16);
+        return tok_integer_literal;
+      case Real:
+      case Exponent:
+        realVal = stof(numStr, nullptr);
+        return tok_real_number_literal;
+      }
     }
 
-    // multi-character operators
+    // MARK: multi-character operators
+
+    if (lastChar == '.') {
+      lastChar = Token(getNextChar());
+      if (lastChar == '.') {
+        lastChar = Token(getNextChar());
+        return tok_range;
+      }
+      return tok_dot;
+    }
     if (lastChar == ':') {
       lastChar = Token(getNextChar());
       if (lastChar == '=') {
@@ -538,14 +625,35 @@ private:
       return tok_cmp_lt;
     }
 
-    if (lastChar == '#') {
-      // Comment until end of line.
-      do
-        lastChar = Token(getNextChar());
-      while (lastChar != EOF && lastChar != '\n' && lastChar != '\r');
+    // MARK: comments
 
-      if (lastChar != EOF)
+    if (lastChar == '/') {
+      lastChar = Token(getNextChar());
+      if (lastChar == '/') { // Comment until end of line.
+        do {
+          lastChar = Token(getNextChar());
+          if (lastChar == EOF)
+            return tok_eof;
+        } while (lastChar != '\n' && lastChar != '\r');
         return getTok();
+      } else
+        return Token('/');
+    }
+    if (lastChar == '(') {
+      lastChar = Token(getNextChar());
+      if (lastChar == '*') { // comment block
+        Token last2;
+        do {
+          last2 = lastChar;
+          lastChar = Token(getNextChar());
+          if (lastChar == EOF)
+            return tok_eof;
+        } while (!(last2 == '*' && lastChar == ')'));
+        // end of comment
+        return getTok();
+      } else { // no comment block, just an opening paranthesis
+        return Token('(');
+      }
     }
 
     // Check for end of file.  Don't eat the EOF.
@@ -568,7 +676,9 @@ private:
   std::string stringValue;
 
   /// If the current Token is a number, this contains the value.
-  double numVal = 0;
+  float realVal = 0;
+
+  int64_t intVal = 0;
 
   /// The last value returned by getNextChar(). We need to keep it around as we
   /// always need to read ahead one character to decide when to end a token and

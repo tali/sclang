@@ -33,46 +33,120 @@
 
 namespace sclang {
 
-// MARK: B.1.1 Literals
+// forward declarations
+class CodeSectionAST;
+class ConstantAST;
+class DataTypeInitAST;
+class DataTypeSpecAST;
+class DBAssignmentSectionAST;
+class DeclarationSectionAST;
+class ExpressionAST;
+class IntegerConstantAST;
 
-// MARK: C.5 Value Assignments
 
-class Constant {
-  Location location;
+// MARK: C.1 Subunits of SCL Source Files
 
+/// SCL program unit
+class UnitAST {
 public:
-  Constant(Location loc, std::string str)
-    : location(std::move(loc)) {}
-  Constant(Location loc, double value)
-    : location(std::move(loc)) {}
+  enum UnitASTKind {
+    Unit_OrganizationBlock,
+    Unit_Function,
+    Unit_FunctionBlock,
+    Unit_DataBlock,
+    Unit_UserDefinedDataType,
+  };
+
+  UnitAST(UnitASTKind kind, const std::string & identifier, Location location, std::unique_ptr<DeclarationSectionAST> declarations)
+      : kind(kind), identifier(identifier), declarations(std::move(declarations)), location(location) {}
+
+  virtual ~UnitAST() = default;
+
+  UnitASTKind getKind() const { return kind; }
+  llvm::StringRef getIdentifier() const { return identifier; }
+  const DeclarationSectionAST * getDeclarations() const { return declarations.get(); }
+
+  const Location &loc() const { return location; }
+
+private:
+  const UnitASTKind kind;
+  std::string identifier;
+  std::unique_ptr<DeclarationSectionAST> declarations;
+  Location location;
 };
 
-// MARK: C.4 Code Section
+/// A block-list of expressions.
+using UnitASTList = std::vector<std::unique_ptr<UnitAST>>;
 
-// MARK: C.3 Data Types in SCL
+class OrganizationBlockAST : public UnitAST {
+  std::unique_ptr<CodeSectionAST> code;
+
+public:
+  OrganizationBlockAST(const std::string & identifier, Location loc, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<CodeSectionAST> code)
+    : UnitAST(Unit_OrganizationBlock, identifier, std::move(loc), std::move(declarations)), code(std::move(code)) {}
+
+  const CodeSectionAST * getCode() const { return code.get(); }
+
+  /// LLVM style RTTI
+  static bool classof(const UnitAST *u) { return u->getKind() == Unit_OrganizationBlock; }
+};
+
+class FunctionAST : public UnitAST {
+  std::unique_ptr<DataTypeSpecAST> type;
+  std::unique_ptr<CodeSectionAST> code;
+
+public:
+  FunctionAST(const std::string & identifier, Location loc, std::unique_ptr<DataTypeSpecAST> type, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<CodeSectionAST> code)
+    : UnitAST(Unit_Function, identifier, std::move(loc), std::move(declarations)), type(std::move(type)), code(std::move(code)) {}
+
+  const DataTypeSpecAST * getType() const { return type.get(); }
+  const CodeSectionAST * getCode() const { return code.get(); }
+
+  /// LLVM style RTTI
+  static bool classof(const UnitAST *u) { return u->getKind() == Unit_Function; }
+};
+
+class FunctionBlockAST : public UnitAST {
+  std::unique_ptr<CodeSectionAST> code;
+
+public:
+  FunctionBlockAST(const std::string & identifier, Location loc, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<CodeSectionAST> code)
+    : UnitAST(Unit_FunctionBlock, identifier, loc, std::move(declarations)), code(std::move(code)) {}
+
+  const CodeSectionAST * getCode() const { return code.get(); }
+
+  /// LLVM style RTTI
+  static bool classof(const UnitAST *u) { return u->getKind() == Unit_FunctionBlock; }
+};
+
+class DataBlockAST : public UnitAST {
+  std::unique_ptr<DBAssignmentSectionAST> assignments;
+
+public:
+  DataBlockAST(const std::string & identifier, Location loc, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<DBAssignmentSectionAST> assignments)
+    : UnitAST(Unit_DataBlock, identifier, loc, std::move(declarations)), assignments(std::move(assignments)) {}
+
+  const DBAssignmentSectionAST * getAssignments() const { return assignments.get(); }
+
+  /// LLVM style RTTI
+  static bool classof(const UnitAST *u) { return u->getKind() == Unit_DataBlock; }
+};
+
+class UserDefinedTypeAST : public UnitAST {
+  std::unique_ptr<DataTypeSpecAST> type;
+
+public:
+  UserDefinedTypeAST(const std::string & identifier, Location loc, std::unique_ptr<DataTypeSpecAST> type)
+    : UnitAST(Unit_UserDefinedDataType, std::move(identifier), std::move(loc), nullptr), type(std::move(type)) {}
+
+  const DataTypeSpecAST * getType() const { return type.get(); }
+
+  /// LLVM style RTTI
+  static bool classof(const UnitAST *u) { return u->getKind() == Unit_UserDefinedDataType; }
+};
+
 
 // MARK: C.2 Structure of Declaration Sections
-
-/// TODO: TBD
-class DataTypeSpecAST {
-  Location location;
-
-public:
-  DataTypeSpecAST(Location loc)
-    : location(std::move(loc)) {}
-};
-
-/// TODO: TBD
-class DataTypeInitAST {
-  Location location;
-  std::vector<std::unique_ptr<Constant>> list;
-
-public:
-  DataTypeInitAST(Location loc, std::vector<std::unique_ptr<Constant>> list)
-   : location(std::move(loc)), list(std::move(list)) {}
-};
-
-struct SimpleExpressionAST {};
 
 
 
@@ -81,9 +155,7 @@ public:
   enum DeclarationASTKind {
     Decl_Constant,
     Decl_JumpLabel,
-    Decl_VarTemp,
-    Decl_VarStatic,
-    Decl_Parameter,
+    Decl_Variable,
   };
 
   DeclarationSubsectionAST(DeclarationASTKind kind, Location location)
@@ -93,7 +165,7 @@ public:
 
   DeclarationASTKind getKind() const { return kind; }
 
-  const Location &loc() { return location; }
+  const Location &loc() const { return location; }
 
 private:
   const DeclarationASTKind kind;
@@ -102,16 +174,16 @@ private:
 
 class ConstantDeclarationAST {
   Location location;
-  std::string identifier;
-  std::unique_ptr<SimpleExpressionAST> value;
+  std::string name;
+  std::unique_ptr<ConstantAST> value;
 
 public:
-  ConstantDeclarationAST(Location loc, llvm::StringRef identifier, std::unique_ptr<SimpleExpressionAST> value)
-    : location(loc), identifier(identifier), value(std::move(value)) {}
+  ConstantDeclarationAST(Location loc, llvm::StringRef name, std::unique_ptr<ConstantAST> value)
+    : location(loc), name(std::move(name)), value(std::move(value)) {}
 
-  const Location &loc() { return location; }
-  llvm::StringRef getIdentifier() { return identifier; }
-  SimpleExpressionAST* getValue() { return value.get(); }
+  const Location &loc() const { return location; }
+  llvm::StringRef getName() const { return name; }
+  const ConstantAST* getValue() const { return value.get(); }
 };
 
 class ConstantDeclarationSubsectionAST : public DeclarationSubsectionAST {
@@ -135,8 +207,8 @@ public:
   JumpLabelDeclarationAST(Location loc, llvm::StringRef identifier)
     : location(loc), identifier(identifier) {}
 
-  const Location &loc() { return location; }
-  llvm::StringRef getIdentifier() { return identifier; }
+  const Location &loc() const { return location; }
+  llvm::StringRef getIdentifier() const { return identifier; }
 };
 
 class JumpLabelDeclarationSubsectionAST : public DeclarationSubsectionAST {
@@ -161,9 +233,9 @@ public:
   VariableAttributeAST(Location loc, llvm::StringRef key, llvm::StringRef value)
     : location(loc),  key(key), value(value) {}
 
-  const Location &loc() { return location; }
-  llvm::StringRef getKey() { return key; }
-  llvm::StringRef getValue() { return value; }
+  const Location &loc() const { return location; }
+  llvm::StringRef getKey() const { return key; }
+  llvm::StringRef getValue() const { return value; }
 };
 
 class VariableIdentifierAST {
@@ -172,9 +244,9 @@ class VariableIdentifierAST {
   std::vector<std::unique_ptr<VariableAttributeAST>> attributes;
 
 public:
-  const Location &loc() { return location; }
-    llvm::StringRef getIdentifier() { return identifier; }
-    llvm::ArrayRef<std::unique_ptr<VariableAttributeAST>> getAttributes() { return attributes; }
+  const Location &loc() const { return location; }
+    llvm::StringRef getIdentifier() const { return identifier; }
+    llvm::ArrayRef<std::unique_ptr<VariableAttributeAST>> getAttributes() const { return attributes; }
 
     VariableIdentifierAST(Location loc, llvm::StringRef identifier,
                            std::vector<std::unique_ptr<VariableAttributeAST>> attributes)
@@ -188,10 +260,10 @@ class VariableDeclarationAST {
   llvm::Optional<std::unique_ptr<DataTypeInitAST>> initializer;
 
 public:
-  const Location &loc() { return location; }
-  llvm::ArrayRef<std::unique_ptr<VariableIdentifierAST>> getVars() { return vars; }
-  DataTypeSpecAST *getDataType() { return dataType.get(); }
-  llvm::Optional<DataTypeInitAST*> getInitializer() {
+  const Location &loc() const { return location; }
+  llvm::ArrayRef<std::unique_ptr<VariableIdentifierAST>> getVars() const { return vars; }
+  const DataTypeSpecAST *getDataType() const { return dataType.get(); }
+  llvm::Optional<DataTypeInitAST*> const getInitializer() const {
     if (!initializer.hasValue())
       return llvm::NoneType();
     return initializer.getValue().get();
@@ -207,29 +279,22 @@ public:
 };
 
 class VariableDeclarationSubsectionAST : public DeclarationSubsectionAST {
+public:
+  enum Var_Kind { Var, VarTemp, VarInput, VarOutput, VarInOut };
+
+private:
+  Var_Kind kind;
   std::vector<std::unique_ptr<VariableDeclarationAST>> values;
 
 public:
-  VariableDeclarationSubsectionAST(Location loc, std::vector<std::unique_ptr<VariableDeclarationAST>> values)
-    : DeclarationSubsectionAST(Decl_VarStatic, loc), values(std::move(values)) {}
+  VariableDeclarationSubsectionAST(Location loc, Var_Kind kind, std::vector<std::unique_ptr<VariableDeclarationAST>> values)
+    : DeclarationSubsectionAST(Decl_Variable, loc), kind(kind), values(std::move(values)) {}
 
-  llvm::ArrayRef<std::unique_ptr<VariableDeclarationAST>> getValues() { return values; }
-
-  /// LLVM style RTTI
-  static bool classof(const DeclarationSubsectionAST *D) { return D->getKind() == Decl_VarStatic; }
-};
-
-class TempVariableDeclarationSubsectionAST : public DeclarationSubsectionAST {
-  std::vector<std::unique_ptr<VariableDeclarationAST>> values;
-
-public:
-  TempVariableDeclarationSubsectionAST(Location loc, std::vector<std::unique_ptr<VariableDeclarationAST>> values)
-    : DeclarationSubsectionAST(Decl_VarTemp, loc), values(std::move(values)) {}
-
-  llvm::ArrayRef<std::unique_ptr<VariableDeclarationAST>> getValues() { return values; }
+  Var_Kind getKind() const { return kind; }
+  llvm::ArrayRef<std::unique_ptr<VariableDeclarationAST>> getValues() const { return values; }
 
   /// LLVM style RTTI
-  static bool classof(const DeclarationSubsectionAST *D) { return D->getKind() == Decl_VarTemp; }
+  static bool classof(const DeclarationSubsectionAST *D) { return D->getKind() == Decl_Variable; }
 };
 
 class DeclarationSectionAST {
@@ -238,119 +303,600 @@ class DeclarationSectionAST {
 
 public:
   const Location &loc() { return location; }
-  llvm::ArrayRef<std::unique_ptr<DeclarationSubsectionAST>> getDecls() { return declarations; }
+  llvm::ArrayRef<std::unique_ptr<DeclarationSubsectionAST>> getDecls() const { return declarations; }
 
   DeclarationSectionAST(Location loc, std::vector<std::unique_ptr<DeclarationSubsectionAST>> decls)
     : location(loc), declarations(std::move(decls)) {}
 };
 
-class CodeSectionAST {
+class DBAssignmentAST {
   Location location;
 
 public:
-  CodeSectionAST(Location loc)
+  DBAssignmentAST(Location loc)
     : location(loc) {}
 };
 
-class AssignmentsSectionAST {
+class DBAssignmentSectionAST {
   Location location;
+  std::vector<std::unique_ptr<DBAssignmentAST>> assignments;
 
 public:
-  AssignmentsSectionAST(Location loc)
-    : location(loc) {}
+  DBAssignmentSectionAST(Location loc, std::vector<std::unique_ptr<DBAssignmentAST>> assignments)
+    : location(loc), assignments(std::move(assignments)) {}
+
+  llvm::ArrayRef<std::unique_ptr<DBAssignmentAST>> getAssignments() const { return assignments; }
 };
 
-// MARK: C.1 Subunits of SCL Source Files
+// MARK: C.3 Data Types in SCL
 
-/// SCL program unit
-class UnitAST {
+class DataTypeSpecAST {
 public:
-  enum UnitASTKind {
-    Unit_OrganizationBlock,
-    Unit_Function,
-    Unit_FunctionBlock,
-    Unit_DataBlock,
-    Unit_UserDefinedDataType,
+  enum DataTypeASTKind {
+    DataType_Elementary,
+    DataType_String,
+    DataType_Array,
+    DataType_Struct,
+    DataType_UDT,
+    // Type_Parameter, // uses Type_Elementary
   };
 
-  UnitAST(UnitASTKind kind, const std::string & identifier, Location location, std::unique_ptr<DeclarationSectionAST> declarations)
-      : kind(kind), identifier(identifier), declarations(std::move(declarations)), location(location) {}
+  DataTypeSpecAST(Location loc, DataTypeASTKind kind)
+    : location(std::move(loc)), kind(kind) {}
 
-  virtual ~UnitAST() = default;
-
-  UnitASTKind getKind() const { return kind; }
-  llvm::StringRef getIdentifier() { return identifier; }
-  DeclarationSectionAST * getDeclarations() { return declarations.get(); }
-
-  const Location &loc() { return location; }
+  const Location &loc() const { return location; }
+  DataTypeASTKind getKind() const { return kind; }
 
 private:
-  const UnitASTKind kind;
-  std::string identifier;
-  std::unique_ptr<DeclarationSectionAST> declarations;
   Location location;
+  DataTypeASTKind kind;
 };
 
-/// A block-list of expressions.
-using UnitASTList = std::vector<std::unique_ptr<UnitAST>>;
+class DataTypeInitAST {
+  Location location;
+  std::vector<std::unique_ptr<ConstantAST>> list;
 
-class OrganizationBlockAST : public UnitAST {
+public:
+  DataTypeInitAST(Location loc, std::vector<std::unique_ptr<ConstantAST>> list)
+   : location(std::move(loc)), list(std::move(list)) {}
+
+  const Location &loc() const { return location; }
+  llvm::ArrayRef<std::unique_ptr<ConstantAST>> getList() const { return list; }
+};
+
+
+class ElementaryDataTypeAST : public DataTypeSpecAST {
+public:
+  enum ElementaryTypeASTKind {
+    // Bit Data Type
+    Type_Bool, Type_Byte, Type_Word, Type_DWord,
+    // Character Type
+    Type_Char,
+    // Numeric Data Type
+    Type_Int, Type_DInt, Type_Real,
+    // Time Type
+    Type_S5Time, Type_Time, Type_TimeOfDay, Type_Date,
+    Type_DateAndTime,
+    // Parameter Data Type
+    Type_Timer, Type_Counter,
+    Type_Any, Type_Pointer,
+    Type_BlockFC, Type_BlockFB, Type_BlockDB, Type_BlockSDB,
+  };
+
+  ElementaryDataTypeAST(Location loc, ElementaryTypeASTKind type)
+    : DataTypeSpecAST(std::move(loc), DataType_Elementary), typeKind(type) {}
+
+  ElementaryTypeASTKind getType() const { return typeKind; }
+
+  /// LLVM style RTTI
+  static bool classof(const DataTypeSpecAST *d) { return d->getKind() == DataType_Elementary; }
+
+private:
+  ElementaryTypeASTKind typeKind;
+};
+
+class StringDataTypeSpecAST : public DataTypeSpecAST {
+  uint8_t maxLen;
+
+public:
+  StringDataTypeSpecAST(Location loc, uint8_t maxLen = 254)
+    : DataTypeSpecAST(std::move(loc), DataType_String), maxLen(maxLen) {}
+
+  uint8_t getMaxLen() const { return maxLen; }
+
+  /// LLVM style RTTI
+  static bool classof(const DataTypeSpecAST *d) { return d->getKind() == DataType_String; }
+};
+
+class ArrayDataTypeSpecAST : public DataTypeSpecAST {
+  std::vector<std::pair<int32_t, int32_t>> dimensions;
+  std::unique_ptr<DataTypeSpecAST> dataType;
+
+public:
+  ArrayDataTypeSpecAST(Location loc, std::vector<std::pair<int32_t, int32_t>> dimensions, std::unique_ptr<DataTypeSpecAST> dataType)
+    : DataTypeSpecAST(std::move(loc), DataType_Array), dimensions(std::move(dimensions)), dataType(std::move(dataType)) {}
+
+  llvm::ArrayRef<std::pair<int32_t, int32_t>> getDimensions() const { return dimensions; }
+  const DataTypeSpecAST * getDataType() const { return dataType.get(); }
+  /// LLVM style RTTI
+  static bool classof(const DataTypeSpecAST *d) { return d->getKind() == DataType_Array; }
+};
+
+class ComponentDeclarationAST {
+  Location location;
+  std::string name;
+  std::unique_ptr<DataTypeSpecAST> dataType;
+  llvm::Optional<std::unique_ptr<DataTypeInitAST>> initializer;
+
+public:
+  ComponentDeclarationAST(Location loc, std::string name, std::unique_ptr<DataTypeSpecAST> dataType, llvm::Optional<std::unique_ptr<DataTypeInitAST>> init)
+    : location(std::move(loc)), name(std::move(name)), dataType(std::move(dataType)), initializer(std::move(init)) {}
+
+  const Location &loc() const { return location; }
+  llvm::StringRef getName() const { return name; }
+  const DataTypeSpecAST * getDataType() const { return dataType.get(); }
+  llvm::Optional<const DataTypeInitAST *> getInitializer() const {
+    if (!initializer.hasValue())
+      return llvm::NoneType();
+    return initializer.getValue().get();
+  }
+};
+
+class StructDataTypeSpecAST : public DataTypeSpecAST {
+  Location location;
+  std::vector<std::unique_ptr<ComponentDeclarationAST>> components;
+
+public:
+  StructDataTypeSpecAST(Location loc, std::vector<std::unique_ptr<ComponentDeclarationAST>> components)
+    : DataTypeSpecAST(std::move(loc), DataType_Struct), components(std::move(components)) {}
+
+  llvm::ArrayRef<std::unique_ptr<ComponentDeclarationAST>> getComponents() const { return components; }
+
+  /// LLVM style RTTI
+  static bool classof(const DataTypeSpecAST *d) { return d->getKind() == DataType_Struct; }
+};
+
+class UserDefinedTypeIdentifierAST : public DataTypeSpecAST {
+  std::string name;
+
+public:
+  UserDefinedTypeIdentifierAST(Location loc, std::string name)
+  : DataTypeSpecAST(std::move(loc), DataType_UDT) {}
+
+  llvm::StringRef getName() const { return name; }
+
+  /// LLVM style RTTI
+  static bool classof(const DataTypeSpecAST *d) { return d->getKind() == DataType_UDT; }
+};
+
+
+// MARK: C.4 Code Section
+
+class InstructionAST {
+public:
+  enum InstrASTKind {
+    Instr_JumpLabel,
+    Instr_Assignment,
+    Instr_Subroutine,
+    Instr_IfThenElse,
+    Instr_CaseOf,
+    Instr_ForDo,
+    Instr_WhileDo,
+    Instr_RepeatUntil,
+    Instr_Continue,
+    Instr_Return,
+    Instr_Exit,
+    Instr_Goto,
+  };
+
+  InstructionAST(Location loc, InstrASTKind kind)
+    : location(std::move(loc)), kind(kind) {}
+
+  InstrASTKind getKind() const { return kind; }
+private:
+  Location location;
+  InstrASTKind kind;
+};
+
+class CodeSectionAST {
+  Location location;
+  std::vector<std::unique_ptr<InstructionAST>> instructions;
+
+public:
+  CodeSectionAST(Location loc, std::vector<std::unique_ptr<InstructionAST>> instructions)
+    : location(std::move(loc)), instructions(std::move(instructions)) {}
+
+  llvm::ArrayRef<std::unique_ptr<InstructionAST>> getInstructions() const { return instructions; }
+};
+
+class JumpLabelAST : public InstructionAST {
+  std::string label;
+
+public:
+  JumpLabelAST(Location loc, std::string label)
+    : InstructionAST(std::move(loc), Instr_JumpLabel), label(std::move(label)) {}
+
+  llvm::StringRef getLabel() const { return label; }
+
+  /// LLVM style RTTI
+  static bool classof(const InstructionAST *i) { return i->getKind() == Instr_JumpLabel; }
+};
+
+class ValueAssignmentAST : public InstructionAST {
+  std::unique_ptr<ExpressionAST> expression;
+
+public:
+  ValueAssignmentAST(Location loc, std::unique_ptr<ExpressionAST> expression)
+    : InstructionAST(std::move(loc), Instr_Assignment), expression(std::move(expression)) {}
+
+  const ExpressionAST * getExpression() const { return expression.get(); }
+
+  /// LLVM style RTTI
+  static bool classof(const InstructionAST *i) { return i->getKind() == Instr_Assignment; }
+};
+
+
+// MARK: C.5 Value Assignments
+
+class ExpressionAST {
+public:
+  enum ExprASTKind {
+    Expr_IntegerConstant,
+    Expr_RealConstant,
+    Expr_StringConstant,
+    Expr_SimpleVariable,
+    Expr_StructuredVariable,
+    Expr_IndexedVariable,
+    Expr_FunctionCall,
+    Expr_Binary,
+    Expr_Unary,
+  };
+
+  ExpressionAST(Location loc, ExprASTKind kind)
+    : location(std::move(loc)), kind(kind) {}
+
+  const Location &loc() const { return location; }
+  ExprASTKind getKind() const { return kind; }
+
+private:
+  Location location;
+  ExprASTKind kind;
+};
+
+class SimpleVariableAST : public ExpressionAST {
+  std::string name;
+
+public:
+  SimpleVariableAST(Location loc, std::string name)
+    : ExpressionAST(std::move(loc), Expr_SimpleVariable), name(std::move(name)) {}
+
+  llvm::StringRef getName() const { return name; }
+
+  /// LLVM style RTTI
+  static bool classof(const ExpressionAST *e) { return e->getKind() == Expr_SimpleVariable; }
+};
+
+class IndexedVariableAST : public ExpressionAST {
+  std::unique_ptr<ExpressionAST> base;
+  std::vector<std::unique_ptr<ExpressionAST>> indices;
+
+public:
+  IndexedVariableAST(Location loc, std::unique_ptr<ExpressionAST> base, std::vector<std::unique_ptr<ExpressionAST>> indices)
+  : ExpressionAST(std::move(loc), Expr_IndexedVariable), base(std::move(base)), indices(std::move(indices)) {}
+
+  const ExpressionAST * getBase() const { return base.get(); }
+  llvm::ArrayRef<std::unique_ptr<ExpressionAST>> getIndices() const { return indices; }
+};
+
+class StructuredVariableAST : public ExpressionAST {
+  std::unique_ptr<ExpressionAST> base;
+  std::string variable;
+
+public:
+  StructuredVariableAST(Location loc, std::unique_ptr<ExpressionAST> base, std::string variable)
+  : ExpressionAST(std::move(loc), Expr_StructuredVariable), base(std::move(base)), variable(std::move(variable)) {}
+
+  const ExpressionAST * getBase() const { return base.get(); }
+  llvm::StringRef getVariable() const { return variable; }
+};
+
+class BinaryExpressionAST : public ExpressionAST {
+  Token op;
+  std::unique_ptr<ExpressionAST> lhs;
+  std::unique_ptr<ExpressionAST> rhs;
+
+public:
+  BinaryExpressionAST(Location loc, Token op, std::unique_ptr<ExpressionAST> lhs, std::unique_ptr<ExpressionAST> rhs)
+    : ExpressionAST(std::move(loc), Expr_Binary), op(op), lhs(std::move(lhs)), rhs(std::move(rhs)) {}
+
+  const ExpressionAST * getLhs() const { return lhs.get(); }
+  Token getOp() const { return op; }
+  const ExpressionAST * getRhs() const { return rhs.get(); }
+
+  /// LLVM style RTTI
+  static bool classof(const ExpressionAST *e) { return e->getKind() == Expr_Binary; }
+};
+
+class UnaryExpressionAST : public ExpressionAST {
+    Token op;
+    std::unique_ptr<ExpressionAST> rhs;
+
+  public:
+    UnaryExpressionAST(Location loc, Token op, std::unique_ptr<ExpressionAST> rhs)
+      : ExpressionAST(std::move(loc), Expr_Unary), op(op), rhs(std::move(rhs)) {}
+
+  Token getOp() const { return op; }
+  const ExpressionAST * getRhs() const { return rhs.get(); }
+
+  /// LLVM style RTTI
+  static bool classof(const ExpressionAST *e) { return e->getKind() == Expr_Unary; }
+};
+
+// simple expressions can be evaluated at compiletime
+// and are represented by a constant
+
+class ConstantAST : public ExpressionAST {
+public:
+  ConstantAST(Location loc, ExprASTKind kind)
+    : ExpressionAST(std::move(loc), kind) {}
+};
+
+class IntegerConstantAST : public ConstantAST {
+  int32_t value;
+
+public:
+  IntegerConstantAST(Location loc, int32_t value)
+    : ConstantAST(std::move(loc), Expr_IntegerConstant), value(value) {}
+
+  int32_t getValue() const { return value; }
+
+  /// LLVM style RTTI
+  static bool classof(const ExpressionAST *e) { return e->getKind() == Expr_IntegerConstant; }
+};
+
+class RealConstantAST : public ConstantAST {
+  float value;
+
+public:
+  RealConstantAST(Location loc, float value)
+    : ConstantAST(std::move(loc), Expr_RealConstant), value(value) {}
+
+  float getValue() const { return value; }
+
+  /// LLVM style RTTI
+  static bool classof(const ExpressionAST *e) { return e->getKind() == Expr_RealConstant; }
+};
+
+class StringConstantAST : public ConstantAST {
+  std::string value;
+
+  public:
+    StringConstantAST(Location loc, std::string value)
+      : ConstantAST(std::move(loc), Expr_StringConstant), value(std::move(value)) {}
+
+    llvm::StringRef getValue() const { return value; }
+
+  /// LLVM style RTTI
+  static bool classof(const ExpressionAST *e) { return e->getKind() == Expr_StringConstant; }
+};
+
+
+// MARK: C.6 Function and Function Block Calls
+
+class SubroutineProcessingAST : public InstructionAST {
+
+public:
+  SubroutineProcessingAST(Location loc)
+    : InstructionAST(std::move(loc), Instr_Subroutine) {}
+  
+  /// LLVM style RTTI
+  static bool classof(const InstructionAST *i) { return i->getKind() == Instr_Subroutine; }
+};
+
+
+// MARK: c.7 Control Statements
+
+class IfThenAST {
+  Location location;
+  std::unique_ptr<ExpressionAST> condition;
   std::unique_ptr<CodeSectionAST> code;
 
 public:
-  OrganizationBlockAST(const std::string & identifier, Location loc, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<CodeSectionAST> code)
-    : UnitAST(Unit_OrganizationBlock, identifier, std::move(loc), std::move(declarations)), code(std::move(code)) {}
+  IfThenAST(Location loc, std::unique_ptr<ExpressionAST> condition, std::unique_ptr<CodeSectionAST> code)
+    : location(std::move(loc)), condition(std::move(condition)), code(std::move(code)) {}
 
-  /// LLVM style RTTI
-  static bool classof(const UnitAST *C) { return C->getKind() == Unit_OrganizationBlock; }
+  const Location &loc() const { return location; }
+  const ExpressionAST * getCondition() const { return condition.get(); }
+  const CodeSectionAST * getCodeBlock() const { return code.get(); }
 };
 
-class FunctionAST : public UnitAST {
-  std::unique_ptr<DataTypeSpecAST> type;
+class IfThenElseAST : public InstructionAST {
+  std::vector<std::unique_ptr<IfThenAST>> thens;
+  llvm::Optional<std::unique_ptr<CodeSectionAST>> elseBlock;
+
+public:
+  IfThenElseAST(Location loc, std::vector<std::unique_ptr<IfThenAST>> thens, llvm::Optional<std::unique_ptr<CodeSectionAST>> elseBlock)
+    : InstructionAST(std::move(loc), Instr_IfThenElse), thens(std::move(thens)), elseBlock(std::move(elseBlock)) {}
+
+  llvm::ArrayRef<std::unique_ptr<IfThenAST>> getThens() const { return thens; }
+  llvm::Optional<const CodeSectionAST *> getElseBlock() const {
+    if (!elseBlock.hasValue())
+      return llvm::NoneType();
+    return elseBlock.getValue().get();
+  };
+
+  /// LLVM style RTTI
+  static bool classof(const InstructionAST *i) { return i->getKind() == Instr_IfThenElse; }
+};
+
+class CaseValueAST {
+public:
+  enum CaseValueASTKind {
+    Value_Single,
+    Value_Range,
+  };
+
+  CaseValueAST(Location loc, CaseValueASTKind kind)
+    : location(std::move(loc)), kind(kind) {}
+
+  const Location &loc() const { return location; }
+  CaseValueASTKind getKind() const { return kind; }
+
+private:
+  Location location;
+  CaseValueASTKind kind;
+};
+
+class CaseValueSingleAST : public CaseValueAST {
+  std::unique_ptr<ExpressionAST> value;
+
+public:
+  CaseValueSingleAST(Location loc, std::unique_ptr<ExpressionAST> value)
+  : CaseValueAST(std::move(loc), Value_Single), value(std::move(value)) {}
+
+  const ExpressionAST * getValue() const { return value.get(); }
+
+  /// LLVM style RTTI
+  static bool classof(const CaseValueAST *v) { return v->getKind() == Value_Single; }
+};
+
+class CaseValueRangeAST : public CaseValueAST {
+  std::unique_ptr<ExpressionAST> min;
+  std::unique_ptr<ExpressionAST> max;
+
+public:
+  CaseValueRangeAST(Location loc, std::unique_ptr<ExpressionAST> min, std::unique_ptr<ExpressionAST> max)
+  : CaseValueAST(std::move(loc), Value_Range), min(std::move(max)), max(std::move(max)) {}
+
+  const ExpressionAST * getMin() const { return min.get(); }
+  const ExpressionAST * getMax() const { return max.get(); }
+
+  /// LLVM style RTTI
+  static bool classof(const CaseValueAST *v) { return v->getKind() == Value_Range; }
+};
+
+class CaseBlockAST {
+  Location location;
+  std::vector<std::unique_ptr<CaseValueAST>> values;
   std::unique_ptr<CodeSectionAST> code;
 
 public:
-  FunctionAST(const std::string & identifier, Location loc, std::unique_ptr<DataTypeSpecAST> type, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<CodeSectionAST> code)
-    : UnitAST(Unit_Function, identifier, std::move(loc), std::move(declarations)), type(std::move(type)), code(std::move(code)) {}
+  CaseBlockAST(Location loc, std::vector<std::unique_ptr<CaseValueAST>> values, std::unique_ptr<CodeSectionAST> code)
+    : location(std::move(loc)), values(std::move(values)), code(std::move(code)) {}
 
-  /// LLVM style RTTI
-  static bool classof(const UnitAST *C) { return C->getKind() == Unit_Function; }
+  const Location &loc() const { return location; }
+  llvm::ArrayRef<std::unique_ptr<CaseValueAST>> getValues() const { return values; }
+  const CodeSectionAST * getCodeBlock() const { return code.get(); }
 };
 
-class FunctionBlockAST : public UnitAST {
+class CaseOfAST : public InstructionAST {
+  std::unique_ptr<ExpressionAST> expr;
+  std::unique_ptr<CodeSectionAST> code;
+  llvm::Optional<std::unique_ptr<CodeSectionAST>> elseBlock;
+
+public:
+  CaseOfAST(Location loc, std::unique_ptr<ExpressionAST> expr, std::unique_ptr<CodeSectionAST> code, llvm::Optional<std::unique_ptr<CodeSectionAST>> elseBlock)
+    : InstructionAST(std::move(loc), Instr_CaseOf), expr(std::move(expr)), code(std::move(code)), elseBlock(std::move(elseBlock)) {}
+
+  const ExpressionAST * getExpr() const { return expr.get(); }
+  const CodeSectionAST * getCode() const { return code.get(); };
+  llvm::Optional<const CodeSectionAST *> getElseBlock() const {
+    if (!elseBlock.hasValue())
+      return llvm::NoneType();
+    return elseBlock.getValue().get();
+  };
+
+  /// LLVM style RTTI
+  static bool classof(const InstructionAST *i) { return i->getKind() == Instr_CaseOf; }
+};
+
+class ForDoAST : public InstructionAST {
+  std::unique_ptr<ExpressionAST> variable;
+  std::unique_ptr<ExpressionAST> initial;
+  std::unique_ptr<ExpressionAST> last;
+  std::unique_ptr<ExpressionAST> increment;
   std::unique_ptr<CodeSectionAST> code;
 
 public:
-  FunctionBlockAST(const std::string & identifier, Location loc, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<CodeSectionAST> code)
-    : UnitAST(Unit_FunctionBlock, identifier, loc, std::move(declarations)), code(std::move(code)) {}
+  ForDoAST(Location loc, std::unique_ptr<ExpressionAST> variable, std::unique_ptr<ExpressionAST> initial, std::unique_ptr<ExpressionAST> last, std::unique_ptr<ExpressionAST> increment, std::unique_ptr<CodeSectionAST> code)
+  : InstructionAST(std::move(loc), Instr_ForDo), variable(std::move(variable)), initial(std::move(initial)), last(std::move(last)), increment(std::move(increment)), code(std::move(code)) {}
+
+  const ExpressionAST * getVariable() const { return variable.get(); }
+  const ExpressionAST * getInitial() const { return initial.get(); }
+  const ExpressionAST * getLast() const { return last.get(); }
+  const ExpressionAST * getIncrement() const { return increment.get(); }
+  const CodeSectionAST * getCode() const { return code.get(); }
 
   /// LLVM style RTTI
-  static bool classof(const UnitAST *C) { return C->getKind() == Unit_FunctionBlock; }
+  static bool classof(const InstructionAST *i) { return i->getKind() == Instr_ForDo; }
 };
 
-class DataBlockAST : public UnitAST {
-  std::unique_ptr<AssignmentsSectionAST> assignments;
+class WhileDoAST : public InstructionAST {
+  std::unique_ptr<ExpressionAST> condition;
+  std::unique_ptr<CodeSectionAST> code;
 
 public:
-  DataBlockAST(const std::string & identifier, Location loc, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<AssignmentsSectionAST> assignments)
-    : UnitAST(Unit_DataBlock, identifier, loc, std::move(declarations)), assignments(std::move(assignments)) {}
+  WhileDoAST(Location loc, std::unique_ptr<ExpressionAST> condition, std::unique_ptr<CodeSectionAST> code)
+  : InstructionAST(std::move(loc), Instr_WhileDo), condition(std::move(condition)), code(std::move(code)) {}
+
+  const ExpressionAST * getCondition() const { return condition.get(); }
+  const CodeSectionAST * getCode() const { return code.get(); }
 
   /// LLVM style RTTI
-  static bool classof(const UnitAST *C) { return C->getKind() == Unit_DataBlock; }
+  static bool classof(const InstructionAST *i) { return i->getKind() == Instr_WhileDo; }
 };
 
-class UserDefinedTypeAST : public UnitAST {
-  std::unique_ptr<DataTypeSpecAST> type;
+class RepeatUntilAST : public InstructionAST {
+  std::unique_ptr<ExpressionAST> condition;
+  std::unique_ptr<CodeSectionAST> code;
 
 public:
-  UserDefinedTypeAST(const std::string & identifier, Location loc, std::unique_ptr<DataTypeSpecAST> type)
-    : UnitAST(Unit_UserDefinedDataType, std::move(identifier), std::move(loc), nullptr), type(std::move(type)) {}
+  RepeatUntilAST(Location loc, std::unique_ptr<ExpressionAST> condition, std::unique_ptr<CodeSectionAST> code)
+  : InstructionAST(std::move(loc), Instr_WhileDo), condition(std::move(condition)), code(std::move(code)) {}
+
+  const ExpressionAST * getCondition() const { return condition.get(); }
+  const CodeSectionAST * getCode() const { return code.get(); }
 
   /// LLVM style RTTI
-  static bool classof(const UnitAST *C) { return C->getKind() == Unit_UserDefinedDataType; }
+  static bool classof(const InstructionAST *i) { return i->getKind() == Instr_RepeatUntil; }
 };
 
+class ContinueAST : public InstructionAST {
+public:
+  ContinueAST(Location loc) : InstructionAST(std::move(loc), Instr_Continue) {}
 
+  /// LLVM style RTTI
+  static bool classof(const InstructionAST *i) { return i->getKind() == Instr_Continue; }
+};
+
+class ReturnAST : public InstructionAST {
+public:
+  ReturnAST(Location loc) : InstructionAST(std::move(loc), Instr_Return) {}
+
+  /// LLVM style RTTI
+  static bool classof(const InstructionAST *i) { return i->getKind() == Instr_Return; }
+};
+
+class ExitAST : public InstructionAST {
+public:
+  ExitAST(Location loc) : InstructionAST(std::move(loc), Instr_Exit) {}
+
+  /// LLVM style RTTI
+  static bool classof(const InstructionAST *i) { return i->getKind() == Instr_Exit; }
+};
+
+class GotoAST : public InstructionAST {
+  std::string label;
+
+public:
+  GotoAST(Location loc, std::string label)
+    : InstructionAST(std::move(loc), Instr_Goto), label(std::move(label)) {}
+
+  llvm::StringRef getLabel() const { return label; }
+
+  /// LLVM style RTTI
+  static bool classof(const InstructionAST *i) { return i->getKind() == Instr_Goto; }
+};
 
 // ========================================================= //
 // MARK: #if 0 - example code
@@ -567,11 +1113,11 @@ public:
   ModuleAST(std::vector<std::unique_ptr<UnitAST>> units)
       : units(std::move(units)) {}
 
-  auto begin() -> decltype(units.begin()) { return units.begin(); }
-  auto end() -> decltype(units.end()) { return units.end(); }
+  auto begin() const -> decltype(units.begin()) { return units.begin(); }
+  auto end() const -> decltype(units.end()) { return units.end(); }
 };
 
-void dump(ModuleAST &);
+void dump(const ModuleAST &);
 
 } // namespace sclang
 
