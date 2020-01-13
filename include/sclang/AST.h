@@ -493,6 +493,8 @@ public:
     : location(std::move(loc)), kind(kind) {}
 
   InstrASTKind getKind() const { return kind; }
+  const Location &loc() const { return location; }
+
 private:
   Location location;
   InstrASTKind kind;

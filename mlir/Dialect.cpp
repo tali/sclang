@@ -35,15 +35,65 @@ using namespace mlir::scl;
 /// Dialect creation, the instance will be owned by the context. This is the
 /// point of registration of custom types and operations for the dialect.
 SclDialect::SclDialect(mlir::MLIRContext *ctx) : mlir::Dialect("scl", ctx) {
-//  addOperations<
-//#define GET_OP_LIST
-//#include "sclang/Ops.cpp.inc"
-//      >();
+  addOperations<
+#define GET_OP_LIST
+#include "sclang/Ops.cpp.inc"
+      >();
 }
 
 //===----------------------------------------------------------------------===//
 // SCL Operations
 //===----------------------------------------------------------------------===//
+
+void AndOp::build(mlir::Builder *builder, mlir::OperationState &state,
+                  mlir::Value lhs, mlir::Value rhs) {
+  state.addTypes(lhs->getType());
+  state.addTypes(rhs->getType());
+  state.addOperands({lhs, rhs});
+}
+
+void OrOp::build(mlir::Builder *builder, mlir::OperationState &state,
+                  mlir::Value lhs, mlir::Value rhs) {
+  state.addTypes(lhs->getType());
+  state.addTypes(rhs->getType());
+  state.addOperands({lhs, rhs});
+}
+
+void XOrOp::build(mlir::Builder *builder, mlir::OperationState &state,
+                  mlir::Value lhs, mlir::Value rhs) {
+  state.addTypes(lhs->getType());
+  state.addTypes(rhs->getType());
+  state.addOperands({lhs, rhs});
+}
+
+void UnaryNotOp::build(mlir::Builder *builder, mlir::OperationState &state,
+                 mlir::Value rhs) {
+  state.addTypes(rhs->getType());
+  state.addOperands(rhs);
+}
+
+void UnaryMinusOp::build(mlir::Builder *builder, mlir::OperationState &state,
+                 mlir::Value rhs) {
+  state.addTypes(rhs->getType());
+  state.addOperands(rhs);
+}
+
+
+// StoreOp
+
+#if 0
+/// Build a constant operation.
+/// The builder is passed as an argument, so is the state that this method is
+/// expected to fill in order to build the operation.
+void StoreOp::build(mlir::Builder *builder, mlir::OperationState &state, mlir::Value &lhs, mlir::Value &rhs) {
+/*
+ auto dataType = RankedTensorType::get({}, builder->getF64Type());
+  auto dataAttribute = DenseElementsAttr::get(dataType, value);
+*/
+  StoreOp::build(builder, state, lhs.getType(), rhs.getType());
+}
+#endif
+
 
 #if 0
 // MARK: #if 0

@@ -33,7 +33,7 @@ class OwningModuleRef;
 namespace sclang {
 class ModuleAST;
 
-/// Emit IR for the given Toy moduleAST, returns a newly created MLIR module
+/// Emit IR for the given SCL moduleAST, returns a newly created MLIR module
 /// or nullptr on failure.
 mlir::OwningModuleRef mlirGen(mlir::MLIRContext &context, ModuleAST &moduleAST);
 } // namespace toy

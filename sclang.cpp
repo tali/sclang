@@ -80,7 +80,7 @@ int dumpMLIR() {
 
   mlir::MLIRContext context;
 
-  // Handle '.toy' input to the compiler.
+  // Handle '.scl' input to the compiler.
   if (inputType != InputType::MLIR &&
       !llvm::StringRef(inputFilename).endswith(".mlir")) {
     auto moduleAST = parseInputFile(inputFilename);
