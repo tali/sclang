@@ -31,8 +31,9 @@ def SCL_Dialect : Dialect {
   let cppNamespace = "scl";
 }
 
-def scl_Type : Type<CPred<"scl::isa_scl_or_std_type($_self)">,
-    "SCL dialect type">;
+def Scl_StructType : Type<CPred<"scl::isa<::StructType>()">, "SCL STRUCT">;
+
+def Scl_Type : AnyTypeOf<[Scl_StructType]>;
 
 def scl_CharacterType : Type<CPred<"$_self.isa<scl::CharacterType>()">,
     "SCL character type">;
@@ -50,7 +51,7 @@ def scl_RealType : Type<CPred<"$_self.isa<scl::RealType>()">,
 class SCL_Op<string mnemonic, list<OpTrait> traits = []> :
     Op<SCL_Dialect, mnemonic, traits>;
 
-/*
+
 def LoadOp : SCL_Op<"load"> {
   let summary = "load a value from memory";
   let description = [{
@@ -62,7 +63,7 @@ def LoadOp : SCL_Op<"load"> {
 
   // Allow building a MulOp with from the two input operands.
   let builders = [
-    OpBuilder<"Builder *b, OperationState &state, Value *lhs, Value *rhs">
+    OpBuilder<"Builder *b, OperationState &state, Value rhs">
   ];
 }
 
@@ -73,13 +74,8 @@ def StoreOp : SCL_Op<"store"> {
   }];
 
   let arguments = (ins AnyMemRef:$lhs, AnyType:$rhs);
-
-  // Allow building a MulOp with from the two input operands.
-  let builders = [
-    OpBuilder<"Builder *b, OperationState &state, Value *lhs, Value *rhs">
-  ];
 }
-*/
+
 
 
 def ContinueOp : SCL_Op<"continue", [Terminator, HasParent<"FuncOp">]> {
@@ -117,7 +113,11 @@ def MulOp : SCL_Op<"mul", [Commutative]> {
 
   // Allow building a MulOp with from the two input operands.
   let builders = [
-    OpBuilder<"Builder *b, OperationState &state, Value lhs, Value rhs">
+    OpBuilder<"Builder *b, OperationState &state, Value lhs, Value rhs", [{
+      state.addTypes(lhs.getType());
+      state.addTypes(rhs.getType());
+      state.addOperands({lhs, rhs});
+    }]>
   ];
 }
 
@@ -126,7 +126,11 @@ def AndOp : SCL_Op<"and"> {
   let results = (outs AnyType);
 
   let builders = [
-    OpBuilder<"Builder *b, OperationState &state, Value lhs, Value rhs">
+    OpBuilder<"Builder *b, OperationState &state, Value lhs, Value rhs", [{
+      state.addTypes(lhs.getType());
+      state.addTypes(rhs.getType());
+      state.addOperands({lhs, rhs});
+    }]>
   ];
 }
 
@@ -135,7 +139,11 @@ def OrOp : SCL_Op<"or"> {
   let results = (outs AnyType);
 
   let builders = [
-    OpBuilder<"Builder *b, OperationState &state, Value lhs, Value rhs">
+    OpBuilder<"Builder *b, OperationState &state, Value lhs, Value rhs", [{
+      state.addTypes(lhs.getType());
+      state.addTypes(rhs.getType());
+      state.addOperands({lhs, rhs});
+    }]>
   ];
 }
 
@@ -144,12 +152,16 @@ def XOrOp : SCL_Op<"xor"> {
   let results = (outs AnyInteger);
 
   let builders = [
-    OpBuilder<"Builder *b, OperationState &state, Value lhs, Value rhs">
+    OpBuilder<"Builder *b, OperationState &state, Value lhs, Value rhs", [{
+      state.addTypes(lhs.getType());
+      state.addTypes(rhs.getType());
+      state.addOperands({lhs, rhs});
+    }]>
   ];
 }
 
 def UnaryNotOp : SCL_Op<"not"> {
-  let summary = "unary not";
+  let summary = "negate a logical value";
   let description = [{
     TBD
   }];
@@ -159,12 +171,15 @@ def UnaryNotOp : SCL_Op<"not"> {
 
   // Allow building a UnaryNotOp with from the input operand.
   let builders = [
-    OpBuilder<"Builder *b, OperationState &state, Value rhs">
+    OpBuilder<"Builder *b, OperationState &state, Value rhs", [{
+      state.addTypes(rhs.getType());
+      state.addOperands(rhs);
+    }]>
   ];
 }
 
 def UnaryMinusOp : SCL_Op<"negate"> {
-  let summary = "negate";
+  let summary = "toggle the sign of a number";
   let description = [{
     TBD
   }];
@@ -174,7 +189,11 @@ def UnaryMinusOp : SCL_Op<"negate"> {
 
   // Allow building a UnaryMinusOp with from the input operand.
   let builders = [
-    OpBuilder<"Builder *b, OperationState &state, Value rhs">
+    OpBuilder<"Builder *b, OperationState &state, Value rhs", [{
+      state.addTypes(rhs.getType());
+      state.addOperands(rhs);
+    }]>
+
   ];
 }
 #endif // SCL_OPS

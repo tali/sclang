@@ -15,7 +15,7 @@
 // limitations under the License.
 // =============================================================================
 //
-// This file implements the dialect for the Toy IR: custom type parsing and
+// This file implements the dialect for the Scl IR: custom type parsing and
 // operation verification.
 //
 //===----------------------------------------------------------------------===//
@@ -23,13 +23,14 @@
 #include "sclang/Dialect.h"
 
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/StandardTypes.h"
 
 using namespace mlir;
 using namespace mlir::scl;
 
 //===----------------------------------------------------------------------===//
-// ToyDialect
+// SclDialect
 //===----------------------------------------------------------------------===//
 
 /// Dialect creation, the instance will be owned by the context. This is the
@@ -39,201 +40,147 @@ SclDialect::SclDialect(mlir::MLIRContext *ctx) : mlir::Dialect("scl", ctx) {
 #define GET_OP_LIST
 #include "sclang/Ops.cpp.inc"
       >();
+  addTypes<StructType>();
 }
 
 //===----------------------------------------------------------------------===//
-// SCL Operations
+// Scl Types
 //===----------------------------------------------------------------------===//
 
-void AndOp::build(mlir::Builder *builder, mlir::OperationState &state,
-                  mlir::Value lhs, mlir::Value rhs) {
-  state.addTypes(lhs->getType());
-  state.addTypes(rhs->getType());
-  state.addOperands({lhs, rhs});
-}
+namespace mlir {
+namespace scl {
+namespace detail {
+/// This class represents the internal storage of the Toy `StructType`.
+struct StructTypeStorage : public mlir::TypeStorage {
+  /// The `KeyTy` is a required type that provides an interface for the storage
+  /// instance. This type will be used when uniquing an instance of the type
+  /// storage. For our struct type, we will unique each instance structurally on
+  /// the elements that it contains.
+  using KeyTy = llvm::ArrayRef<mlir::Type>;
 
-void OrOp::build(mlir::Builder *builder, mlir::OperationState &state,
-                  mlir::Value lhs, mlir::Value rhs) {
-  state.addTypes(lhs->getType());
-  state.addTypes(rhs->getType());
-  state.addOperands({lhs, rhs});
-}
+  /// A constructor for the type storage instance.
+  StructTypeStorage(llvm::ArrayRef<mlir::Type> elementTypes)
+      : elementTypes(elementTypes) {}
 
-void XOrOp::build(mlir::Builder *builder, mlir::OperationState &state,
-                  mlir::Value lhs, mlir::Value rhs) {
-  state.addTypes(lhs->getType());
-  state.addTypes(rhs->getType());
-  state.addOperands({lhs, rhs});
-}
+  /// Define the comparison function for the key type with the current storage
+  /// instance. This is used when constructing a new instance to ensure that we
+  /// haven't already uniqued an instance of the given key.
+  bool operator==(const KeyTy &key) const { return key == elementTypes; }
 
-void UnaryNotOp::build(mlir::Builder *builder, mlir::OperationState &state,
-                 mlir::Value rhs) {
-  state.addTypes(rhs->getType());
-  state.addOperands(rhs);
-}
-
-void UnaryMinusOp::build(mlir::Builder *builder, mlir::OperationState &state,
-                 mlir::Value rhs) {
-  state.addTypes(rhs->getType());
-  state.addOperands(rhs);
-}
-
-
-// StoreOp
-
-#if 0
-/// Build a constant operation.
-/// The builder is passed as an argument, so is the state that this method is
-/// expected to fill in order to build the operation.
-void StoreOp::build(mlir::Builder *builder, mlir::OperationState &state, mlir::Value &lhs, mlir::Value &rhs) {
-/*
- auto dataType = RankedTensorType::get({}, builder->getF64Type());
-  auto dataAttribute = DenseElementsAttr::get(dataType, value);
-*/
-  StoreOp::build(builder, state, lhs.getType(), rhs.getType());
-}
-#endif
-
-
-#if 0
-// MARK: #if 0
-
-//===----------------------------------------------------------------------===//
-// ConstantOp
-
-/// Build a constant operation.
-/// The builder is passed as an argument, so is the state that this method is
-/// expected to fill in order to build the operation.
-void ConstantOp::build(mlir::Builder *builder, mlir::OperationState &state,
-                       double value) {
-  auto dataType = RankedTensorType::get({}, builder->getF64Type());
-  auto dataAttribute = DenseElementsAttr::get(dataType, value);
-  ConstantOp::build(builder, state, dataType, dataAttribute);
-}
-
-/// Verifier for the constant operation. This corresponds to the `::verify(...)`
-/// in the op definition.
-static mlir::LogicalResult verify(ConstantOp op) {
-  // If the return type of the constant is not an unranked tensor, the shape
-  // must match the shape of the attribute holding the data.
-  auto resultType =
-      op.getResult()->getType().dyn_cast<mlir::RankedTensorType>();
-  if (!resultType)
-    return success();
-
-  // Check that the rank of the attribute type matches the rank of the constant
-  // result type.
-  auto attrType = op.value().getType().cast<mlir::TensorType>();
-  if (attrType.getRank() != resultType.getRank()) {
-    return op.emitOpError(
-               "return type must match the one of the attached value "
-               "attribute: ")
-           << attrType.getRank() << " != " << resultType.getRank();
+  /// Define a hash function for the key type. This is used when uniquing
+  /// instances of the storage, see the `StructType::get` method.
+  /// Note: This method isn't necessary as both llvm::ArrayRef and mlir::Type
+  /// have hash functions available, so we could just omit this entirely.
+  static llvm::hash_code hashKey(const KeyTy &key) {
+    return llvm::hash_value(key);
   }
 
-  // Check that each of the dimensions match between the two types.
-  for (int dim = 0, dimE = attrType.getRank(); dim < dimE; ++dim) {
-    if (attrType.getShape()[dim] != resultType.getShape()[dim]) {
-      return op.emitOpError(
-                 "return type shape mismatches its attribute at dimension ")
-             << dim << ": " << attrType.getShape()[dim]
-             << " != " << resultType.getShape()[dim];
+  /// Define a construction function for the key type from a set of parameters.
+  /// These parameters will be provided when constructing the storage instance
+  /// itself.
+  /// Note: This method isn't necessary because KeyTy can be directly
+  /// constructed with the given parameters.
+  static KeyTy getKey(llvm::ArrayRef<mlir::Type> elementTypes) {
+    return KeyTy(elementTypes);
+  }
+
+  /// Define a construction method for creating a new instance of this storage.
+  /// This method takes an instance of a storage allocator, and an instance of a
+  /// `KeyTy`. The given allocator must be used for *all* necessary dynamic
+  /// allocations used to create the type storage and its internal.
+  static StructTypeStorage *construct(mlir::TypeStorageAllocator &allocator,
+                                      const KeyTy &key) {
+    // Copy the elements from the provided `KeyTy` into the allocator.
+    llvm::ArrayRef<mlir::Type> elementTypes = allocator.copyInto(key);
+
+    // Allocate the storage instance and construct it.
+    return new (allocator.allocate<StructTypeStorage>())
+        StructTypeStorage(elementTypes);
+  }
+
+  /// The following field contains the element types of the struct.
+  llvm::ArrayRef<mlir::Type> elementTypes;
+};
+} // end namespace detail
+} // end namespace scl
+} // end namespace mlir
+
+/// Create an instance of a `StructType` with the given element types. There
+/// *must* be at least one element type.
+StructType StructType::get(llvm::ArrayRef<mlir::Type> elementTypes) {
+  assert(!elementTypes.empty() && "expected at least 1 element type");
+
+  // Call into a helper 'get' method in 'TypeBase' to get a uniqued instance
+  // of this type. The first two parameters are the context to unique in and the
+  // kind of the type. The parameters after the type kind are forwarded to the
+  // storage instance.
+  mlir::MLIRContext *ctx = elementTypes.front().getContext();
+  return Base::get(ctx, SclTypes::Struct, elementTypes);
+}
+
+/// Returns the element types of this struct type.
+llvm::ArrayRef<mlir::Type> StructType::getElementTypes() {
+  // 'getImpl' returns a pointer to the internal storage instance.
+  return getImpl()->elementTypes;
+}
+
+/// Parse an instance of a type registered to the toy dialect.
+mlir::Type SclDialect::parseType(mlir::DialectAsmParser &parser) const {
+  // Parse a struct type in the following form:
+  //   struct-type ::= `struct` `<` type (`,` type)* `>`
+
+  // NOTE: All MLIR parser function return a ParseResult. This is a
+  // specialization of LogicalResult that auto-converts to a `true` boolean
+  // value on failure to allow for chaining, but may be used with explicit
+  // `mlir::failed/mlir::succeeded` as desired.
+
+  // Parse: `struct` `<`
+  if (parser.parseKeyword("struct") || parser.parseLess())
+    return Type();
+
+  // Parse the element types of the struct.
+  SmallVector<mlir::Type, 1> elementTypes;
+  do {
+    // Parse the current element type.
+//    llvm::SMLoc typeLoc = parser.getCurrentLocation();
+    mlir::Type elementType;
+    if (parser.parseType(elementType))
+      return nullptr;
+
+#if 0 // TODO custom check
+    // Check that the type is either a TensorType or another StructType.
+    if (!elementType.isa<mlir::TensorType>() &&
+        !elementType.isa<StructType>()) {
+      parser.emitError(typeLoc, "element type for a struct must either "
+                                "be a TensorType or a StructType, got: ")
+          << elementType;
+      return Type();
     }
-  }
-  return mlir::success();
-}
-
-//===----------------------------------------------------------------------===//
-// AddOp
-
-void AddOp::build(mlir::Builder *builder, mlir::OperationState &state,
-                  mlir::Value *lhs, mlir::Value *rhs) {
-  state.addTypes(UnrankedTensorType::get(builder->getF64Type()));
-  state.addOperands({lhs, rhs});
-}
-
-//===----------------------------------------------------------------------===//
-// GenericCallOp
-
-void GenericCallOp::build(mlir::Builder *builder, mlir::OperationState &state,
-                          StringRef callee, ArrayRef<mlir::Value *> arguments) {
-  // Generic call always returns an unranked Tensor initially.
-  state.addTypes(UnrankedTensorType::get(builder->getF64Type()));
-  state.addOperands(arguments);
-  state.addAttribute("callee", builder->getSymbolRefAttr(callee));
-}
-
-//===----------------------------------------------------------------------===//
-// MulOp
-
-void MulOp::build(mlir::Builder *builder, mlir::OperationState &state,
-                  mlir::Value *lhs, mlir::Value *rhs) {
-  state.addTypes(UnrankedTensorType::get(builder->getF64Type()));
-  state.addOperands({lhs, rhs});
-}
-
-//===----------------------------------------------------------------------===//
-// ReturnOp
-
-static mlir::LogicalResult verify(ReturnOp op) {
-  // We know that the parent operation is a function, because of the 'HasParent'
-  // trait attached to the operation definition.
-  auto function = cast<FuncOp>(op.getParentOp());
-
-  /// ReturnOps can only have a single optional operand.
-  if (op.getNumOperands() > 1)
-    return op.emitOpError() << "expects at most 1 return operand";
-
-  // The operand number and types must match the function signature.
-  const auto &results = function.getType().getResults();
-  if (op.getNumOperands() != results.size())
-    return op.emitOpError()
-           << "does not return the same number of values ("
-           << op.getNumOperands() << ") as the enclosing function ("
-           << results.size() << ")";
-
-  // If the operation does not have an input, we are done.
-  if (!op.hasOperand())
-    return mlir::success();
-
-  auto inputType = *op.operand_type_begin();
-  auto resultType = results.front();
-
-  // Check that the result type of the function matches the operand type.
-  if (inputType == resultType || inputType.isa<mlir::UnrankedTensorType>() ||
-      resultType.isa<mlir::UnrankedTensorType>())
-    return mlir::success();
-
-  return op.emitError() << "type of return operand ("
-                        << *op.operand_type_begin()
-                        << ") doesn't match function result type ("
-                        << results.front() << ")";
-}
-
-//===----------------------------------------------------------------------===//
-// TransposeOp
-
-void TransposeOp::build(mlir::Builder *builder, mlir::OperationState &state,
-                        mlir::Value *value) {
-  state.addTypes(UnrankedTensorType::get(builder->getF64Type()));
-  state.addOperands(value);
-}
-
-static mlir::LogicalResult verify(TransposeOp op) {
-  auto inputType = op.getOperand()->getType().dyn_cast<RankedTensorType>();
-  auto resultType = op.getType().dyn_cast<RankedTensorType>();
-  if (!inputType || !resultType)
-    return mlir::success();
-
-  auto inputShape = inputType.getShape();
-  if (!std::equal(inputShape.begin(), inputShape.end(),
-                  resultType.getShape().rbegin())) {
-    return op.emitError()
-           << "expected result shape to be a transpose of the input";
-  }
-  return mlir::success();
-}
 #endif
+    elementTypes.push_back(elementType);
+
+    // Parse the optional: `,`
+  } while (succeeded(parser.parseOptionalComma()));
+
+  // Parse: `>`
+  if (parser.parseGreater())
+    return Type();
+  return StructType::get(elementTypes);
+}
+
+/// Print an instance of a type registered to the toy dialect.
+void SclDialect::printType(mlir::Type type,
+                           mlir::DialectAsmPrinter &printer) const {
+  // Currently the only toy type is a struct type.
+  StructType structType = type.cast<StructType>();
+
+  // Print the struct type according to the parser format.
+  printer << "struct<";
+  mlir::interleaveComma(structType.getElementTypes(), printer);
+  printer << '>';
+}
+
+
 //===----------------------------------------------------------------------===//
 // TableGen'd op method definitions
 //===----------------------------------------------------------------------===//
