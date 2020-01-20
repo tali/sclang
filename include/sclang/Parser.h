@@ -289,6 +289,9 @@ private:
     switch(lexer.getCurToken()) {
     default:
       return nullptr;
+    case tok_semicolon:
+      lexer.consume(lexer.getCurToken());
+      return ParseDeclarationSubsection();
     case tok_var:
     case tok_var_temp:
     case tok_var_input:
