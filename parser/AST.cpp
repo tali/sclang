@@ -101,23 +101,6 @@ private:
   void dump(const ExitAST *node);
   void dump(const GotoAST *node);
 
-  //
-#if 0
-  void dump(VarType &type);
-  void dump(VarDeclExprAST *varDecl);
-  void dump(ExprAST *expr);
-  void dump(ExprASTList *exprList);
-  void dump(NumberExprAST *num);
-  void dump(LiteralExprAST *Node);
-  void dump(VariableExprAST *Node);
-  void dump(ReturnExprAST *Node);
-  void dump(BinaryExprAST *Node);
-  void dump(CallExprAST *Node);
-  void dump(PrintExprAST *Node);
-  void dump(PrototypeAST *Node);
-  void dump(FunctionAST *Node);
-#endif
-
   // Actually print spaces matching the current indentation level
   void indent() {
     for (int i = 0; i < curIndent; i++)

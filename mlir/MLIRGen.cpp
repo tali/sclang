@@ -25,6 +25,7 @@
 #include "sclang/Dialect.h"
 
 #include "mlir/Analysis/Verifier.h"
+#include "mlir/Dialect/StandardOps/Ops.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Function.h"
@@ -35,7 +36,10 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopedHashTable.h"
 #include "llvm/Support/raw_ostream.h"
+
+#include <map>
 #include <numeric>
+#include <string>
 
 using namespace mlir::scl;
 using namespace sclang;
@@ -128,12 +132,56 @@ private:
     }
   }
 
+  /// Append all the types of a variable declaration to an array
+  void addVariableTypes(const VariableDeclarationSubsectionAST & decls, std::vector<mlir::Type> & types) {
+    const auto & values = decls.getValues();
+    types.reserve(types.size() + values.size());
+    for (const auto & decl : values) {
+      types.push_back(getType(*decl->getDataType()));
+    }
+  }
+
   mlir::FuncOp mlirGen(const FunctionAST &func) {
     auto location = loc(func.loc());
 
+    std::vector<mlir::Type> inputs;
+    std::vector<mlir::Type> outputs;
+    std::vector<mlir::Type> tempvar;
+    outputs.push_back(getType(*func.getType()));
+
+    // Parse the declaration subsections
+    const auto & declarations = func.getDeclarations()->getDecls();
+    for (const auto & decl : declarations) {
+      switch (decl->getKind()) {
+      case DeclarationSubsectionAST::DeclarationASTKind::Decl_Constant:
+        emitError(location) << "constants not implemented";
+        return nullptr;
+      case DeclarationSubsectionAST::DeclarationASTKind::Decl_JumpLabel:
+        emitError(location) << "jump labels not implemented";
+        return nullptr;
+      case DeclarationSubsectionAST::DeclarationASTKind::Decl_Variable:
+        const auto & vardecls = llvm::cast<VariableDeclarationSubsectionAST>(*decl);
+        switch (vardecls.getKind()) {
+        case VariableDeclarationSubsectionAST::VarInput:
+          addVariableTypes(vardecls, inputs);
+          break;
+        case VariableDeclarationSubsectionAST::VarOutput:
+          addVariableTypes(vardecls, outputs);
+          break;
+        case VariableDeclarationSubsectionAST::VarInOut:
+          addVariableTypes(vardecls, inputs);
+          addVariableTypes(vardecls, outputs);
+          break;
+        case VariableDeclarationSubsectionAST::Var:
+        case VariableDeclarationSubsectionAST::VarTemp:
+          addVariableTypes(vardecls, tempvar);
+          break;
+        }
+      }
+    }
     // Create an MLIR function
-    llvm::SmallVector<mlir::Type, 4> arg_types{};
-    auto func_type = builder.getFunctionType(arg_types, getType(*func.getType()));
+
+    auto func_type = builder.getFunctionType(inputs, outputs);
     auto function =  mlir::FuncOp::create(location, func.getIdentifier(), func_type);
     if (!function)
       return nullptr;
@@ -151,11 +199,24 @@ private:
     // function.
     builder.setInsertionPointToStart(&entryBlock);
 
+    std::vector<mlir::Value> variables;
+    for (const auto & var : tempvar) {
+      auto memRefType = mlir::MemRefType::get({1}, var);
+      auto varStorage = builder.create<mlir::AllocOp>(location, memRefType);
+      // TODO: var name, init, location
+      variables.push_back(varStorage);
+    }
+
     // Emit the body of the function.
     if (mlir::failed(mlirGen(*func.getCode()))) {
       function.erase();
       return nullptr;
     }
+
+    for (const auto & varStorage : variables) {
+      builder.create<mlir::DeallocOp>(location, varStorage);
+    }
+
     // Implicitly return if no return statement was emitted.
     ReturnOp returnOp;
     if (!entryBlock.empty())
@@ -343,24 +404,11 @@ private:
   }
 
   mlir::Value mlirGen(const UnaryExpressionAST &expr) {
-    // First emit the operations for each side of the operation before emitting
-    // the operation itself. For example if the expression is `a + foo(a)`
-    // 1) First it will visiting the LHS, which will return a reference to the
-    //    value holding `a`. This value should have been emitted at declaration
-    //    time and registered in the symbol table, so nothing would be
-    //    codegen'd. If the value is not in the symbol table, an error has been
-    //    emitted and nullptr is returned.
-    // 2) Then the RHS is visited (recursively) and a call to `foo` is emitted
-    //    and the result value is returned. If an error occurs we get a nullptr
-    //    and propagate.
-    //
     mlir::Value rhs = mlirGen(*expr.getRhs());
     if (!rhs)
       return nullptr;
     auto location = loc(expr.loc());
 
-    // Derive the operation name from the binary operator. At the moment we only
-    // support '+' and '*'.
     switch (expr.getOp()) {
     case tok_minus:
       return builder.create<UnaryMinusOp>(location, rhs);
