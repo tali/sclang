@@ -107,8 +107,8 @@ private:
 
   /// Helper conversion for a SCL AST location to an MLIR location.
   mlir::Location loc(Location loc) {
-    return builder.getFileLineColLoc(builder.getIdentifier(*loc.file), loc.line,
-                                     loc.col);
+    return builder.getFileLineColLoc(builder.getIdentifier(*loc.file),
+                                     loc.line, loc.col);
   }
 
   /// Declare a variable in the current scope, return success if the variable
@@ -119,6 +119,8 @@ private:
     symbolTable.insert(var, value);
     return mlir::success();
   }
+
+  // MARK: C.1 Subunits of SCL Source Files
 
   mlir::FuncOp mlirGen(const UnitAST &unit) {
     switch (unit.getKind()) {
@@ -137,8 +139,33 @@ private:
     const auto & values = decls.getValues();
     types.reserve(types.size() + values.size());
     for (const auto & decl : values) {
-      types.push_back(getType(*decl->getDataType()));
+      auto type = getType(*decl->getDataType());
+      types.push_back(type);
     }
+  }
+
+  /// Append all the types of a variable declaration to an array
+  void addVariables(const VariableDeclarationSubsectionAST & decls, std::vector<std::tuple<mlir::Type, llvm::Optional<mlir::Value>, std::string, mlir::Location>> & vars) {
+    const auto & values = decls.getValues();
+    vars.reserve(vars.size() + values.size());
+    for (const auto & decl : values) {
+      auto type = getType(*decl->getDataType());
+      llvm::Optional<mlir::Value> init;
+      auto initAst = decl->getInitializer();
+      if (initAst)
+        init = mlirGen(*initAst.getValue());
+      for (const auto & var : decl->getVars()) {
+        // TODO: attributes
+        auto name = std::string(var->getIdentifier());
+        auto location = loc(var->loc());
+        vars.push_back(std::make_tuple(type, init, name, location));
+      }
+    }
+  }
+
+  mlir::FuncOp mlirGen(const OrganizationBlockAST &ob) {
+    emitError(loc(ob.loc())) << "TBD not implemented";
+    return nullptr;
   }
 
   mlir::FuncOp mlirGen(const FunctionAST &func) {
@@ -146,7 +173,7 @@ private:
 
     std::vector<mlir::Type> inputs;
     std::vector<mlir::Type> outputs;
-    std::vector<mlir::Type> tempvar;
+    std::vector<const VariableDeclarationSubsectionAST*> tempvar;
     outputs.push_back(getType(*func.getType()));
 
     // Parse the declaration subsections
@@ -154,10 +181,10 @@ private:
     for (const auto & decl : declarations) {
       switch (decl->getKind()) {
       case DeclarationSubsectionAST::DeclarationASTKind::Decl_Constant:
-        emitError(location) << "constants not implemented";
+        emitError(location) << "TBD constants not implemented";
         return nullptr;
       case DeclarationSubsectionAST::DeclarationASTKind::Decl_JumpLabel:
-        emitError(location) << "jump labels not implemented";
+        emitError(location) << "TBD jump labels not implemented";
         return nullptr;
       case DeclarationSubsectionAST::DeclarationASTKind::Decl_Variable:
         const auto & vardecls = llvm::cast<VariableDeclarationSubsectionAST>(*decl);
@@ -174,7 +201,7 @@ private:
           break;
         case VariableDeclarationSubsectionAST::Var:
         case VariableDeclarationSubsectionAST::VarTemp:
-          addVariableTypes(vardecls, tempvar);
+          tempvar.push_back(&vardecls);
           break;
         }
       }
@@ -199,12 +226,22 @@ private:
     // function.
     builder.setInsertionPointToStart(&entryBlock);
 
-    std::vector<mlir::Value> variables;
-    for (const auto & var : tempvar) {
-      auto memRefType = mlir::MemRefType::get({1}, var);
-      auto varStorage = builder.create<mlir::AllocOp>(location, memRefType);
-      // TODO: var name, init, location
-      variables.push_back(varStorage);
+    // prologue: stack space for temporary variables
+    for (const auto subsection : tempvar) {
+      for (const auto & decl : subsection->getValues()) {
+        auto type = getType(*decl->getDataType());
+        auto memRefType = mlir::MemRefType::get({}, type);
+        auto init = decl->getInitializer();
+        for (const auto & var : decl->getVars()) {
+          auto location = loc(var->loc());
+          auto varStorage = builder.create<TempVariableOp>(location, memRefType, builder.getStringAttr(var->getIdentifier()));
+          if (init) {
+            builder.create<StoreOp>(location, varStorage, mlirGen(*init.getValue()));
+          }
+        }
+      }
+      // TODO: var name
+
     }
 
     // Emit the body of the function.
@@ -213,11 +250,7 @@ private:
       return nullptr;
     }
 
-    for (const auto & varStorage : variables) {
-      builder.create<mlir::DeallocOp>(location, varStorage);
-    }
-
-    // Implicitly return if no return statement was emitted.
+   // Implicitly return if no return statement was emitted.
     ReturnOp returnOp;
     if (!entryBlock.empty())
       returnOp = dyn_cast<ReturnOp>(entryBlock.back());
@@ -226,6 +259,41 @@ private:
     }
 
     return function;
+  }
+
+  mlir::FuncOp mlirgen(const FunctionBlockAST &fb) {
+    emitError(loc(fb.loc())) << "TBD not implemented";
+    return nullptr;
+  }
+
+  mlir::FuncOp mlirgen(const DataBlockAST &db) {
+    emitError(loc(db.loc())) << "TBD not implemented";
+    return nullptr;
+  }
+
+  mlir::FuncOp mlirgen(const UserDefinedTypeAST &udt) {
+    emitError(loc(udt.loc())) << "TBD not implemented";
+    return nullptr;
+  }
+
+  // MARK: C.2 Structure of Declaration Sections
+
+  // MARK: C.3 Data Types in SCL
+
+  mlir::Value mlirGen(const DataTypeInitAST &init) {
+    auto location = loc(init.loc());
+
+    const auto list = init.getList();
+    if (list.empty()) return nullptr;
+
+    if (list.size() > 1) {
+      emitError(location);
+      return nullptr;
+    }
+
+    for (const auto & cvalue : list) {
+      return mlirGen(*cvalue.get());
+    }
   }
 
   /// Codegen a code section, return failure if one statement hit an error.
@@ -303,13 +371,17 @@ private:
   }
 
   mlir::Value mlirGen(const IntegerConstantAST &expr) {
-    emitError(loc(expr.loc())) << "IntegerConstantAST not implemented";
-    return nullptr;
+    auto location = loc(expr.loc());
+    auto type = builder.getIntegerType(16);
+    auto value = builder.getIntegerAttr(type, expr.getValue());
+    return builder.create<ConstantOp>(location, type, value);
   }
 
   mlir::Value mlirGen(const RealConstantAST &expr) {
-    emitError(loc(expr.loc())) << "RealConstantAST not implemented";
-    return nullptr;
+    auto location = loc(expr.loc());
+    auto type = builder.getF32Type();
+    auto value = builder.getF32FloatAttr(expr.getValue());
+    return builder.create<ConstantOp>(location, type, value);
   }
 
   mlir::Value mlirGen(const StringConstantAST &expr) {

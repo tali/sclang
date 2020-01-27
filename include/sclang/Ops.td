@@ -51,6 +51,18 @@ def scl_RealType : Type<CPred<"$_self.isa<scl::RealType>()">,
 class SCL_Op<string mnemonic, list<OpTrait> traits = []> :
     Op<SCL_Dialect, mnemonic, traits>;
 
+def TempVariableOp : SCL_Op<"tmpvar"> {
+  let summary = "allocate stack memory for a temporary variable";
+  let description = [{ TBD }];
+  let arguments = (ins StrAttr:$name);
+  let results = (outs AnyMemRef);
+}
+
+def ConstantOp : SCL_Op<"constant"> {
+  let summary = "literal constant";
+  let arguments = (ins AnyAttr:$value);
+  let results = (outs AnyType);
+}
 
 def LoadOp : SCL_Op<"load"> {
   let summary = "load a value from memory";
@@ -61,7 +73,7 @@ def LoadOp : SCL_Op<"load"> {
   let arguments = (ins AnyMemRef);
   let results = (outs AnyType);
 
-  // Allow building a MulOp with from the two input operands.
+  // Allow building a LoadOp from the input operand.
   let builders = [
     OpBuilder<"Builder *b, OperationState &state, Value rhs">
   ];
