@@ -73,9 +73,11 @@ def LoadOp : SCL_Op<"load"> {
   let arguments = (ins AnyMemRef);
   let results = (outs AnyType);
 
-  // Allow building a LoadOp from the input operand.
   let builders = [
-    OpBuilder<"Builder *b, OperationState &state, Value rhs">
+    OpBuilder<"Builder *b, OperationState &state, Value memref", [{
+      auto elementType = memref.getType().cast<MemRefType>().getElementType();
+      build(b, state, elementType, memref);
+    }]>
   ];
 }
 

@@ -103,7 +103,7 @@ private:
   /// Entering a function creates a new scope, and the function arguments are
   /// added to the mapping. When the processing of a function is terminated, the
   /// scope is destroyed and the mappings created in this scope are dropped.
-  llvm::ScopedHashTable<StringRef, mlir::Value *> symbolTable;
+  llvm::ScopedHashTable<StringRef, mlir::Value> symbolTable;
 
   /// Helper conversion for a SCL AST location to an MLIR location.
   mlir::Location loc(Location loc) {
@@ -113,7 +113,7 @@ private:
 
   /// Declare a variable in the current scope, return success if the variable
   /// wasn't declared yet.
-  mlir::LogicalResult declare(llvm::StringRef var, mlir::Value *value) {
+  mlir::LogicalResult declare(llvm::StringRef var, mlir::Value value) {
     if (symbolTable.count(var))
       return mlir::failure();
     symbolTable.insert(var, value);
@@ -171,6 +171,9 @@ private:
   mlir::FuncOp mlirGen(const FunctionAST &func) {
     auto location = loc(func.loc());
 
+    // Create a scope in the symbol table to hold variable declarations.
+    llvm::ScopedHashTableScope<StringRef, mlir::Value> var_scope(symbolTable);
+
     std::vector<mlir::Type> inputs;
     std::vector<mlir::Type> outputs;
     std::vector<const VariableDeclarationSubsectionAST*> tempvar;
@@ -213,9 +216,6 @@ private:
     if (!function)
       return nullptr;
 
-    // Create a scope in the symbol table to hold variable declarations.
-    ScopedHashTableScope<llvm::StringRef, mlir::Value *> var_scope(symbolTable);
-
     // Let's start the body of the function now!
     // In MLIR the entry block of the function is special: it must have the same
     // argument list as the function itself.
@@ -235,13 +235,12 @@ private:
         for (const auto & var : decl->getVars()) {
           auto location = loc(var->loc());
           auto varStorage = builder.create<TempVariableOp>(location, memRefType, builder.getStringAttr(var->getIdentifier()));
+          declare(var->getIdentifier(), varStorage);
           if (init) {
             builder.create<StoreOp>(location, varStorage, mlirGen(*init.getValue()));
           }
         }
       }
-      // TODO: var name
-
     }
 
     // Emit the body of the function.
@@ -298,7 +297,7 @@ private:
 
   /// Codegen a code section, return failure if one statement hit an error.
   mlir::LogicalResult mlirGen(const CodeSectionAST &code) {
-    ScopedHashTableScope<StringRef, mlir::Value *> var_scope(symbolTable);
+    ScopedHashTableScope<StringRef, mlir::Value> var_scope(symbolTable);
 
     for (auto &instr : code.getInstructions()) {
       // Generic expression dispatch codegen.
@@ -334,19 +333,30 @@ private:
   }
 
   mlir::LogicalResult mlirGen(const ValueAssignmentAST &instr) {
-    if (!mlirGen(*instr.getExpression()))
+    auto location = loc(instr.loc());
+
+    const auto & expr = llvm::cast<BinaryExpressionAST>(*instr.getExpression());
+    assert(expr.getOp() == tok_assignment);
+
+    mlir::Value lhs = getLValue(*expr.getLhs());
+    if (!lhs)
       return mlir::failure();
+    mlir::Value rhs = mlirGen(*expr.getRhs());
+    if (!rhs)
+      return mlir::failure();
+
+    builder.create<StoreOp>(location, lhs, rhs);
+  
     return mlir::success();
   }
 
-  mlir::Value mlirGen(const ExpressionAST &expr) {
+  mlir::Value getLValue(const ExpressionAST &expr) {
+    auto location = loc(expr.loc());
+
     switch(expr.getKind()) {
-   case ExpressionAST::Expr_IntegerConstant:
-      return mlirGen(llvm::cast<IntegerConstantAST>(expr));
-    case ExpressionAST::Expr_RealConstant:
-      return mlirGen(llvm::cast<RealConstantAST>(expr));
-    case ExpressionAST::Expr_StringConstant:
-      return mlirGen(llvm::cast<StringConstantAST>(expr));
+    default:
+      emitError(location) << "not a lvalue";
+      return nullptr;
     case ExpressionAST::Expr_SimpleVariable:
       return mlirGen(llvm::cast<SimpleVariableAST>(expr));
     case ExpressionAST::Expr_StructuredVariable:
@@ -358,7 +368,26 @@ private:
       emitError(loc(expr.loc()))
       << "IndexedVariable not implemented"; // TODO: TBD
       return nullptr;
-      //return mlirGen(llvm::cast<IndexedVariableAST>(expr));
+    }
+  }
+
+  mlir::Value getRValue(const ExpressionAST &expr) {
+    auto memref = getLValue(expr);
+    return builder.create<LoadOp>(loc(expr.loc()), memref);
+  }
+
+  mlir::Value mlirGen(const ExpressionAST &expr) {
+    switch(expr.getKind()) {
+    case ExpressionAST::Expr_IntegerConstant:
+      return mlirGen(llvm::cast<IntegerConstantAST>(expr));
+    case ExpressionAST::Expr_RealConstant:
+      return mlirGen(llvm::cast<RealConstantAST>(expr));
+    case ExpressionAST::Expr_StringConstant:
+      return mlirGen(llvm::cast<StringConstantAST>(expr));
+    case ExpressionAST::Expr_SimpleVariable:
+    case ExpressionAST::Expr_StructuredVariable:
+    case ExpressionAST::Expr_IndexedVariable:
+      return getRValue(expr);
     case ExpressionAST::Expr_FunctionCall:
       emitError(loc(expr.loc()))
       << "FunctionCall not implemented"; // TODO: TBD
@@ -390,7 +419,12 @@ private:
   }
 
   mlir::Value mlirGen(const SimpleVariableAST &expr) {
-    emitError(loc(expr.loc())) << "SimpleVariableAST not implemented";
+    auto location = loc(expr.loc());
+    auto name = llvm::cast<SimpleVariableAST>(expr).getName();
+
+    if (auto variable = symbolTable.lookup(name))
+      return variable;
+    emitError(location) << "unknown variable '" << name << "'";
     return nullptr;
   }
 
@@ -430,10 +464,6 @@ private:
     default:
       emitError(location, "invalid binary operator '") << (int)expr.getOp() << "'";
       return nullptr;
-#if 0
-    case sclang::tok_assignment:
-      return builder.create<StoreOp>(location, lhs, rhs);
-#endif
     case tok_or:
       return builder.create<OrOp>(location, lhs, rhs);
     case tok_xor:
