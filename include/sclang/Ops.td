@@ -51,6 +51,22 @@ def scl_RealType : Type<CPred<"$_self.isa<scl::RealType>()">,
 class SCL_Op<string mnemonic, list<OpTrait> traits = []> :
     Op<SCL_Dialect, mnemonic, traits>;
 
+class ArithmeticOp<string mnemonic, list<OpTrait> traits = []> :
+    SCL_Op<mnemonic, !listconcat(traits, [SameOperandsAndResultType])>,
+    Arguments<(ins AnyType:$lhs, AnyType:$rhs)>,
+    Results<(outs AnyType)>;
+class CompareOp<string mnemonic, list<OpTrait> traits = []> :
+    SCL_Op<mnemonic, !listconcat(traits, [SameTypeOperands])>,
+    Arguments<(ins AnyType:$lhs, AnyType:$rhs)>,
+    Results<(outs I1)>;
+class UnaryArithmeticOp<string mnemonic, list<OpTrait> traits = []> :
+    SCL_Op<mnemonic, !listconcat(traits, [SameOperandsAndResultType])>,
+    Arguments<(ins AnyType:$rhs)>,
+    Results<(outs AnyType)>;
+
+class TerminatorOp<string mnemonic, list<OpTrait> traits = []> :
+    SCL_Op<mnemonic, !listconcat(traits, [Terminator, HasParent<"FuncOp">])>;
+
 def TempVariableOp : SCL_Op<"tmpvar"> {
   let summary = "allocate stack memory for a temporary variable";
   let description = [{ TBD }];
@@ -58,7 +74,7 @@ def TempVariableOp : SCL_Op<"tmpvar"> {
   let results = (outs AnyMemRef);
 }
 
-def ConstantOp : SCL_Op<"constant"> {
+def ConstantOp : SCL_Op<"constant", [NoSideEffect]> {
   let summary = "literal constant";
   let arguments = (ins AnyAttr:$value);
   let results = (outs AnyType);
@@ -92,7 +108,7 @@ def StoreOp : SCL_Op<"store"> {
 
 
 
-def ContinueOp : SCL_Op<"continue", [Terminator, HasParent<"FuncOp">]> {
+def ContinueOp : TerminatorOp<"continue"> {
   let summary = "continue operation";
   let description = [{
     A CONTINUE statement is used to terminate the execution of the current iteration of a loop (initiated by a FOR, WHILE or REPEAT statement) and to restart processing within the loop.
@@ -100,7 +116,7 @@ def ContinueOp : SCL_Op<"continue", [Terminator, HasParent<"FuncOp">]> {
 }
 
 
-def ReturnOp : SCL_Op<"return", [Terminator, HasParent<"FuncOp">]> {
+def ReturnOp : TerminatorOp<"return"> {
   let summary = "return operation";
   let description = [{
     A RETURN statement causes the program to exit the block (OB, FB or FC) currently being processed and to return to the calling block or the operating system if the block being exited is an OB.
@@ -108,7 +124,7 @@ def ReturnOp : SCL_Op<"return", [Terminator, HasParent<"FuncOp">]> {
 }
 
 
-def ExitOp : SCL_Op<"exit", [Terminator, HasParent<"FuncOp">]> {
+def ExitOp : TerminatorOp<"exit"> {
   let summary = "exit operation";
   let description = [{
     An EXIT statement is used to exit a loop (FOR, WHILE or REPEAT loop) at any point regardless of whether the break condition is satisfied.
@@ -116,98 +132,87 @@ def ExitOp : SCL_Op<"exit", [Terminator, HasParent<"FuncOp">]> {
   }];
 }
 
-def MulOp : SCL_Op<"mul", [Commutative]> {
+
+def AddOp : ArithmeticOp<"add", [Commutative]> {
+  let summary = "addition operation";
+  let description = [{
+    The "add" operation performs addition between two values.
+  }];
+}
+
+def SubOp : ArithmeticOp<"sub"> {
+  let summary = "subtract operation";
+  let description = [{
+    The "sub" operation performs substraction of two values.
+  }];
+}
+
+def MulOp : ArithmeticOp<"mul", [Commutative]> {
   let summary = "multiplication operation";
   let description = [{
     The "mul" operation performs multiplication between two values.
   }];
-
-  let arguments = (ins AnyType:$lhs, AnyType:$rhs);
-  let results = (outs AnyType);
-
-  // Allow building a MulOp with from the two input operands.
-  let builders = [
-    OpBuilder<"Builder *b, OperationState &state, Value lhs, Value rhs", [{
-      state.addTypes(lhs.getType());
-      state.addTypes(rhs.getType());
-      state.addOperands({lhs, rhs});
-    }]>
-  ];
 }
 
-def AndOp : SCL_Op<"and"> {
-  let arguments = (ins AnyInteger:$lhs, AnyInteger:$rhs);
-  let results = (outs AnyType);
-
-  let builders = [
-    OpBuilder<"Builder *b, OperationState &state, Value lhs, Value rhs", [{
-      state.addTypes(lhs.getType());
-      state.addTypes(rhs.getType());
-      state.addOperands({lhs, rhs});
-    }]>
-  ];
+def DivOp : ArithmeticOp<"div"> {
+  let summary = "division operation";
+  let description = [{
+    The "div" operation performs division of two values.
+  }];
 }
 
-def OrOp : SCL_Op<"or"> {
-  let arguments = (ins AnyInteger:$lhs, AnyInteger:$rhs);
-  let results = (outs AnyType);
-
-  let builders = [
-    OpBuilder<"Builder *b, OperationState &state, Value lhs, Value rhs", [{
-      state.addTypes(lhs.getType());
-      state.addTypes(rhs.getType());
-      state.addOperands({lhs, rhs});
-    }]>
-  ];
+def ModOp : ArithmeticOp<"mod"> {
+  let summary = "modulo of division operation";
+  let description = [{
+    The "mod" operation performs division of two values and returns the rest.
+  }];
 }
 
-def XOrOp : SCL_Op<"xor"> {
-  let arguments = (ins AnyInteger:$lhs, AnyInteger:$rhs);
-  let results = (outs AnyInteger);
-
-  let builders = [
-    OpBuilder<"Builder *b, OperationState &state, Value lhs, Value rhs", [{
-      state.addTypes(lhs.getType());
-      state.addTypes(rhs.getType());
-      state.addOperands({lhs, rhs});
-    }]>
-  ];
+def ExpOp : ArithmeticOp<"exp", [Commutative]> {
+  let summary = "exponentiation operation";
+  let description = [{
+    The "exp" operation performs exponentiation of two values.
+  }];
 }
 
-def UnaryNotOp : SCL_Op<"not"> {
+def AndOp : ArithmeticOp<"and"> {
+}
+
+def OrOp : ArithmeticOp<"or"> {
+}
+
+def XOrOp : ArithmeticOp<"xor", [Commutative]> {
+}
+
+def EqualOp : CompareOp<"cmpeq"> {
+}
+
+def NotEqualOp : CompareOp<"cmpne"> {
+}
+
+def LessThanOp : CompareOp<"cmplt"> {
+}
+
+def LessEqualOp : CompareOp<"cmple"> {
+}
+
+def GreaterThanOp : CompareOp<"cmpgt"> {
+}
+
+def GreaterEqualOp : CompareOp<"cmpge"> {
+}
+
+def UnaryNotOp : UnaryArithmeticOp<"not"> {
   let summary = "negate a logical value";
   let description = [{
     TBD
   }];
-
-  let arguments = (ins AnyInteger:$rhs);
-  let results = (outs AnyInteger);
-
-  // Allow building a UnaryNotOp with from the input operand.
-  let builders = [
-    OpBuilder<"Builder *b, OperationState &state, Value rhs", [{
-      state.addTypes(rhs.getType());
-      state.addOperands(rhs);
-    }]>
-  ];
 }
 
-def UnaryMinusOp : SCL_Op<"negate"> {
+def UnaryMinusOp : UnaryArithmeticOp<"negate"> {
   let summary = "toggle the sign of a number";
   let description = [{
     TBD
   }];
-
-  let arguments = (ins AnyType:$rhs);
-  let results = (outs AnyType);
-
-  // Allow building a UnaryMinusOp with from the input operand.
-  let builders = [
-    OpBuilder<"Builder *b, OperationState &state, Value rhs", [{
-      state.addTypes(rhs.getType());
-      state.addOperands(rhs);
-    }]>
-
-  ];
 }
 #endif // SCL_OPS
