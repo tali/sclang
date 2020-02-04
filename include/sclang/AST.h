@@ -673,8 +673,8 @@ class StringConstantAST : public ConstantAST {
   std::string value;
 
   public:
-    StringConstantAST(Location loc, std::string value)
-      : ConstantAST(std::move(loc), Expr_StringConstant), value(std::move(value)) {}
+    StringConstantAST(Location loc, llvm::StringRef value)
+      : ConstantAST(std::move(loc), Expr_StringConstant), value(value) {}
 
     llvm::StringRef getValue() const { return value; }
 

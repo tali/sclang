@@ -79,7 +79,7 @@ private:
       llvm::errs() << "expected identifier, got " << lexer.getCurToken() << "\n";
       return "";
     }
-    std::string identifier = lexer.getIdentifier();
+    std::string identifier(lexer.getIdentifier());
     lexer.consume(tok_identifier);
 
     return identifier;
