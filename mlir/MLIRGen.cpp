@@ -317,6 +317,8 @@ private:
     case InstructionAST::Instr_Continue:
       builder.create<ContinueOp>(location);
       break;
+    case InstructionAST::Instr_IfThenElse:
+      return mlirGen(llvm::cast<IfThenElseAST>(instr));
     case InstructionAST::Instr_Return:
       builder.create<ReturnOp>(location);
       break;
@@ -332,6 +334,7 @@ private:
     return mlir::success();
   }
 
+  /// Codegen a variable assignment
   mlir::LogicalResult mlirGen(const ValueAssignmentAST &instr) {
     auto location = loc(instr.loc());
 
@@ -576,6 +579,41 @@ private:
         << Twine(type.getKind()) << "'";
       return nullptr;
     }
+  }
+
+
+  // MARK: C.7 Control Statements
+
+  /// Codegen an if-then-else block
+  mlir::LogicalResult mlirGen(const IfThenElseAST &ifThenElse) {
+    mlir::Value condition;
+
+    auto old = builder.saveInsertionPoint();
+    bool first = true;
+
+    for (const auto & ifThen : ifThenElse.getThens()) {
+      auto location = loc(ifThen->loc());
+      auto condition = mlirGen(*ifThen->getCondition());
+      auto cond = builder.create<IfThenElseOp>(location, condition);
+      if (first) {
+        old = builder.saveInsertionPoint();
+        first = false;
+      } else {
+        builder.create<TerminatorOp>(location);
+      }
+      builder.createBlock(&cond.thenBody());
+      mlirGen(*ifThen->getCodeBlock());
+      builder.create<TerminatorOp>(location);
+      builder.createBlock(&cond.elseBody());
+    }
+    if (ifThenElse.getElseBlock()) {
+      mlirGen(*ifThenElse.getElseBlock().getValue());
+    }
+    builder.create<TerminatorOp>(loc(ifThenElse.loc()));
+
+    builder.restoreInsertionPoint(old);
+
+    return mlir::success();
   }
 };
 

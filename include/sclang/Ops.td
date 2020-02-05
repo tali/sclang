@@ -64,8 +64,12 @@ class UnaryArithmeticOp<string mnemonic, list<OpTrait> traits = []> :
     Arguments<(ins AnyType:$rhs)>,
     Results<(outs AnyType)>;
 
-class TerminatorOp<string mnemonic, list<OpTrait> traits = []> :
+class FuncTerminatorOp<string mnemonic, list<OpTrait> traits = []> :
     SCL_Op<mnemonic, !listconcat(traits, [Terminator, HasParent<"FuncOp">])>;
+
+//
+// MARK: variable handling
+//
 
 def TempVariableOp : SCL_Op<"tmpvar"> {
   let summary = "allocate stack memory for a temporary variable";
@@ -106,9 +110,32 @@ def StoreOp : SCL_Op<"store"> {
   let arguments = (ins AnyMemRef:$lhs, AnyType:$rhs);
 }
 
+//
+// MAKR: control flow
+//
 
+def TerminatorOp : SCL_Op<"terminator", [Terminator]> {}
 
-def ContinueOp : TerminatorOp<"continue"> {
+def IfThenElseOp : SCL_Op<"if">, SingleBlockImplicitTerminator<"terminator"> {
+  let summary = "if-then-else operation";
+  let description = [{
+    Example:
+      scl.if (%cond) {
+        ...
+      } else {
+        ...
+      }
+  }];
+
+  let arguments = (ins I1:$cond);
+  let regions = (region AnyRegion:$thenBody, AnyRegion:$elseBody);
+}
+
+//
+// MARK: terminator operations
+//
+
+def ContinueOp : SCL_Op<"continue", [Terminator]> {
   let summary = "continue operation";
   let description = [{
     A CONTINUE statement is used to terminate the execution of the current iteration of a loop (initiated by a FOR, WHILE or REPEAT statement) and to restart processing within the loop.
@@ -116,7 +143,7 @@ def ContinueOp : TerminatorOp<"continue"> {
 }
 
 
-def ReturnOp : TerminatorOp<"return"> {
+def ReturnOp : FuncTerminatorOp<"return"> {
   let summary = "return operation";
   let description = [{
     A RETURN statement causes the program to exit the block (OB, FB or FC) currently being processed and to return to the calling block or the operating system if the block being exited is an OB.
@@ -124,7 +151,7 @@ def ReturnOp : TerminatorOp<"return"> {
 }
 
 
-def ExitOp : TerminatorOp<"exit"> {
+def ExitOp : FuncTerminatorOp<"exit"> {
   let summary = "exit operation";
   let description = [{
     An EXIT statement is used to exit a loop (FOR, WHILE or REPEAT loop) at any point regardless of whether the break condition is satisfied.
@@ -132,6 +159,9 @@ def ExitOp : TerminatorOp<"exit"> {
   }];
 }
 
+//
+// MARK: arithmetic operations
+//
 
 def AddOp : ArithmeticOp<"add", [Commutative]> {
   let summary = "addition operation";
@@ -184,6 +214,10 @@ def OrOp : ArithmeticOp<"or"> {
 def XOrOp : ArithmeticOp<"xor", [Commutative]> {
 }
 
+//
+// MARK: comparition operations
+//
+
 def EqualOp : CompareOp<"cmpeq"> {
 }
 
@@ -201,6 +235,10 @@ def GreaterThanOp : CompareOp<"cmpgt"> {
 
 def GreaterEqualOp : CompareOp<"cmpge"> {
 }
+
+//
+// MARK: unary operations
+//
 
 def UnaryNotOp : UnaryArithmeticOp<"not"> {
   let summary = "negate a logical value";
