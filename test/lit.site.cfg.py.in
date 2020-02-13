@@ -1,0 +1,14 @@
+@LIT_SITE_CFG_IN_HEADER@
+#
+config.llvm_tools_dir = "@LLVM_TOOLS_DIR@"
+config.mlir_tools_dir = "@MLIR_TOOLS_DIR@"
+
+# test_exec_root: The root path where tests should be run.
+config.test_exec_root = "@SCLANG_BINARY_TEST_DIR@"
+
+
+import lit.llvm
+lit.llvm.initialize(lit_config, config)
+
+# Let the main config do the real work.
+lit_config.load_config(config, "@SCLANG_SOURCE_TEST_DIR@/lit.cfg.py")

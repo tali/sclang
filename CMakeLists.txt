@@ -2,6 +2,8 @@ add_custom_target(Sclang)
 set_target_properties(Sclang PROPERTIES FOLDER Examples)
 
 add_subdirectory(include)
+add_subdirectory(test)
+
 
 set(LLVM_LINK_COMPONENTS
   Support

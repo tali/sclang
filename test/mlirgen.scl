@@ -1,0 +1,49 @@
+// RUN: sclang --emit=mlir %s 2>&1 | FileCheck %s
+function abc : int
+// CHECK: func @abc() -> i16 {
+
+var
+ a : INT := -1;
+// CHECK-DAG: [[varA:%[0-9]+]] = "scl.tmpvar"() {name = "a"} : () -> memref<i16>
+// CHECK-DAG: [[constA:%[0-9]+]] = "scl.constant"() {value = -1 : i16} : () -> i16
+// CHECK: "scl.store"([[varA]], [[constA]]) : (memref<i16>, i16) -> ()
+
+ b : INT := -2;
+// CHECK-DAG: [[varB:%[0-9]+]] = "scl.tmpvar"() {name = "b"} : () -> memref<i16>
+// CHECK-DAG: [[constB:%[0-9]+]] = "scl.constant"() {value = -2 : i16} : () -> i16
+// CHECK:     "scl.store"([[varB]], [[constB]]) : (memref<i16>, i16) -> ()
+end_var;
+
+begin
+  if a < b then
+// CHECK-DAG: [[lhs:%[0-9]+]] = "scl.load"(%0) : (memref<i16>) -> i16
+// CHECK-DAG: [[rhs:%[0-9]+]] = "scl.load"(%2) : (memref<i16>) -> i16
+// CHECK-DAG: [[cmp:%[0-9]+]] = "scl.cmplt"([[lhs]], [[rhs]]) : (i16, i16) -> i1
+// CHECK:     "scl.if"([[cmp]]) ( {
+
+    a := b * 5;
+// CHECK-DAG:   [[valueB:%[+-9]+]] = "scl.load"([[varB]]) : (memref<i16>) -> i16
+// CHECK-DAG:   [[const5:%[0-9]+]] = "scl.constant"() {value = 5 : i16} : () -> i16
+// CHECK-DAG:   [[mul5:%[0-9]+]] = "scl.mul"([[valueB]], [[const5]]) : (i16, i16) -> i16
+// CHECK:       "scl.store"([[varA]], [[mul5]]) : (memref<i16>, i16) -> ()
+
+  else
+// CHECK:       "scl.terminator"() : () -> ()
+// CHECK:     },  {
+
+    b := 2 + 3 * a;
+// CHECK-DAG:   [[const2:%[0-9]+]] = "scl.constant"() {value = 2 : i16} : () -> i16
+// CHECK-DAG:   [[const3:%[0-9]+]] = "scl.constant"() {value = 3 : i16} : () -> i16
+// CHECK-DAG:   [[valueA:%[0-9]+]] = "scl.load"([[varA]]) : (memref<i16>) -> i16
+// CHECK-DAG:   [[mul3:%[0-9]+]] = "scl.mul"([[const3]], [[valueA]]) : (i16, i16) -> i16
+// CHECK-DAG:   [[add2:%[0-9]+]] = "scl.add"([[const2]], [[mul3]]) : (i16, i16) -> i16
+// CHECK:       "scl.store"([[varB]], [[add2]]) : (memref<i16>, i16) -> ()
+
+  end_if;
+// CHECK-DAG:   "scl.terminator"() : () -> ()
+// CHECK:     }) : (i1) -> ()
+
+  return;
+// CHECK:     "scl.return"() : () -> ()
+
+end_function
