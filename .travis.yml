@@ -1,0 +1,36 @@
+language: cpp
+
+os:
+  - linux
+
+# Use Ubuntu 18.04 LTS (Bionic) as the Linux testing environment.
+dist: bionic
+
+branches:
+  only:
+    - master
+
+compiler:
+  - gcc
+  - clang
+
+script:
+  - git clone https://github.com/llvm/llvm-project --depth 1
+  - git clone . llvm-project/sclang
+  - mkdir build && cd build
+  - cmake -GNinja ../llvm-project/llvm
+      -DLLVM_EXTERNAL_PROJECTS=sclang
+      -DLLVM_ENABLE_PROJECTS="sclang;mlir"
+      -DLLVM_ENABLE_ASSERTIONS=ON
+      -DCMAKE_BUILD_TYPE=Release
+  - ninja check-sclang
+
+git:
+  depth: 1
+
+before_install:
+  - sudo apt-get -yq --no-install-suggests --no-install-recommends install
+      ninja-build
+addons:
+  apt:
+    update: true

@@ -1,8 +1,8 @@
-#SCLANG
+# SCLANG
 
 `sclang` is an SCL compiler using LLVMs MLIR infrastructure.
 
-#BUILDING
+# BUILDING
 
 ```
 git clone https://github.com/llvm/llvm-project

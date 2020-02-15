@@ -17,7 +17,6 @@ add_llvm_executable(sclang
   mlir/MLIRGen.cpp
   parser/AST.cpp
 )
-install(TARGETS sclang RUNTIME)
 
 add_dependencies(sclang SclangOpsIncGen)
 include_directories(include/)
