@@ -1,15 +1,11 @@
-add_custom_target(Sclang)
-set_target_properties(Sclang PROPERTIES FOLDER Examples)
+# Build SCLANG within the LLVM source tree
+# use `sclang` within LLVM_EXTERNAL_PROJECTS
 
-add_subdirectory(include)
-add_subdirectory(test)
+set(MLIR_MAIN_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../mlir/include )
+set(MLIR_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/../mlir/include )
+set(MLIR_TABLEGEN_EXE mlir-tblgen)
 
-
-set(LLVM_LINK_COMPONENTS
-  Support
-  )
-
-add_llvm_example(sclang
+add_llvm_executable(sclang
   include/sclang/AST.h
   include/sclang/Dialect.h
   include/sclang/MLIRGen.h
@@ -20,13 +16,22 @@ add_llvm_example(sclang
   mlir/Dialect.cpp
   mlir/MLIRGen.cpp
   parser/AST.cpp
-  )
+)
+install(TARGETS sclang RUNTIME)
+
+add_dependencies(sclang SclangOpsIncGen)
 include_directories(include/)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/include/)
-add_dependencies(sclang SclangOpsIncGen)
+include_directories(${MLIR_INCLUDE_DIR})
+include_directories(${MLIR_MAIN_SRC_DIR})
 target_link_libraries(sclang
   PRIVATE
     MLIRAnalysis
     MLIRIR
     MLIRParser
-    MLIRTransforms)
+    MLIRTransforms
+)
+
+add_subdirectory(include)
+add_subdirectory(test)
+
