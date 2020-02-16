@@ -172,6 +172,7 @@ enum Token : int {
   tok_error_real = -903,
   tok_error_string = -904,
 };
+llvm::raw_ostream& operator<< (llvm::raw_ostream& s, Token token);
 
 /// The Lexer is an abstract base class providing all the facilities that the
 /// Parser expects. It goes through the stream one token at a time and keeps

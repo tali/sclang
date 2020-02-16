@@ -16,6 +16,7 @@ add_llvm_executable(sclang
   mlir/Dialect.cpp
   mlir/MLIRGen.cpp
   parser/AST.cpp
+  parser/Lexer.cpp
 )
 
 add_dependencies(sclang SclangOpsIncGen)

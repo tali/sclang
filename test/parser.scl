@@ -61,31 +61,31 @@ begin
   if a < b then
 // CHECK: IfThenElse
 // CHECK:   IfThen
-// CHECK:     BinaryExpression 60
+// CHECK:     BinaryExpression <
 // CHECK:       SimpleVariable a
 // CHECK:       SimpleVariable b
 // CHECK:     CodeSection
 
     a := b * 5;
 // CHECK: ValueAssignment
-// CHECK:   BinaryExpression -88
+// CHECK:   BinaryExpression :=
 // CHECK:     SimpleVariable a
-// CHECK:     BinaryExpression 42
+// CHECK:     BinaryExpression *
 // CHECK:       SimpleVariable b
 // CHECK:       IntegerConstant 5
 
   elsif a > b then
 // CHECK: IfThen
-// CHECK:   BinaryExpression 62
+// CHECK:   BinaryExpression >
 // CHECK:     SimpleVariable a
 // CHECK:     SimpleVariable b
 // CHECK:   CodeSection
 
     a := b * 3;
 // CHECK: ValueAssignment
-// CHECK:   BinaryExpression -88
+// CHECK:   BinaryExpression :=
 // CHECK:     SimpleVariable a
-// CHECK:     BinaryExpression 42
+// CHECK:     BinaryExpression *
 // CHECK:       SimpleVariable b
 // CHECK:       IntegerConstant 3
 
@@ -95,11 +95,11 @@ begin
 
     b := 2 + 3 * a;
 // CHECK: ValueAssignment
-// CHECK:   BinaryExpression -88
+// CHECK:   BinaryExpression :=
 // CHECK:     SimpleVariable b
-// CHECK:     BinaryExpression 43
+// CHECK:     BinaryExpression +
 // CHECK:       IntegerConstant 2
-// CHECK:       BinaryExpression 42
+// CHECK:       BinaryExpression *
 // CHECK:         IntegerConstant 3
 // CHECK:         SimpleVariable a
   end_if;
