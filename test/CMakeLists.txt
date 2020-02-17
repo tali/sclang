@@ -17,7 +17,7 @@ add_lit_testsuite(check-sclang "Running the SCLANG regression tests"
   ${CMAKE_CURRENT_BINARY_DIR}
   DEPENDS ${SCLANG_TEST_DEPENDS}
   )
-set_target_properties(check-sclang PROPERTIES FOLDER "Tests")
+set_target_properties(check-sclang PROPERTIES FOLDER "Sclang Tests")
 
 add_lit_testsuites(SCLANG ${CMAKE_CURRENT_SOURCE_DIR}
   DEPENDS ${MLIR_TEST_DEPS}

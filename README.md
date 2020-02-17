@@ -15,6 +15,6 @@ cmake -G Ninja ../llvm \
     -DLLVM_ENABLE_PROJECTS="sclang;mlir" \
     -DLLVM_ENABLE_ASSERTIONS=ON \
     -DCMAKE_BUILD_TYPE=Release
-ninja check-sclang
+cmake --build . --target check-sclang
 ```
 
