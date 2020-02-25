@@ -25,7 +25,7 @@
 #include "sclang/Dialect.h"
 
 #include "mlir/Analysis/Verifier.h"
-#include "mlir/Dialect/StandardOps/Ops.h"
+#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Function.h"
