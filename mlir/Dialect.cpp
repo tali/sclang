@@ -1,4 +1,4 @@
-//===- Dialect.cpp - Toy IR Dialect registration in MLIR ------------------===//
+//===- Dialect.cpp - SCL IR Dialect registration in MLIR ------------------===//
 //
 // Copyright 2019 The MLIR Authors.
 //
@@ -40,17 +40,166 @@ SclDialect::SclDialect(mlir::MLIRContext *ctx) : mlir::Dialect("scl", ctx) {
 #define GET_OP_LIST
 #include "sclang/Ops.cpp.inc"
       >();
+  addTypes<ArrayType>();
   addTypes<StructType>();
 }
 
 //===----------------------------------------------------------------------===//
 // Scl Types
 //===----------------------------------------------------------------------===//
+// MARK: ArrayType
 
 namespace mlir {
 namespace scl {
 namespace detail {
-/// This class represents the internal storage of the Toy `StructType`.
+
+struct ArrayTypeSpec {
+  /// one dimension, with first and last valid index
+  using DimTy = std::pair<int32_t, int32_t>;
+
+  llvm::ArrayRef<DimTy> dimensions;
+  mlir::Type elementType;
+
+  ArrayTypeSpec(llvm::ArrayRef<DimTy> dimensions, mlir::Type elementType)
+      : dimensions(dimensions), elementType(elementType) {}
+};
+
+/// This class represents the internal storage of the SCL `ArrayType`.
+struct ArrayTypeStorage : public mlir::TypeStorage {
+  /// The `KeyTy` is a required type that provides an interface for the storage
+  /// instance. This type will be used when uniquing an instance of the type
+  /// storage. For our struct type, we will unique each instance structurally on
+  /// the elements that it contains.
+  using KeyTy = ArrayTypeSpec;
+  using DimTy = KeyTy::DimTy;
+
+  /// A constructor for the type storage instance.
+  ArrayTypeStorage(llvm::ArrayRef<DimTy> dimensions, mlir::Type elementType)
+      : arrayType(dimensions, elementType) {}
+
+  /// Define the comparison function for the key type with the current storage
+  /// instance. This is used when constructing a new instance to ensure that we
+  /// haven't already uniqued an instance of the given key.
+  bool operator==(const KeyTy &key) const {
+    return key.elementType == arrayType.elementType && key.dimensions == arrayType.dimensions;
+  }
+
+  /// Define a hash function for the key type. This is used when uniquing
+  /// instances of the storage, see the `StructType::get` method.
+  /// Note: This method isn't necessary as both llvm::ArrayRef and mlir::Type
+  /// have hash functions available, so we could just omit this entirely.
+  static llvm::hash_code hashKey(const KeyTy &key) {
+    return hash_value(key.elementType);
+  }
+
+  /// Define a construction function for the key type from a set of parameters.
+  /// These parameters will be provided when constructing the storage instance
+  /// itself.
+  /// Note: This method isn't necessary because KeyTy can be directly
+  /// constructed with the given parameters.
+  static KeyTy getKey(llvm::ArrayRef<DimTy> dimensions, mlir::Type elementType) {
+    return KeyTy(dimensions, elementType);
+  }
+
+  /// Define a construction method for creating a new instance of this storage.
+  /// This method takes an instance of a storage allocator, and an instance of a
+  /// `KeyTy`. The given allocator must be used for *all* necessary dynamic
+  /// allocations used to create the type storage and its internal.
+  static ArrayTypeStorage *construct(mlir::TypeStorageAllocator &allocator,
+                                      const KeyTy &key) {
+
+    // Copy the dimensions from the provided `KeyTy` into the allocator.
+    llvm::ArrayRef<DimTy> dimensions = allocator.copyInto(key.dimensions);
+    // Allocate the storage instance and construct it.
+    return new (allocator.allocate<ArrayTypeStorage>())
+        ArrayTypeStorage(dimensions, key.elementType);
+  }
+
+  /// The following field contains the element types of the struct.
+  ArrayTypeSpec arrayType;
+};
+} // end namespace detail
+} // end namespace scl
+} // end namespace mlir
+
+/// Create an instance of a `StructType` with the given element types. There
+/// *must* be at least one element type.
+ArrayType ArrayType::get(llvm::ArrayRef<DimTy> dimensions, mlir::Type elementType) {
+  assert(!dimensions.empty() && "expected an array with at least one dimension");
+
+  // Call into a helper 'get' method in 'TypeBase' to get a uniqued instance
+  // of this type. The first two parameters are the context to unique in and the
+  // kind of the type. The parameters after the type kind are forwarded to the
+  // storage instance.
+  mlir::MLIRContext *ctx = elementType.getContext();
+  return Base::get(ctx, SclTypes::Array, dimensions, elementType);
+}
+
+/// Returns the element types of this struct type.
+mlir::Type ArrayType::getElementType() {
+  // 'getImpl' returns a pointer to the internal storage instance.
+  return getImpl()->arrayType.elementType;
+}
+
+// Returns the element types of this struct type.
+llvm::ArrayRef<ArrayType::DimTy> ArrayType::getDimensions() {
+  // 'getImpl' returns a pointer to the internal storage instance.
+  return getImpl()->arrayType.dimensions;
+}
+
+namespace {
+
+void print(ArrayType type, mlir::DialectAsmPrinter &printer) {
+  // Print the struct type according to the parser format.
+  printer << "array<" << type.getElementType();
+  for (const auto dim : type.getDimensions()) {
+    printer << ", " << dim.first << ":" << dim.second;
+  }
+  printer << '>';
+}
+
+/// Parse an array type instance.
+mlir::Type parseArrayType(mlir::DialectAsmParser &parser) {
+  // Parse a array type in the following form:
+  //   array-type ::= `array` `<` type, `,`, range (`,` range)* `>`
+
+  // Parse: `array` `<`
+  if (parser.parseKeyword("array") || parser.parseLess())
+    return Type();
+
+  // Parse: type `,`
+  mlir::Type elementType;
+  if (parser.parseType(elementType) || parser.parseComma())
+    return Type();
+
+  // Parse the dimensions
+  SmallVector<mlir::scl::detail::ArrayTypeStorage::DimTy, 1> dimensions;
+  do {
+    int32_t low, high;
+    if (parser.parseInteger(low) || parser.parseColon() || parser.parseInteger(high))
+      return Type();
+
+    dimensions.push_back(std::make_pair(low, high));
+
+    // Parse the optional: `,`
+  } while (succeeded(parser.parseOptionalComma()));
+
+  // Parse: `>`
+  if (parser.parseGreater())
+    return Type();
+
+  return ArrayType::get(dimensions, elementType);
+}
+
+} // namespace
+
+
+// MARK: StructType
+
+namespace mlir {
+namespace scl {
+namespace detail {
+/// This class represents the internal storage of the SCL `StructType`.
 struct StructTypeStorage : public mlir::TypeStorage {
   /// The `KeyTy` is a required type that provides an interface for the storage
   /// instance. This type will be used when uniquing an instance of the type
@@ -72,7 +221,7 @@ struct StructTypeStorage : public mlir::TypeStorage {
   /// Note: This method isn't necessary as both llvm::ArrayRef and mlir::Type
   /// have hash functions available, so we could just omit this entirely.
   static llvm::hash_code hashKey(const KeyTy &key) {
-    return llvm::hash_value(key);
+    return hash_value(key);
   }
 
   /// Define a construction function for the key type from a set of parameters.
@@ -124,15 +273,19 @@ llvm::ArrayRef<mlir::Type> StructType::getElementTypes() {
   return getImpl()->elementTypes;
 }
 
-/// Parse an instance of a type registered to the toy dialect.
-mlir::Type SclDialect::parseType(mlir::DialectAsmParser &parser) const {
+namespace {
+
+void print(StructType type, mlir::DialectAsmPrinter &printer) {
+  // Print the struct type according to the parser format.
+  printer << "struct<";
+  mlir::interleaveComma(type.getElementTypes(), printer);
+  printer << '>';
+}
+
+/// Parse a struct type instance.
+mlir::Type parseStructType(mlir::DialectAsmParser &parser) {
   // Parse a struct type in the following form:
   //   struct-type ::= `struct` `<` type (`,` type)* `>`
-
-  // NOTE: All MLIR parser function return a ParseResult. This is a
-  // specialization of LogicalResult that auto-converts to a `true` boolean
-  // value on failure to allow for chaining, but may be used with explicit
-  // `mlir::failed/mlir::succeeded` as desired.
 
   // Parse: `struct` `<`
   if (parser.parseKeyword("struct") || parser.parseLess())
@@ -142,21 +295,10 @@ mlir::Type SclDialect::parseType(mlir::DialectAsmParser &parser) const {
   SmallVector<mlir::Type, 1> elementTypes;
   do {
     // Parse the current element type.
-//    llvm::SMLoc typeLoc = parser.getCurrentLocation();
     mlir::Type elementType;
     if (parser.parseType(elementType))
       return nullptr;
 
-#if 0 // TODO custom check
-    // Check that the type is either a TensorType or another StructType.
-    if (!elementType.isa<mlir::TensorType>() &&
-        !elementType.isa<StructType>()) {
-      parser.emitError(typeLoc, "element type for a struct must either "
-                                "be a TensorType or a StructType, got: ")
-          << elementType;
-      return Type();
-    }
-#endif
     elementTypes.push_back(elementType);
 
     // Parse the optional: `,`
@@ -168,16 +310,39 @@ mlir::Type SclDialect::parseType(mlir::DialectAsmParser &parser) const {
   return StructType::get(elementTypes);
 }
 
-/// Print an instance of a type registered to the toy dialect.
+} // namespace
+
+
+// MARK: parse and print
+
+/// Parse an instance of a type registered to the SCL dialect.
+mlir::Type SclDialect::parseType(mlir::DialectAsmParser &parser) const {
+  StringRef keyword;
+  if (parser.parseKeyword(&keyword))
+    return Type();
+
+  if (keyword == "array")
+    return parseArrayType(parser);
+  if (keyword == "struct")
+    return parseStructType(parser);
+
+  parser.emitError(parser.getNameLoc(), "unknown SCL type: ") << keyword;
+  return Type();
+}
+
+/// Print an instance of a type registered to the SCL dialect.
 void SclDialect::printType(mlir::Type type,
                            mlir::DialectAsmPrinter &printer) const {
-  // Currently the only toy type is a struct type.
-  StructType structType = type.cast<StructType>();
-
-  // Print the struct type according to the parser format.
-  printer << "struct<";
-  mlir::interleaveComma(structType.getElementTypes(), printer);
-  printer << '>';
+  switch(type.getKind()) {
+  default:
+    llvm_unreachable("Unhandled SCL type");
+  case SclTypes::Array:
+    print(type.cast<ArrayType>(), printer);
+    break;
+  case SclTypes::Struct:
+    print(type.cast<StructType>(), printer);
+    break;
+  }
 }
 
 

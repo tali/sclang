@@ -552,6 +552,11 @@ private:
     }
   }
 
+  mlir::Type getType(const ArrayDataTypeSpecAST &type) {
+    mlir::Type elementType = getType(*type.getDataType());
+    return ArrayType::get(type.getDimensions(), elementType);
+  }
+
   mlir::Type getType(const StructDataTypeSpecAST &type) {
     std::vector<mlir::Type> elements;
 
@@ -571,6 +576,8 @@ private:
     switch(type.getKind()) {
     case DataTypeSpecAST::DataType_Elementary:
       return getType(llvm::cast<ElementaryDataTypeAST>(type));
+    case DataTypeSpecAST::DataType_Array:
+      return getType(llvm::cast<ArrayDataTypeSpecAST>(type));
     case DataTypeSpecAST::DataType_Struct:
       return getType(llvm::cast<StructDataTypeSpecAST>(type));
     default:

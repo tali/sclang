@@ -29,6 +29,7 @@
 namespace mlir {
 namespace scl {
 namespace detail {
+struct ArrayTypeStorage;
 struct StructTypeStorage;
 } // end namespace detail
 
@@ -52,9 +53,31 @@ public:
 namespace SclTypes {
 enum Types {
   // TODO: register own space in mlir/include/mlir/IR/DialectSymbolRegistry.def
-  Struct = mlir::Type::FIRST_PRIVATE_EXPERIMENTAL_0_TYPE,
+  Array = mlir::Type::FIRST_PRIVATE_EXPERIMENTAL_0_TYPE,
+  Struct,
 };
 } // end namespace SclTypes
+
+/// This class defines the SCL array type.
+class ArrayType : public mlir::Type::TypeBase<ArrayType, mlir::Type,
+                                               detail::ArrayTypeStorage> {
+public:
+  /// Inherit some necessary constructors from 'TypeBase'.
+  using Base::Base;
+  using DimTy = std::pair<int32_t, int32_t>;
+
+  /// This static method is used to support type inquiry through isa, cast,
+  /// and dyn_cast.
+  static bool kindof(unsigned kind) { return kind == SclTypes::Array; }
+
+  /// Create an instance of a `StructType` with the given element types. There
+  /// *must* be atleast one element type.
+  static ArrayType get(llvm::ArrayRef<DimTy> dimensions, mlir::Type elementType);
+
+  /// Returns the element types of this struct type.
+  llvm::ArrayRef<DimTy> getDimensions();
+  mlir::Type getElementType();
+};
 
 /// This class defines the SCL struct type. It represents a collection of
 /// element types. All derived types in MLIR must inherit from the CRTP class
