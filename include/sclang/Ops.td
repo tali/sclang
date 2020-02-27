@@ -43,6 +43,10 @@ def scl_RealType : Type<CPred<"$_self.isa<scl::RealType>()">,
     "SCL real type">;
 
 
+class AssemblyFormat<string format> {
+  string assemblyFormat = format;
+}
+
 // Base class for toy dialect operations. This operation inherits from the base
 // `Op` class in OpBase.td, and provides:
 //   * The parent dialect of the operation.
@@ -54,18 +58,22 @@ class SCL_Op<string mnemonic, list<OpTrait> traits = []> :
 class ArithmeticOp<string mnemonic, list<OpTrait> traits = []> :
     SCL_Op<mnemonic, !listconcat(traits, [SameOperandsAndResultType])>,
     Arguments<(ins AnyType:$lhs, AnyType:$rhs)>,
-    Results<(outs AnyType)>;
+    Results<(outs AnyType:$result)>,
+    AssemblyFormat<"attr-dict $lhs `,` $rhs `:` type($rhs)">;
 class CompareOp<string mnemonic, list<OpTrait> traits = []> :
     SCL_Op<mnemonic, !listconcat(traits, [SameTypeOperands])>,
     Arguments<(ins AnyType:$lhs, AnyType:$rhs)>,
-    Results<(outs I1)>;
+    Results<(outs I1:$result)>,
+    AssemblyFormat<"attr-dict $lhs `,` $rhs `:` type($rhs)">;
 class UnaryArithmeticOp<string mnemonic, list<OpTrait> traits = []> :
     SCL_Op<mnemonic, !listconcat(traits, [SameOperandsAndResultType])>,
     Arguments<(ins AnyType:$rhs)>,
-    Results<(outs AnyType)>;
+    Results<(outs AnyType:$result)>,
+    AssemblyFormat<"attr-dict $rhs `:` type($rhs)">;
 
 class FuncTerminatorOp<string mnemonic, list<OpTrait> traits = []> :
-    SCL_Op<mnemonic, !listconcat(traits, [Terminator, HasParent<"FuncOp">])>;
+    SCL_Op<mnemonic, !listconcat(traits, [Terminator, HasParent<"FuncOp">])>,
+    AssemblyFormat<"attr-dict">;
 
 //
 // MARK: variable handling
@@ -75,23 +83,26 @@ def TempVariableOp : SCL_Op<"tmpvar"> {
   let summary = "allocate stack memory for a temporary variable";
   let description = [{ TBD }];
   let arguments = (ins StrAttr:$name);
-  let results = (outs AnyMemRef);
+  let results = (outs AnyMemRef:$result);
+  let assemblyFormat = "$name attr-dict `:` type($result)";
 }
 
 def ConstantOp : SCL_Op<"constant", [NoSideEffect]> {
   let summary = "literal constant";
   let arguments = (ins AnyAttr:$value);
-  let results = (outs AnyType);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$value attr-dict `:` type($result)";
 }
 
-def LoadOp : SCL_Op<"load"> {
+def LoadOp : SCL_Op<"load", [SameOperandsAndResultElementType]> {
   let summary = "load a value from memory";
   let description = [{
     The "load" operation reads a value from a data block.
   }];
 
-  let arguments = (ins AnyMemRef);
-  let results = (outs AnyType);
+  let arguments = (ins AnyMemRef:$address);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$address `:` type($address) attr-dict `:` type($result)";
 
   let builders = [
     OpBuilder<"Builder *b, OperationState &state, Value memref", [{
@@ -101,20 +112,23 @@ def LoadOp : SCL_Op<"load"> {
   ];
 }
 
-def StoreOp : SCL_Op<"store"> {
+def StoreOp : SCL_Op<"store", [SameOperandsElementType]> {
   let summary = "store a value to memory";
   let description = [{
     The "store" operation writes a value to a data block.
   }];
 
   let arguments = (ins AnyMemRef:$lhs, AnyType:$rhs);
+  let assemblyFormat = "attr-dict $lhs `:` type($lhs) `=` $rhs `:` type($rhs)";
 }
 
 //
 // MAKR: control flow
 //
 
-def TerminatorOp : SCL_Op<"terminator", [Terminator]> {}
+def TerminatorOp : SCL_Op<"terminator", [Terminator]> {
+  let assemblyFormat = "attr-dict";
+}
 
 def IfThenElseOp : SCL_Op<"if">, SingleBlockImplicitTerminator<"terminator"> {
   let summary = "if-then-else operation";
@@ -140,6 +154,7 @@ def ContinueOp : SCL_Op<"continue", [Terminator]> {
   let description = [{
     A CONTINUE statement is used to terminate the execution of the current iteration of a loop (initiated by a FOR, WHILE or REPEAT statement) and to restart processing within the loop.
   }];
+  let assemblyFormat = "attr-dict";
 }
 
 
