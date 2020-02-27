@@ -213,7 +213,7 @@ def ModOp : ArithmeticOp<"mod"> {
   }];
 }
 
-def ExpOp : ArithmeticOp<"exp", [Commutative]> {
+def ExpOp : ArithmeticOp<"exp"> {
   let summary = "exponentiation operation";
   let description = [{
     The "exp" operation performs exponentiation of two values.
