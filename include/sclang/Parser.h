@@ -867,6 +867,9 @@ private:
     case tok_identifier:
     case tok_symbol:
       return ParseIdentifierExpression();
+    case tok_false:
+    case tok_true:
+      return ParseBooleanLiteralExpression();
     case tok_integer_literal:
       return ParseIntegerLiteralExpression();
     case tok_real_number_literal:
@@ -912,6 +915,21 @@ private:
       return parseError<ExpressionAST>("variable", "for expression");
 
     return std::make_unique<SimpleVariableAST>(std::move(loc), std::move(variable));
+  }
+
+  std::unique_ptr<ExpressionAST> ParseBooleanLiteralExpression() {
+    auto loc = lexer.getLastLocation();
+
+    switch (lexer.getCurToken()) {
+    default:
+      assert(false);
+    case tok_false:
+      lexer.consume(tok_false);
+      return std::make_unique<IntegerConstantAST>(std::move(loc), 0);
+    case tok_true:
+      lexer.consume(tok_true);
+      return std::make_unique<IntegerConstantAST>(std::move(loc), 1);
+    }
   }
 
   std::unique_ptr<ExpressionAST> ParseIntegerLiteralExpression() {
