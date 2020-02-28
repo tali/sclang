@@ -85,6 +85,8 @@ private:
   void dump(const StringConstantAST *node);
   // Function and Function Block Calls
   void dump(const SubroutineProcessingAST *node);
+  void dump(const llvm::ArrayRef<std::unique_ptr<ExpressionAST>>);
+  void dump(const FunctionCallAST *node);
   // Control Statements
   void dump(const IfThenAST *node);
   void dump(const IfThenElseAST *node);
@@ -432,7 +434,7 @@ void ASTDumper::dump(const ExpressionAST *expr) {
   dispatch(SimpleVariableAST);
 //    dispatch(AbsoluteVariableAST);
 //    dispatch(VariableInDBAST);
-//    dispatch(FunctionCallAST);
+  dispatch(FunctionCallAST);
   dispatch(BinaryExpressionAST);
   dispatch(UnaryExpressionAST);
 #undef dispatch
@@ -479,7 +481,24 @@ void ASTDumper::dump(const StringConstantAST *node) {
 void ASTDumper::dump(const SubroutineProcessingAST *node) {
   INDENT();
   llvm::errs() << "Subroutine\n";
+  dump(node->getCall());
 }
+
+void ASTDumper::dump(llvm::ArrayRef<std::unique_ptr<ExpressionAST>> parameters) {
+  INDENT();
+  llvm::errs() << "Parameters\n";
+  for (const auto & param : parameters) {
+    dump(param.get());
+  }
+}
+
+void ASTDumper::dump(const FunctionCallAST *node) {
+  INDENT();
+  llvm::errs() << "FunctionCall\n";
+  dump(node->getFunction());
+  dump(node->getParameters());
+}
+
 
 // MARK: C.7 Control Statements
 

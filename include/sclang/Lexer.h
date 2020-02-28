@@ -158,6 +158,7 @@ enum Token : int {
   tok_cmp_le = -91, // <=
   tok_cmp_ge = -92, // >=
   tok_cmp_ne = -93, // <>
+  tok_assign_output = -94, // =>
 
   // names and literals
   tok_identifier = -100,
@@ -624,6 +625,14 @@ private:
         return tok_cmp_ne;
       }
       return tok_cmp_lt;
+    }
+    if (lastChar == '=') {
+      lastChar = Token(getNextChar());
+      if (lastChar == '>') {
+        lastChar = Token(getNextChar());
+        return tok_assign_output;
+      }
+      return tok_cmp_eq;
     }
 
     // MARK: comments

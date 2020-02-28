@@ -687,12 +687,32 @@ class StringConstantAST : public ConstantAST {
 
 // MARK: C.6 Function and Function Block Calls
 
-class SubroutineProcessingAST : public InstructionAST {
+class FunctionCallAST : public ExpressionAST {
+
+  std::unique_ptr<ExpressionAST> function;
+  std::vector<std::unique_ptr<ExpressionAST>> parameters;
 
 public:
-  SubroutineProcessingAST(Location loc)
-    : InstructionAST(std::move(loc), Instr_Subroutine) {}
-  
+  FunctionCallAST(Location loc, std::unique_ptr<ExpressionAST> function, std::vector<std::unique_ptr<ExpressionAST>> parameters)
+    : ExpressionAST(std::move(loc), Expr_FunctionCall), function(std::move(function)), parameters(std::move(parameters)) {}
+
+  const ExpressionAST * getFunction() const { return function.get(); }
+  llvm::ArrayRef<std::unique_ptr<ExpressionAST>> getParameters() const { return parameters; }
+
+  /// LLVM style RTTI
+  static bool classof(const ExpressionAST *e) { return e->getKind() == Expr_FunctionCall; }
+};
+
+class SubroutineProcessingAST : public InstructionAST {
+
+  std::unique_ptr<ExpressionAST> call;
+
+public:
+  SubroutineProcessingAST(Location loc, std::unique_ptr<ExpressionAST> call)
+    : InstructionAST(std::move(loc), Instr_Subroutine), call(std::move(call)) {}
+
+  const FunctionCallAST * getCall() const { return llvm::cast<FunctionCallAST>(call.get()); }
+
   /// LLVM style RTTI
   static bool classof(const InstructionAST *i) { return i->getKind() == Instr_Subroutine; }
 };

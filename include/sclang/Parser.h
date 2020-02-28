@@ -806,7 +806,6 @@ private:
     switch(lexer.getCurToken()) {
     default:
       return ParseStatement();
-    // TODO: subroutines
     case tok_if:
       return ParseIfThenElse();
     case tok_case:
@@ -840,6 +839,11 @@ private:
       if (binary->getOp() != tok_assignment)
         return parseError<InstructionAST>("assignment", "as top-level expression");
       return std::make_unique<ValueAssignmentAST>(std::move(loc), std::move(expr));
+    }
+
+    auto call = llvm::dyn_cast<FunctionCallAST>(expr.get());
+    if (call) {
+      return std::make_unique<SubroutineProcessingAST>(std::move(loc), std::move(expr));
     }
 
     // TODO: function calls and jump labels
@@ -948,6 +952,10 @@ private:
 
       // Okay, we know this is a binop.
       auto binOp = lexer.getCurToken();
+      if (binOp == tok_parenthese_open) {
+        lhs = ParseCallExpression(std::move(lhs));
+        continue;
+      }
       lexer.consume(binOp);
       auto loc = lexer.getLastLocation();
 
@@ -984,6 +992,7 @@ private:
   static const int pred_unary = -3;
   static const int pred_exponent = -2;
   static const int pred_paren = -1;
+  static const int pred_dot = 0;
 
   int getTokPrecedence() {
     switch (lexer.getCurToken()) {
@@ -991,6 +1000,7 @@ private:
       return pred_none;
 
     case tok_assignment:
+    case tok_assign_output:
       return pred_assignment;
 
     case tok_or:
@@ -1025,6 +1035,11 @@ private:
 
     case tok_exponent:
       return pred_exponent;
+
+    case tok_parenthese_open:
+      return pred_paren;
+    case tok_dot:
+      return pred_dot;
     }
   }
 
@@ -1069,6 +1084,32 @@ private:
   }
 
   // MARK: C.6 Function and Function Block Calls
+
+  std::unique_ptr<ExpressionAST> ParseCallExpression(std::unique_ptr<ExpressionAST> function) {
+    auto loc = lexer.getLastLocation();
+    lexer.consume(tok_parenthese_open);
+
+    std::vector<std::unique_ptr<ExpressionAST>> parameters;
+    bool anotherParam = lexer.getCurToken() != tok_parenthese_close;
+    while (anotherParam) {
+      auto param = ParseExpression();
+      if (!param)
+        return parseError<ExpressionAST>("parameter", "function call");
+      parameters.push_back(std::move(param));
+
+      if (lexer.getCurToken() == tok_comma)
+        lexer.consume(tok_comma);
+      else
+        anotherParam = false;
+    }
+
+    if (lexer.getCurToken() != tok_parenthese_close)
+      return parseError<ExpressionAST>(tok_parenthese_close, "to end function call parameters");
+    lexer.consume(tok_parenthese_close);
+
+    return std::make_unique<FunctionCallAST>(std::move(loc), std::move(function), std::move(parameters));
+  }
+
 
   // MARK: C.7 Control Statements
 

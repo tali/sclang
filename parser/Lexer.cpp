@@ -147,6 +147,7 @@ llvm::raw_ostream& operator<< (llvm::raw_ostream& s, Token token) {
   case tok_cmp_le: return s << "<=";
   case tok_cmp_ge: return s << ">=";
   case tok_cmp_ne: return s << "<>";
+  case tok_assign_output: return s << "=>";
 
     // names and literals
   case tok_identifier: return s << "<identifier>";
