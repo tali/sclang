@@ -368,6 +368,8 @@ public:
 class ElementaryDataTypeAST : public DataTypeSpecAST {
 public:
   enum ElementaryTypeASTKind {
+    // Void return type
+    Type_Void,
     // Bit Data Type
     Type_Bool, Type_Byte, Type_Word, Type_DWord,
     // Character Type

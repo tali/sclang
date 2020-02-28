@@ -513,6 +513,9 @@ private:
     switch(lexer.getCurToken()) {
     default:
       return parseError<DataTypeSpecAST>("data type");
+    case tok_void:
+      elementaryType = ElementaryDataTypeAST::Type_Void;
+      break;
       // Bit Data Type
     case tok_bool:
       elementaryType = ElementaryDataTypeAST::Type_Bool;

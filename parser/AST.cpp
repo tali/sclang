@@ -285,6 +285,8 @@ void ASTDumper::dump(const DataTypeSpecAST *dataType) {
 void ASTDumper::dump(const ElementaryDataTypeAST *node) {
   INDENT();
   switch (node->getType()) {
+  case sclang::ElementaryDataTypeAST::Type_Void:
+    llvm::errs() << "ElementaryDataType Void\n"; return;
   case ElementaryDataTypeAST::Type_Bool:
     llvm::errs() << "ElementaryDataType Bool\n"; return;
   case ElementaryDataTypeAST::Type_Byte:
