@@ -650,6 +650,7 @@ private:
           if (lastChar == EOF)
             return tok_eof;
         } while (!(last2 == '*' && lastChar == ')'));
+        lastChar = Token(getNextChar());
         // end of comment
         return getTok();
       } else { // no comment block, just an opening paranthesis
