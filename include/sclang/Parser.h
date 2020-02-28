@@ -757,6 +757,7 @@ private:
   bool isEndToken(Token tok) {
     switch (tok) {
     default: return false;
+    case tok_eof: return true;
     case tok_else: return true;
     case tok_elsif: return true;
     case tok_end_case: return true;
