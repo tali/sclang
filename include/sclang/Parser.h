@@ -123,6 +123,7 @@ private:
 
     auto identifier = ParseIdentifier();
     if (identifier.empty()) return nullptr;
+    auto attrs = ParseBlockAttributes();
     auto decls = ParseDeclarationSection();
     if (!decls) return nullptr;
 
@@ -133,7 +134,7 @@ private:
       return parseError<UnitAST>("code block", "in organization block");
 
     auto unit = std::make_unique<OrganizationBlockAST>(
-                 std::move(identifier), std::move(loc), std::move(decls), std::move(code));
+                 std::move(identifier), std::move(loc), std::move(attrs), std::move(decls), std::move(code));
     if (lexer.getCurToken() != tok_end_organization_block)
       return parseError<OrganizationBlockAST>(tok_end_organization_block, "to end organization block");
     lexer.consume(tok_end_organization_block);
@@ -160,6 +161,7 @@ private:
     lexer.consume(tok_colon);
 
     auto type = ParseDataTypeSpec();
+    auto attrs = ParseBlockAttributes();
     auto decls = ParseDeclarationSection();
 
     if (lexer.getCurToken() == tok_begin)
@@ -168,8 +170,7 @@ private:
     if (!code)
       return parseError<UnitAST>("code block", "in function");
 
-    auto unit = std::make_unique<FunctionAST>(std::move(identifier), std::move(loc), std::move(type),
-                                          std::move(decls), std::move(code));
+    auto unit = std::make_unique<FunctionAST>(std::move(identifier), std::move(loc), std::move(type), std::move(attrs), std::move(decls), std::move(code));
 
     if (lexer.getCurToken() != tok_end_function)
       return parseError<FunctionAST>(tok_end_function, "to end function");
@@ -192,6 +193,7 @@ private:
 
     auto identifier = ParseIdentifier();
     if (identifier.empty()) return nullptr;
+    auto attrs = ParseBlockAttributes();
     auto decls = ParseDeclarationSection();
 
     if (lexer.getCurToken() == tok_begin)
@@ -200,8 +202,7 @@ private:
     if (!code)
       return parseError<UnitAST>("code block", "in function block");
 
-    auto unit = std::make_unique<FunctionBlockAST>(std::move(identifier), std::move(loc),
-                                               std::move(decls), std::move(code));
+    auto unit = std::make_unique<FunctionBlockAST>(std::move(identifier), std::move(loc), std::move(attrs), std::move(decls), std::move(code));
 
     if (lexer.getCurToken() != tok_end_function_block)
       return parseError<FunctionBlockAST>(tok_end_function_block, "to end function block");
@@ -224,14 +225,14 @@ private:
 
     auto identifier = ParseIdentifier();
     if (identifier.empty()) return nullptr;
+    auto attrs = ParseBlockAttributes();
     auto decls = ParseDeclarationSection();
 
     if (lexer.getCurToken() == tok_begin)
       lexer.consume(tok_begin);
     auto assignments = ParseDBAssignmentSection();
 
-    auto unit = std::make_unique<DataBlockAST>(std::move(identifier), std::move(loc),
-                                               std::move(decls), std::move(assignments));
+    auto unit = std::make_unique<DataBlockAST>(std::move(identifier), std::move(loc), std::move(attrs), std::move(decls), std::move(assignments));
 
     if (lexer.getCurToken() != tok_end_data_block)
       return parseError<DataBlockAST>(tok_end_data_block, "to end data block");
@@ -253,9 +254,9 @@ private:
     auto identifier = ParseIdentifier();
     if (identifier.empty()) return nullptr;
     auto type = ParseDataTypeSpec(); // TODO: STRUCT
+    auto attrs = ParseBlockAttributes();
 
-    auto block = std::make_unique<UserDefinedTypeAST>(std::move(identifier),
-                                               std::move(loc), std::move(type));
+    auto block = std::make_unique<UserDefinedTypeAST>(std::move(identifier), std::move(loc), std::move(attrs), std::move(type));
 
     if (lexer.getCurToken() != tok_end_type)
       return parseError<UserDefinedTypeAST>(tok_end_type, "to end user defined type");
@@ -263,6 +264,37 @@ private:
 
     return block;
   }
+
+  /// Parse the block attribues
+  ///
+  /// Block Attributes ::= [ "TITLE" "=" String Literal ] { Name ":" (String Literal | Identifier) }
+  std::vector<std::unique_ptr<BlockAttributeAST>> ParseBlockAttributes() {
+    std::vector<std::unique_ptr<BlockAttributeAST>> attrs;
+
+    while (lexer.getCurToken() == tok_identifier) {
+      auto loc = lexer.getLastLocation();
+      std::string name(lexer.getIdentifier());
+      lexer.consume(tok_identifier);
+      std::string value;
+      if (lexer.getCurToken() == tok_cmp_eq || lexer.getCurToken() == tok_colon) {
+        lexer.consume(lexer.getCurToken());
+        switch (lexer.getCurToken()) {
+        default: break;
+        case tok_identifier:
+          value = std::string(lexer.getIdentifier());
+          lexer.consume(tok_identifier);
+          break;
+        case tok_string_literal:
+          value = std::string(lexer.getStringValue());
+          lexer.consume(tok_string_literal);
+          break;
+        }
+      }
+      attrs.push_back(std::make_unique<BlockAttributeAST>(std::move(loc), std::move(name), std::move(value)));
+    }
+    return attrs;
+  }
+
 
 // MARK: C.2 Structure of Declaration Sections
 

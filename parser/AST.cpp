@@ -47,6 +47,8 @@ public:
 private:
   // Subunits of SCL Source Files
   void dump(const UnitAST *Node);
+  void dump(const llvm::ArrayRef<std::unique_ptr<BlockAttributeAST>> attr);
+  void dump(const BlockAttributeAST *attr);
   void dump(const OrganizationBlockAST *node);
   void dump(const FunctionAST *node);
   void dump(const FunctionBlockAST *node);
@@ -143,6 +145,20 @@ void ASTDumper::dump(const UnitAST *unit) {
   llvm::errs() << "<unknown Expr, kind " << unit->getKind() << ">\n";
 }
 
+void ASTDumper::dump(const BlockAttributeAST *attr) {
+  INDENT();
+  llvm::errs() << "Attribute " << attr->getName() << " : " << attr->getValue() << "\n";
+}
+
+void ASTDumper::dump(llvm::ArrayRef<std::unique_ptr<BlockAttributeAST>> attrs) {
+  if (attrs.empty()) return;
+  INDENT();
+  llvm::errs() << "Attributes\n";
+  for (auto const & attr : attrs) {
+    dump(attr.get());
+  }
+}
+
 // MARK: C.1 Subunits of SCL Program Files
 
 /// A variable declaration is printing the variable name, the type, and then
@@ -150,6 +166,7 @@ void ASTDumper::dump(const UnitAST *unit) {
 void ASTDumper::dump(const OrganizationBlockAST *unit) {
   INDENT();
   llvm::errs() << "OrganizationBlock " << unit->getIdentifier() << "\n";
+  dump(unit->getAttributes());
   dump(unit->getDeclarations());
   dump(unit->getCode());
 }
@@ -157,6 +174,7 @@ void ASTDumper::dump(const OrganizationBlockAST *unit) {
 void ASTDumper::dump(const FunctionAST *unit) {
   INDENT();
   llvm::errs() << "Function " << unit->getIdentifier() << "\n";
+  dump(unit->getAttributes());
   dump(unit->getDeclarations());
   dump(unit->getType());
   dump(unit->getCode());
@@ -165,6 +183,7 @@ void ASTDumper::dump(const FunctionAST *unit) {
 void ASTDumper::dump(const FunctionBlockAST *unit) {
   INDENT();
   llvm::errs() << "FunctionBlock " << unit->getIdentifier() << "\n";
+  dump(unit->getAttributes());
   dump(unit->getDeclarations());
   dump(unit->getCode());
 }
@@ -172,6 +191,7 @@ void ASTDumper::dump(const FunctionBlockAST *unit) {
 void ASTDumper::dump(const DataBlockAST *unit) {
   INDENT();
   llvm::errs() << "DataBlock " << unit->getIdentifier() << "\n";
+  dump(unit->getAttributes());
   dump(unit->getDeclarations());
   dump(unit->getAssignments());
 }
@@ -180,6 +200,7 @@ void ASTDumper::dump(const UserDefinedTypeAST *unit) {
   INDENT();
   llvm::errs() << "UserDefinedType " << unit->getIdentifier() << "\n";
   dump(unit->getType());
+  dump(unit->getAttributes());
 }
 
 // MARK: C.2 Structure of Declaration Sections
