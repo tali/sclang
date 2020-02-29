@@ -499,9 +499,10 @@ private:
           stringValue += c;
         }
       }
+      lastChar = Token(getNextChar());
       if (c != '\'')
         return tok_error_string;
-      return tok_string;
+      return tok_string_literal;
     }
 
     if (lastChar == '"') { // Symbol
