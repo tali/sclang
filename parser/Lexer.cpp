@@ -64,7 +64,7 @@ llvm::raw_ostream& operator<< (llvm::raw_ostream& s, Token token) {
   case tok_end_for: return s << "END_FOR";
   case tok_end_function: return s << "END_FUNCTION";
   case tok_end_function_block: return s << "END_FUNCTION_BLOCK";
-  case tok_end_if: return s << "ENDI_IF";
+  case tok_end_if: return s << "END_IF";
   case tok_end_label: return s << "END_LABEL";
   case tok_end_type: return s << "END_TYPE";
   case tok_end_organization_block: return s << "END_ORGANIZATION_BLOCK";
