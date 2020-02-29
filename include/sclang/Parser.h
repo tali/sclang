@@ -785,8 +785,10 @@ private:
 
     std::vector<std::unique_ptr<InstructionAST>> instructions;
     while (!isEndToken(lexer.getCurToken())) {
-      if (lexer.getCurToken() == tok_semicolon)
+      if (lexer.getCurToken() == tok_semicolon) {
+        lexer.consume(tok_semicolon);
         continue;
+      }
 
       auto instr = ParseInstruction();
       if (!instr)
