@@ -27,6 +27,7 @@ namespace sclang {
 
 llvm::raw_ostream& operator<< (llvm::raw_ostream& s, Token token) {
   switch (token) {
+  case tok_none: return s << "<none>";
   case tok_eof: return s << "<eof>";
 
     // reserved words

@@ -208,7 +208,7 @@ public:
   ConstantDeclarationSubsectionAST(Location loc, std::vector<std::unique_ptr<ConstantDeclarationAST>> values)
     : DeclarationSubsectionAST(Decl_Constant, std::move(loc)), values(std::move(values)) {}
 
-  llvm::ArrayRef<std::unique_ptr<ConstantDeclarationAST>> getValues() { return values; }
+  llvm::ArrayRef<std::unique_ptr<ConstantDeclarationAST>> getValues() const { return values; }
 
   /// LLVM style RTTI
   static bool classof(const DeclarationSubsectionAST *D) { return D->getKind() == Decl_Constant; }
@@ -655,17 +655,21 @@ class UnaryExpressionAST : public ExpressionAST {
 // and are represented by a constant
 
 class ConstantAST : public ExpressionAST {
+  Token type;
+
 public:
-  ConstantAST(Location loc, ExprASTKind kind)
-    : ExpressionAST(std::move(loc), kind) {}
+  ConstantAST(Location loc, ExprASTKind kind, Token type)
+    : ExpressionAST(std::move(loc), kind), type(type) {}
+
+  Token getType() const { return type; }
 };
 
 class IntegerConstantAST : public ConstantAST {
   int32_t value;
 
 public:
-  IntegerConstantAST(Location loc, int32_t value)
-    : ConstantAST(std::move(loc), Expr_IntegerConstant), value(value) {}
+  IntegerConstantAST(Location loc, int32_t value, Token type)
+    : ConstantAST(std::move(loc), Expr_IntegerConstant, type), value(value) {}
 
   int32_t getValue() const { return value; }
 
@@ -677,8 +681,8 @@ class RealConstantAST : public ConstantAST {
   float value;
 
 public:
-  RealConstantAST(Location loc, float value)
-    : ConstantAST(std::move(loc), Expr_RealConstant), value(value) {}
+  RealConstantAST(Location loc, float value, Token type)
+    : ConstantAST(std::move(loc), Expr_RealConstant, type), value(value) {}
 
   float getValue() const { return value; }
 
@@ -690,8 +694,8 @@ class StringConstantAST : public ConstantAST {
   std::string value;
 
   public:
-    StringConstantAST(Location loc, llvm::StringRef value)
-      : ConstantAST(std::move(loc), Expr_StringConstant), value(value) {}
+    StringConstantAST(Location loc, llvm::StringRef value, Token type)
+      : ConstantAST(std::move(loc), Expr_StringConstant, type), value(value) {}
 
     llvm::StringRef getValue() const { return value; }
 

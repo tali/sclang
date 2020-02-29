@@ -38,6 +38,7 @@ struct Location {
 
 // List of Token returned by the lexer.
 enum Token : int {
+  tok_none = 0,
   tok_eof = -1,
 
   // reserved words
@@ -203,6 +204,10 @@ public:
     getNextToken();
   }
 
+  Token getLiteralType() {
+    return literalType;
+  }
+
   /// Return the current identifier (prereq: getCurToken() == tok_identifier)
   llvm::StringRef getIdentifier() {
     assert(curTok == tok_identifier);
@@ -268,6 +273,320 @@ private:
     return nextchar;
   }
 
+  Token getReservedWordTok() {
+    stringValue = (char)lastChar;
+    std::string lower { (char)tolower(lastChar) };
+    while (isalnum((lastChar = Token(getNextChar()))) || lastChar == '_') {
+      stringValue += (char)lastChar;
+      lower += (char)tolower(lastChar);
+    }
+
+    if (lower == "and")
+      return tok_and;
+    if (lower == "any")
+      return tok_any;
+    if (lower == "array")
+      return tok_array;
+    if (lower == "begin")
+      return tok_begin;
+    if (lower == "block_db")
+      return tok_block_db;
+    if (lower == "block_fb")
+      return tok_block_fb;
+    if (lower == "block_fc")
+      return tok_block_fc;
+    if (lower == "block_sdb")
+      return tok_block_sdb;
+    if (lower == "bool")
+      return tok_bool;
+    if (lower == "by")
+      return tok_by;
+    if (lower == "byte")
+      return tok_byte;
+    if (lower == "case")
+      return tok_case;
+    if (lower == "char")
+      return tok_char;
+    if (lower == "const")
+      return tok_const;
+    if (lower == "continue")
+      return tok_continue;
+    if (lower == "counter")
+      return tok_counter;
+    if (lower == "data_block")
+      return tok_data_block;
+    if (lower == "date")
+      return tok_date;
+    if (lower == "date_and_time")
+      return tok_date_and_time;
+    if (lower == "dint")
+      return tok_dint;
+    if (lower == "div")
+      return tok_div;
+    if (lower == "do")
+      return tok_do;
+    if (lower == "dt")
+      return tok_dt;
+    if (lower == "dword")
+      return tok_dword;
+    if (lower == "else")
+      return tok_else;
+    if (lower == "elsif")
+      return tok_elsif;
+    if (lower == "en")
+      return tok_en;
+    if (lower == "eno")
+      return tok_eno;
+    if (lower == "end_case")
+      return tok_end_case;
+    if (lower == "end_const")
+      return tok_end_const;
+    if (lower == "end_data_block")
+      return tok_end_data_block;
+    if (lower == "end_for")
+      return tok_end_for;
+    if (lower == "end_function")
+      return tok_end_function;
+    if (lower == "end_function_block")
+      return tok_end_function_block;
+    if (lower == "end_if")
+      return tok_end_if;
+    if (lower == "end_label")
+      return tok_end_label;
+    if (lower == "end_type")
+      return tok_end_type;
+    if (lower == "end_organization_block")
+      return tok_end_organization_block;
+    if (lower == "end_repeat")
+      return tok_end_repeat;
+    if (lower == "end_struct")
+      return tok_end_struct;
+    if (lower == "end_var")
+      return tok_end_var;
+    if (lower == "end_while")
+      return tok_end_while;
+    if (lower == "exit")
+      return tok_exit;
+    if (lower == "false")
+      return tok_false;
+    if (lower == "for")
+      return tok_for;
+    if (lower == "function")
+      return tok_function;
+    if (lower == "function_block")
+      return tok_function_block;
+    if (lower == "goto")
+      return tok_goto;
+    if (lower == "if")
+      return tok_if;
+    if (lower == "int")
+      return tok_int;
+    if (lower == "label")
+      return tok_label;
+    if (lower == "mod")
+      return tok_mod;
+    if (lower == "nil")
+      return tok_nil;
+    if (lower == "not")
+      return tok_not;
+    if (lower == "of")
+      return tok_of;
+    if (lower == "ok")
+      return tok_ok;
+    if (lower == "or")
+      return tok_or;
+    if (lower == "organization_block")
+      return tok_organization_block;
+    if (lower == "pointer")
+      return tok_pointer;
+    if (lower == "real")
+      return tok_real;
+    if (lower == "repeat")
+      return tok_repeat;
+    if (lower == "return")
+      return tok_return;
+    if (lower == "s5time")
+      return tok_s5time;
+    if (lower == "string")
+      return tok_string;
+    if (lower == "struct")
+      return tok_struct;
+    if (lower == "then")
+      return tok_then;
+    if (lower == "time")
+      return tok_time;
+    if (lower == "timer")
+      return tok_timer;
+    if (lower == "time_of_day")
+      return tok_time_of_day;
+    if (lower == "to")
+      return tok_to;
+    if (lower == "tod")
+      return tok_tod;
+    if (lower == "true")
+      return tok_true;
+    if (lower == "type")
+      return tok_type;
+    if (lower == "until")
+      return tok_until;
+    if (lower == "var")
+      return tok_var;
+    if (lower == "var_input")
+      return tok_var_input;
+    if (lower == "var_in_out")
+      return tok_var_in_out;
+    if (lower == "var_output")
+      return tok_var_output;
+    if (lower == "var_temp")
+      return tok_var_temp;
+    if (lower == "while")
+      return tok_while;
+    if (lower == "word")
+      return tok_word;
+    if (lower == "void")
+      return tok_void;
+    if (lower == "xor")
+      return tok_xor;
+
+    return tok_identifier;
+  }
+
+  Token getTypedLiteralTok(Token type) {
+    assert(lastChar == Token('#'));
+    literalType = type;
+    switch (type) {
+    case tok_byte:
+    case tok_word:
+    case tok_dword:
+    case tok_int:
+    case tok_dint:
+      lastChar = Token(getNextChar());
+      if (getNumberLiteralTok() != tok_integer_literal)
+        return tok_error_integer;
+      return tok_integer_literal;
+    case tok_real:
+      lastChar = Token(getNextChar());
+      if (getNumberLiteralTok() != tok_real_number_literal)
+        return tok_error_integer;
+      return tok_real_number_literal;
+    default:
+      return type;
+    }
+  }
+
+  Token getNumberLiteralTok() {
+    std::string numStr;
+
+    if (lastChar == '-') {
+      numStr = "-";
+      lastChar = Token(getNextChar());
+      if (!isdigit(lastChar))
+        return Token('-');
+    }
+
+    enum State {
+      Decimal, Binary, Octal, Hex, Real, Exponent
+    } state = Decimal;
+    do {
+      if (lastChar == '_')
+        lastChar = Token(getNextChar());
+      if (isdigit(lastChar)) {
+        numStr += lastChar;
+      } else if (isxdigit(lastChar) && state == Hex) {
+        numStr += lastChar;
+      } else if (lastChar == '#' && state == Decimal) {
+        if (numStr == "2")
+          state = Binary;
+        else if (numStr == "8")
+          state = Octal;
+        else if (numStr == "16")
+          state = Hex;
+        else
+          return tok_error_integer;
+        numStr = "";
+      } else if (lastChar == '.' && state == Decimal) {
+        lastChar = Token(getNextChar());
+        if (lastChar == '.') {
+          // not a single dot
+          lastChar = tok_range;
+          break;
+        }
+        numStr += '.';
+        state = Real;
+        continue; // we already got the next char
+      } else if ((lastChar == 'e' || lastChar == 'E') && (state == Decimal || state == Real)) {
+        numStr += 'e';
+        state = Exponent;
+        // the exponent is the only part where a sign is valid within the number
+        lastChar = Token(getNextChar());
+        if (lastChar == '-' || lastChar == '+') {
+          numStr += lastChar;
+          lastChar = Token(getNextChar());
+        }
+        continue;
+      }
+      lastChar = Token(getNextChar());
+    } while (isdigit(lastChar) || lastChar == '.' || lastChar == '_' || lastChar == 'e' || lastChar == 'E' || lastChar == '#');
+
+    switch (state) {
+    case Decimal:
+      intVal = stoll(numStr);
+      return tok_integer_literal;
+    case Binary:
+      intVal = stoll(numStr, nullptr, 2);
+      return tok_integer_literal;
+    case Octal:
+      intVal = stoll(numStr, nullptr, 8);
+      return tok_integer_literal;
+    case Hex:
+      intVal = stoll(numStr, nullptr, 16);
+      return tok_integer_literal;
+    case Real:
+    case Exponent:
+      realVal = stof(numStr, nullptr);
+      return tok_real_number_literal;
+    }
+  }
+
+  Token getStringLiteralTok() {
+    stringValue = "";
+    char c;
+    while (isprint(c = getNextChar()) && c != '\'') {
+      if (c == '$') {
+        c = getNextChar();
+        switch (c) {
+        default:
+          return tok_error_string;
+        case Token('$'):
+        case Token('\''):
+          stringValue += c;
+          break;
+        case Token('l'): case Token('L'):
+        case Token('p'): case Token('P'):
+          stringValue += '\n'; // TODO: check
+          break;
+        case Token('r'): case Token('R'):
+          stringValue += '\r';
+          break;
+        case Token('t'): case Token('T'):
+          stringValue += '\t';
+          break;
+        case Token('>'): // TODO: check
+          while (getNextChar() != '$');
+          if (getNextChar() != '<')
+            return tok_error_string;
+        }
+      } else {
+        stringValue += c;
+      }
+    }
+    lastChar = Token(getNextChar());
+    if (c != '\'')
+      return tok_error_string;
+    literalType = tok_string;
+    return tok_string_literal;
+  }
+
   ///  Return the next token from standard input.
   Token getTok() {
     // Skip any whitespace.
@@ -278,183 +597,15 @@ private:
     lastLocation.line = curLineNum;
     lastLocation.col = curCol;
 
+    literalType = tok_none;
+
     // reserved word or identifier
     if (isalpha(lastChar) || lastChar == '_') {
-      stringValue = (char)lastChar;
-      std::string lower { (char)tolower(lastChar) };
-      while (isalnum((lastChar = Token(getNextChar()))) || lastChar == '_') {
-        stringValue += (char)lastChar;
-        lower += (char)tolower(lastChar);
+      Token tok = getReservedWordTok();
+      if (lastChar == Token('#')) {
+        return getTypedLiteralTok(tok);
       }
-
-      if (lower == "and")
-        return tok_and;
-      if (lower == "any")
-        return tok_any;
-      if (lower == "array")
-        return tok_array;
-      if (lower == "begin")
-        return tok_begin;
-      if (lower == "block_db")
-        return tok_block_db;
-      if (lower == "block_fb")
-        return tok_block_fb;
-      if (lower == "block_fc")
-        return tok_block_fc;
-      if (lower == "block_sdb")
-        return tok_block_sdb;
-      if (lower == "bool")
-        return tok_bool;
-      if (lower == "by")
-        return tok_by;
-      if (lower == "byte")
-        return tok_byte;
-      if (lower == "case")
-        return tok_case;
-      if (lower == "char")
-        return tok_char;
-      if (lower == "const")
-        return tok_const;
-      if (lower == "continue")
-        return tok_continue;
-      if (lower == "counter")
-        return tok_counter;
-      if (lower == "data_block")
-        return tok_data_block;
-      if (lower == "date")
-        return tok_date;
-      if (lower == "date_and_time")
-        return tok_date_and_time;
-      if (lower == "dint")
-        return tok_dint;
-      if (lower == "div")
-        return tok_div;
-      if (lower == "do")
-        return tok_do;
-      if (lower == "dt")
-        return tok_dt;
-      if (lower == "dword")
-        return tok_dword;
-      if (lower == "else")
-        return tok_else;
-      if (lower == "elsif")
-        return tok_elsif;
-      if (lower == "en")
-        return tok_en;
-      if (lower == "eno")
-        return tok_eno;
-      if (lower == "end_case")
-        return tok_end_case;
-      if (lower == "end_const")
-        return tok_end_const;
-      if (lower == "end_data_block")
-        return tok_end_data_block;
-      if (lower == "end_for")
-        return tok_end_for;
-      if (lower == "end_function")
-        return tok_end_function;
-      if (lower == "end_function_block")
-        return tok_end_function_block;
-      if (lower == "end_if")
-        return tok_end_if;
-      if (lower == "end_label")
-        return tok_end_label;
-      if (lower == "end_type")
-        return tok_end_type;
-      if (lower == "end_organization_block")
-        return tok_end_organization_block;
-      if (lower == "end_repeat")
-        return tok_end_repeat;
-      if (lower == "end_struct")
-        return tok_end_struct;
-      if (lower == "end_var")
-        return tok_end_var;
-      if (lower == "end_while")
-        return tok_end_while;
-      if (lower == "exit")
-        return tok_exit;
-      if (lower == "false")
-        return tok_false;
-      if (lower == "for")
-        return tok_for;
-      if (lower == "function")
-        return tok_function;
-      if (lower == "function_block")
-        return tok_function_block;
-      if (lower == "goto")
-        return tok_goto;
-      if (lower == "if")
-        return tok_if;
-      if (lower == "int")
-        return tok_int;
-      if (lower == "label")
-        return tok_label;
-      if (lower == "mod")
-        return tok_mod;
-      if (lower == "nil")
-        return tok_nil;
-      if (lower == "not")
-        return tok_not;
-      if (lower == "of")
-        return tok_of;
-      if (lower == "ok")
-        return tok_ok;
-      if (lower == "or")
-        return tok_or;
-      if (lower == "organization_block")
-        return tok_organization_block;
-      if (lower == "pointer")
-        return tok_pointer;
-      if (lower == "real")
-        return tok_real;
-      if (lower == "repeat")
-        return tok_repeat;
-      if (lower == "return")
-        return tok_return;
-      if (lower == "s5time")
-        return tok_s5time;
-      if (lower == "string")
-        return tok_string;
-      if (lower == "struct")
-        return tok_struct;
-      if (lower == "then")
-        return tok_then;
-      if (lower == "time")
-        return tok_time;
-      if (lower == "timer")
-        return tok_timer;
-      if (lower == "time_of_day")
-        return tok_time_of_day;
-      if (lower == "to")
-        return tok_to;
-      if (lower == "tod")
-        return tok_tod;
-      if (lower == "true")
-        return tok_true;
-      if (lower == "type")
-        return tok_type;
-      if (lower == "until")
-        return tok_until;
-      if (lower == "var")
-        return tok_var;
-      if (lower == "var_input")
-        return tok_var_input;
-      if (lower == "var_in_out")
-        return tok_var_in_out;
-      if (lower == "var_output")
-        return tok_var_output;
-      if (lower == "var_temp")
-        return tok_var_temp;
-      if (lower == "while")
-        return tok_while;
-      if (lower == "word")
-        return tok_word;
-      if (lower == "void")
-        return tok_void;
-      if (lower == "xor")
-        return tok_xor;
-
-      return tok_identifier;
+      return tok;
     }
 
     if (lastChar == '#') { // identifier, escapes reserved words
@@ -468,41 +619,7 @@ private:
     // MARK: strings and symbols
 
     if (lastChar == '\'') { // String literal
-      stringValue = "";
-      char c;
-      while (isprint(c = getNextChar()) && c != '\'') {
-        if (c == '$') {
-          c = getNextChar();
-          switch (c) {
-          default:
-            return tok_error_string;
-          case Token('$'):
-          case Token('\''):
-            stringValue += c;
-            break;
-          case Token('l'): case Token('L'):
-          case Token('p'): case Token('P'):
-            stringValue += '\n'; // TODO: check
-            break;
-          case Token('r'): case Token('R'):
-            stringValue += '\r';
-            break;
-          case Token('t'): case Token('T'):
-            stringValue += '\t';
-            break;
-          case Token('>'): // TODO: check
-            while (getNextChar() != '$');
-            if (getNextChar() != '<')
-              return tok_error_string;
-          }
-        } else {
-          stringValue += c;
-        }
-      }
-      lastChar = Token(getNextChar());
-      if (c != '\'')
-        return tok_error_string;
-      return tok_string_literal;
+      return getStringLiteralTok();
     }
 
     if (lastChar == '"') { // Symbol
@@ -517,68 +634,7 @@ private:
     // MARK: number literals
 
     if (isdigit(lastChar) || lastChar == '-') { // Number: [0-9.]+
-      std::string numStr;
-
-      if (lastChar == '-') {
-        numStr = "-";
-        lastChar = Token(getNextChar());
-        if (!isdigit(lastChar))
-          return Token('-');
-      }
-
-      enum State { Decimal, Binary, Octal, Hex, Real, Exponent } state = Decimal;
-      do {
-        if (lastChar == '_')
-          lastChar = Token(getNextChar());
-        if (isdigit(lastChar)) {
-          numStr += lastChar;
-        } else if (isxdigit(lastChar) && state == Hex) {
-          numStr += lastChar;
-        } else if (lastChar == '#' && state == Decimal) {
-          if (numStr == "2")
-            state = Binary;
-          else if (numStr == "8")
-            state = Octal;
-          else if (numStr == "16")
-            state = Hex;
-          else
-            return tok_error_integer;
-          numStr = "";
-        } else if (lastChar == '.' && state == Decimal) {
-          lastChar = Token(getNextChar());
-          if (lastChar == '.') {
-            // not a single dot
-            lastChar = tok_range;
-            break;
-          }
-          numStr += '.';
-          state = Real;
-          continue; // we already got the next char
-        } else if ((lastChar == 'e' || lastChar == 'E') && (state == Decimal || state == Real)) {
-          numStr += 'e';
-          state = Exponent;
-        }
-        lastChar = Token(getNextChar());
-      } while (isdigit(lastChar) || lastChar == '.' || lastChar == '_' || lastChar == 'e' || lastChar == 'E');
-
-      switch (state) {
-      case Decimal:
-        intVal = stoll(numStr);
-        return tok_integer_literal;
-      case Binary:
-        intVal = stoll(numStr, nullptr, 2);
-        return tok_integer_literal;
-      case Octal:
-        intVal = stoll(numStr, nullptr, 8);
-        return tok_integer_literal;
-      case Hex:
-        intVal = stoll(numStr, nullptr, 16);
-        return tok_integer_literal;
-      case Real:
-      case Exponent:
-        realVal = stof(numStr, nullptr);
-        return tok_real_number_literal;
-      }
+      return getNumberLiteralTok();
     }
 
     // MARK: multi-character operators
@@ -683,6 +739,9 @@ private:
 
   /// Location for `curTok`.
   Location lastLocation;
+
+  /// if current Token is a literal, this stores the type
+  Token literalType;
 
   /// If the current Token is an identifier, symbol, or string, this string contains the value.
   std::string stringValue;

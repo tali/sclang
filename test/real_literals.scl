@@ -1,0 +1,39 @@
+// RUN: sclang --emit=ast %s 2>&1 | FileCheck %s
+
+function_block real_literals
+
+const
+// CHECK: ConstantDeclarationSubsection
+
+  R1 := 0.0;
+// CHECK-NEXT: ConstantDeclaration R1
+// CHECK-NEXT: RealConstant 0.000000e+00
+
+  R2 := 1.0;
+// CHECK-NEXT: ConstantDeclaration R2
+// CHECK-NEXT: RealConstant 1.000000e+00
+
+  R3 := 1_000.0;
+// CHECK-NEXT: ConstantDeclaration R3
+// CHECK-NEXT: RealConstant 1.000000e+03
+
+  R4 := REAL#1_234.0;
+// CHECK-NEXT: ConstantDeclaration R4
+// CHECK-NEXT: RealConstant 1.234000e+03 Type REAL
+
+  R10 := 1.0e3;
+// CHECK-NEXT: ConstantDeclaration R10
+// CHECK-NEXT: RealConstant 1.000000e+03
+
+  R11 := -0.1e+3;
+// CHECK-NEXT: ConstantDeclaration R11
+// CHECK-NEXT: RealConstant -1.000000e+02
+
+  R12 := -0.1e-3;
+// CHECK-NEXT: ConstantDeclaration R12
+// CHECK-NEXT: RealConstant -1.000000e-04
+
+end_const
+
+begin
+end_function_block

@@ -57,6 +57,7 @@ private:
   // Structure of Declaration Sections
   void dump(const DeclarationSectionAST *node);
   void dump(const DeclarationSubsectionAST *node);
+  void dump(const ConstantDeclarationAST *node);
   void dump(const ConstantDeclarationSubsectionAST *node);
   void dump(const JumpLabelDeclarationSubsectionAST *node);
   void dump(const VariableDeclarationSubsectionAST *node);
@@ -229,6 +230,15 @@ void ASTDumper::dump(const DeclarationSubsectionAST *subsection) {
 void ASTDumper::dump(const ConstantDeclarationSubsectionAST *node) {
   INDENT();
   llvm::errs() << "ConstantDeclarationSubsection\n";
+  for (auto const & decl : node->getValues()) {
+    dump(decl.get());
+  }
+}
+
+void ASTDumper::dump(const ConstantDeclarationAST *node) {
+  INDENT();
+  llvm::errs() << "ConstantDeclaration " << node->getName() << "\n";
+  dump(node->getValue());
 }
 
 void ASTDumper::dump(const JumpLabelDeclarationSubsectionAST *node) {
@@ -484,12 +494,18 @@ void ASTDumper::dump(const UnaryExpressionAST *node) {
 
 void ASTDumper::dump(const IntegerConstantAST *node) {
   INDENT();
-  llvm::errs() << "IntegerConstant " << node->getValue() << "\n";
+  llvm::errs() << "IntegerConstant " << node->getValue();
+  if (node->getType())
+    llvm::errs() << " Type " << node->getType();
+  llvm::errs() << "\n";
 }
 
 void ASTDumper::dump(const RealConstantAST *node) {
   INDENT();
-  llvm::errs() << "RealConstant " << node->getValue() << "\n";
+  llvm::errs() << "RealConstant " << node->getValue();
+  if (node->getType())
+    llvm::errs() << " Type " << node->getType();
+  llvm::errs() << "\n";
 }
 
 void ASTDumper::dump(const StringConstantAST *node) {

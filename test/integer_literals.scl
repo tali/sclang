@@ -1,0 +1,87 @@
+// RUN: sclang --emit=ast %s 2>&1 | FileCheck %s
+
+function_block integer_literals
+
+const
+// CHECK: ConstantDeclarationSubsection
+
+  I0 := 0;
+// CHECK-NEXT: ConstantDeclaration I0
+// CHECK-NEXT: IntegerConstant 0
+
+  I1 := INT#0;
+// CHECK-NEXT: ConstantDeclaration I1
+// CHECK-NEXT: IntegerConstant 0 Type INT
+
+  I2 := DINT#0;
+// CHECK-NEXT: ConstantDeclaration I2
+// CHECK-NEXT: IntegerConstant 0 Type DINT
+
+  I3 := BYTE#0;
+// CHECK-NEXT: ConstantDeclaration I3
+// CHECK-NEXT: IntegerConstant 0 Type BYTE
+
+  I4 := WORD#0;
+// CHECK-NEXT: ConstantDeclaration I4
+// CHECK-NEXT: IntegerConstant 0 Type WORD
+
+  I5 := DWORD#0;
+// CHECK-NEXT: ConstantDeclaration I5
+// CHECK-NEXT: IntegerConstant 0 Type DWORD
+
+  I10 := 1_0;
+// CHECK-NEXT: ConstantDeclaration I10
+// CHECK-NEXT: IntegerConstant 10
+
+  I11 := 2#10;
+// CHECK-NEXT: ConstantDeclaration I11
+// CHECK-NEXT: IntegerConstant 2
+
+  I12 := 2#1_0;
+// CHECK-NEXT: ConstantDeclaration I12
+// CHECK-NEXT: IntegerConstant 2
+
+  I13 := 8#10;
+// CHECK-NEXT: ConstantDeclaration I13
+// CHECK-NEXT: IntegerConstant 8
+
+  I14 := 8#1_0;
+// CHECK-NEXT: ConstantDeclaration I14
+// CHECK-NEXT: IntegerConstant 8
+
+  I15 := 16#1_0;
+// CHECK-NEXT: ConstantDeclaration I15
+// CHECK-NEXT: IntegerConstant 16
+
+  I16 := 16#1_0;
+// CHECK-NEXT: ConstantDeclaration I16
+// CHECK-NEXT: IntegerConstant 16
+
+  I21 := INT#2#10;
+// CHECK-NEXT: ConstantDeclaration I21
+// CHECK-NEXT: IntegerConstant 2 Type INT
+
+  I22 := DINT#2#1_0;
+// CHECK-NEXT: ConstantDeclaration I22
+// CHECK-NEXT: IntegerConstant 2 Type DINT
+
+  I23 := BYTE#8#10;
+// CHECK-NEXT: ConstantDeclaration I23
+// CHECK-NEXT: IntegerConstant 8 Type BYTE
+
+  I24 := BYTE#8#1_0;
+// CHECK-NEXT: ConstantDeclaration I24
+// CHECK-NEXT: IntegerConstant 8 Type BYTE
+
+  I25 := WORD#16#1_0;
+// CHECK-NEXT: ConstantDeclaration I25
+// CHECK-NEXT: IntegerConstant 16 Type WORD
+
+  I26 := DWORD#16#1_0;
+// CHECK-NEXT: ConstantDeclaration I26
+// CHECK-NEXT: IntegerConstant 16 Type DWORD
+
+end_const
+
+begin
+end_function_block

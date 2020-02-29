@@ -361,7 +361,7 @@ private:
       return parseError<ConstantDeclarationAST>(tok_assignment, "for constant assignment");
     lexer.consume(tok_assignment);
 
-    auto value = ParseSimpleExpression();
+    auto value = ParseConstant();
     if (!value) return nullptr;
 
      if (lexer.getCurToken() != tok_semicolon)
@@ -650,7 +650,7 @@ private:
     if (lexer.getCurToken() == tok_sbracket_open) {
       lexer.consume(tok_sbracket_open);
 
-      auto len = ParseSimpleExpression();
+      auto len = ParseConstant();
       if (len->getKind() == ExpressionAST::Expr_IntegerConstant) {
         length = llvm::dyn_cast<IntegerConstantAST>(len.get())->getValue();
       } else {
@@ -959,10 +959,10 @@ private:
       assert(false);
     case tok_false:
       lexer.consume(tok_false);
-      return std::make_unique<IntegerConstantAST>(std::move(loc), 0);
+      return std::make_unique<IntegerConstantAST>(std::move(loc), 0, tok_bool);
     case tok_true:
       lexer.consume(tok_true);
-      return std::make_unique<IntegerConstantAST>(std::move(loc), 1);
+      return std::make_unique<IntegerConstantAST>(std::move(loc), 1, tok_bool);
     }
   }
 
@@ -970,27 +970,30 @@ private:
     auto loc = lexer.getLastLocation();
 
     auto value = lexer.getIntegerValue();
+    Token type = lexer.getLiteralType();
     lexer.consume(tok_integer_literal);
 
-    return std::make_unique<IntegerConstantAST>(std::move(loc), value);
+    return std::make_unique<IntegerConstantAST>(std::move(loc), value, type);
   }
 
   std::unique_ptr<ExpressionAST> ParseStringLiteralExpression() {
     auto loc = lexer.getLastLocation();
 
     auto value = lexer.getStringValue();
+    Token type = lexer.getLiteralType();
     lexer.consume(tok_string_literal);
 
-    return std::make_unique<StringConstantAST>(std::move(loc), value);
+    return std::make_unique<StringConstantAST>(std::move(loc), value, type);
   }
 
   std::unique_ptr<ExpressionAST> ParseRealNumberLiteralExpression() {
     auto loc = lexer.getLastLocation();
 
     auto value = lexer.getRealNumberValue();
+    Token type = lexer.getLiteralType();
     lexer.consume(tok_integer_literal);
 
-    return std::make_unique<RealConstantAST>(std::move(loc), value);
+    return std::make_unique<RealConstantAST>(std::move(loc), value, type);
   }
 
   std::unique_ptr<ExpressionAST> ParseBinaryExpressionRHS(int exprPrecedence, std::unique_ptr<ExpressionAST> lhs) {
@@ -1103,14 +1106,6 @@ private:
     return ParseBinaryExpressionRHS(pred, std::move(lhs));
   }
 
-  // TODO: TBD
-  std::unique_ptr<ConstantAST> ParseSimpleExpression() {
-    auto loc = lexer.getLastLocation();
-
-    // TODO: TBD
-    return std::make_unique<IntegerConstantAST>(std::move(loc), 42);
-  }
-
   std::unique_ptr<ConstantAST> ParseConstant() {
     auto loc = lexer.getLastLocation();
 
@@ -1119,18 +1114,21 @@ private:
       return parseError<ConstantAST>("<numeric value>, <character string>, or <constant name>", "in constant expression");
     case tok_identifier: {
       auto value = lexer.getIdentifier();
+      Token type = lexer.getLiteralType();
       lexer.consume(tok_identifier);
-      return std::make_unique<StringConstantAST>(std::move(loc), value);
+      return std::make_unique<StringConstantAST>(std::move(loc), value, type);
     }
     case tok_integer_literal: {
       auto value = lexer.getIntegerValue();
+      Token type = lexer.getLiteralType();
       lexer.consume(tok_integer_literal);
-      return std::make_unique<IntegerConstantAST>(std::move(loc), value);
+      return std::make_unique<IntegerConstantAST>(std::move(loc), value, type);
     }
     case tok_real_number_literal: {
       auto value = lexer.getRealNumberValue();
+      Token type = lexer.getLiteralType();
       lexer.consume(tok_real_number_literal);
-      return std::make_unique<RealConstantAST>(std::move(loc), value);
+      return std::make_unique<RealConstantAST>(std::move(loc), value, type);
     }
     }
   }
