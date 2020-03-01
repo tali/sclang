@@ -563,6 +563,7 @@ public:
     Expr_IntegerConstant,
     Expr_RealConstant,
     Expr_StringConstant,
+    Expr_TimeConstant,
     Expr_SimpleVariable,
     Expr_StructuredVariable,
     Expr_IndexedVariable,
@@ -703,6 +704,31 @@ class StringConstantAST : public ConstantAST {
   static bool classof(const ExpressionAST *e) { return e->getKind() == Expr_StringConstant; }
 };
 
+class TimeConstantAST : public ConstantAST {
+  int year;
+  int month;
+  int day;
+  int hour;
+  int minute;
+  int sec;
+  int msec;
+
+public:
+  TimeConstantAST(Location loc, int year, int month, int day, int hour, int minute, int sec, int msec, Token type)
+    : ConstantAST(std::move(loc), Expr_TimeConstant, type),
+      year(year), month(month), day(day), hour(hour), minute(minute), sec(sec), msec(msec) {}
+
+  int getYear() const { return year; }
+  int getMonth() const { return month; }
+  int getDay() const { return day; }
+  int getHour() const { return hour; }
+  int getMinute() const { return minute; }
+  int getSec() const { return sec; }
+  int getMSec() const { return msec; }
+
+  /// LLVM style RTTI
+  static bool classof(const ExpressionAST *e) { return e->getKind() == Expr_TimeConstant; }
+};
 
 // MARK: C.6 Function and Function Block Calls
 

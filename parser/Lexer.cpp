@@ -53,7 +53,6 @@ llvm::raw_ostream& operator<< (llvm::raw_ostream& s, Token token) {
   case tok_dint: return s << "DINT";
   case tok_div: return s << "DIV";
   case tok_do: return s << "DO";
-  case tok_dt: return s << "DT";
   case tok_dword: return s << "DWORD";
   case tok_else: return s << "ELSE";
   case tok_elsif: return s << "ELSIF";
@@ -101,7 +100,6 @@ llvm::raw_ostream& operator<< (llvm::raw_ostream& s, Token token) {
   case tok_timer: return s << "TIMER";
   case tok_time_of_day: return s << "TIME_OF_DAY";
   case tok_to: return s << "TO";
-  case tok_tod: return s << "TOD";
   case tok_true: return s << "TRUE";
   case tok_type: return s << "TYPE";
   case tok_until: return s << "UNTIL";
@@ -156,12 +154,15 @@ llvm::raw_ostream& operator<< (llvm::raw_ostream& s, Token token) {
   case tok_integer_literal: return s << "<integer literal>";
   case tok_real_number_literal: return s << "<real number literal>";
   case tok_string_literal: return s << "<string literal>";
+  case tok_time_literal: return s << "<time literal>";
 
     // errors
   case tok_error_symbol: return s << "<error symbol>";
   case tok_error_integer: return s << "<error integer>";
   case tok_error_real: return s << "<error real>";
   case tok_error_string: return s << "<error string>";
+  case tok_error_date: return s << "<error date>";
+  case tok_error_time: return s << "<error time>";
   }
 }
 

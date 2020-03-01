@@ -625,7 +625,6 @@ private:
       elementaryType = ElementaryDataTypeAST::Type_Time;
       break;
     case tok_time_of_day:
-    case tok_tod:
       elementaryType = ElementaryDataTypeAST::Type_TimeOfDay;
       break;
     case tok_date:
@@ -952,6 +951,8 @@ private:
       return ParseRealNumberLiteralExpression();
     case tok_string_literal:
       return ParseStringLiteralExpression();
+    case tok_time_literal:
+      return ParseTimeLiteralExpression();
     }
   }
 
@@ -1008,7 +1009,7 @@ private:
     }
   }
 
-  std::unique_ptr<ExpressionAST> ParseIntegerLiteralExpression() {
+  std::unique_ptr<ConstantAST> ParseIntegerLiteralExpression() {
     auto loc = lexer.getLastLocation();
 
     auto value = lexer.getIntegerValue();
@@ -1018,7 +1019,7 @@ private:
     return std::make_unique<IntegerConstantAST>(std::move(loc), value, type);
   }
 
-  std::unique_ptr<ExpressionAST> ParseStringLiteralExpression() {
+  std::unique_ptr<ConstantAST> ParseStringLiteralExpression() {
     auto loc = lexer.getLastLocation();
 
     auto value = lexer.getStringValue();
@@ -1028,14 +1029,25 @@ private:
     return std::make_unique<StringConstantAST>(std::move(loc), value, type);
   }
 
-  std::unique_ptr<ExpressionAST> ParseRealNumberLiteralExpression() {
+  std::unique_ptr<ConstantAST> ParseRealNumberLiteralExpression() {
     auto loc = lexer.getLastLocation();
 
     auto value = lexer.getRealNumberValue();
     Token type = lexer.getLiteralType();
-    lexer.consume(tok_integer_literal);
+    lexer.consume(tok_real_number_literal);
 
     return std::make_unique<RealConstantAST>(std::move(loc), value, type);
+  }
+
+  std::unique_ptr<ConstantAST> ParseTimeLiteralExpression() {
+    auto loc = lexer.getLastLocation();
+
+    int year, mon, day, hour, min, sec, msec;
+    lexer.getTimeValue(year, mon, day, hour, min, sec, msec);
+    Token type = lexer.getLiteralType();
+    lexer.consume(tok_time_literal);
+
+    return std::make_unique<TimeConstantAST>(std::move(loc), year, mon, day, hour, min, sec, msec, type);
   }
 
   std::unique_ptr<ExpressionAST> ParseBinaryExpressionRHS(int exprPrecedence, std::unique_ptr<ExpressionAST> lhs) {
@@ -1160,18 +1172,12 @@ private:
       lexer.consume(tok_identifier);
       return std::make_unique<StringConstantAST>(std::move(loc), value, type);
     }
-    case tok_integer_literal: {
-      auto value = lexer.getIntegerValue();
-      Token type = lexer.getLiteralType();
-      lexer.consume(tok_integer_literal);
-      return std::make_unique<IntegerConstantAST>(std::move(loc), value, type);
-    }
-    case tok_real_number_literal: {
-      auto value = lexer.getRealNumberValue();
-      Token type = lexer.getLiteralType();
-      lexer.consume(tok_real_number_literal);
-      return std::make_unique<RealConstantAST>(std::move(loc), value, type);
-    }
+    case tok_integer_literal:
+      return ParseIntegerLiteralExpression();
+    case tok_real_number_literal:
+      return ParseRealNumberLiteralExpression();
+    case tok_time_literal:
+      return ParseTimeLiteralExpression();
     case tok_false:
       lexer.consume(tok_false);
       return std::make_unique<IntegerConstantAST>(std::move(loc), 0, tok_bool);

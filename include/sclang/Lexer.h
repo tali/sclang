@@ -64,7 +64,6 @@ enum Token : int {
   tok_dint = -21,
   tok_div = -22,
   tok_do = -23,
-  tok_dt = -24,
   tok_dword = -25,
   tok_else = -26,
   tok_elsif = -27,
@@ -112,7 +111,6 @@ enum Token : int {
   tok_timer = -69,
   tok_time_of_day = -70,
   tok_to = -71,
-  tok_tod = -72,
   tok_true = -73,
   tok_type = -74,
   tok_until = -75,
@@ -167,12 +165,15 @@ enum Token : int {
   tok_integer_literal = -102,
   tok_real_number_literal = -103,
   tok_string_literal = -104,
+  tok_time_literal = -105,
 
   // errors
   tok_error_symbol = -901,
   tok_error_integer = -902,
   tok_error_real = -903,
   tok_error_string = -904,
+  tok_error_date = -905,
+  tok_error_time = -906,
 };
 llvm::raw_ostream& operator<< (llvm::raw_ostream& s, Token token);
 
@@ -219,11 +220,6 @@ public:
     return stringValue;
   }
 
-  llvm::StringRef getString() {
-    assert(curTok == tok_string);
-    return stringValue;
-  }
-
   int64_t getIntegerValue() {
     assert(curTok == tok_integer_literal);
     return intVal;
@@ -239,6 +235,16 @@ public:
     return stringValue;
   }
 
+  void getTimeValue(int &year, int &mon, int &day, int &hour, int &min, int &sec, int &msec) {
+    assert(curTok == tok_time_literal);
+    year = yearVal;
+    mon = monVal;
+    day = dayVal;
+    hour = hourVal;
+    min = minVal;
+    sec = secVal;
+    msec = msecVal;
+  }
   /// Return the location for the beginning of the current token.
   Location getLastLocation() { return lastLocation; }
 
@@ -325,8 +331,6 @@ private:
       return tok_div;
     if (lower == "do")
       return tok_do;
-    if (lower == "dt")
-      return tok_dt;
     if (lower == "dword")
       return tok_dword;
     if (lower == "else")
@@ -421,8 +425,6 @@ private:
       return tok_time_of_day;
     if (lower == "to")
       return tok_to;
-    if (lower == "tod")
-      return tok_tod;
     if (lower == "true")
       return tok_true;
     if (lower == "type")
@@ -448,6 +450,14 @@ private:
     if (lower == "xor")
       return tok_xor;
 
+    // expand shortcuts for typed literals
+    if (lastChar == '#') {
+      if (lower == "d") return tok_date;
+      if (lower == "t") return tok_time;
+      if (lower == "dt") return tok_date_and_time;
+      if (lower == "tod") return tok_time_of_day;
+    }
+
     return tok_identifier;
   }
 
@@ -469,6 +479,18 @@ private:
       if (getNumberLiteralTok() != tok_real_number_literal)
         return tok_error_integer;
       return tok_real_number_literal;
+    case tok_date:
+      lastChar = Token(getNextChar());
+      return getDateLiteralTok();
+    case tok_date_and_time:
+      lastChar = Token(getNextChar());
+      return getDateAndTimeLiteralTok();
+    case tok_time:
+      lastChar = Token(getNextChar());
+      return getTimeLiteralTok();
+    case tok_time_of_day:
+      lastChar = Token(getNextChar());
+      return getTimeOfDayLiteralTok();
     default:
       return type;
     }
@@ -587,6 +609,97 @@ private:
     return tok_string_literal;
   }
 
+  bool getNumber(int &val) {
+    std::string number;
+    while (isdigit(lastChar) || lastChar==Token('_')) {
+      if (isdigit(lastChar))
+        number += lastChar;
+      lastChar = Token(getNextChar());
+    }
+    size_t idx;
+    val = stoll(number, &idx);
+    return idx==number.size();
+  }
+
+  Token getDateLiteralTok() {
+    if (!getNumber(yearVal) || lastChar != Token('-'))
+      return tok_error_date;
+    lastChar = Token(getNextChar());
+    if (!getNumber(monVal) || lastChar != Token('-'))
+      return tok_error_date;
+    lastChar = Token(getNextChar());
+    if (!getNumber(dayVal))
+      return tok_error_date;
+
+    return tok_time_literal;
+  }
+
+  Token getTimeOfDayLiteralTok() {
+    if (!getNumber(hourVal) || lastChar != Token(':'))
+      return tok_error_date;
+    lastChar = Token(getNextChar());
+    if (!getNumber(minVal) || lastChar != Token(':'))
+      return tok_error_date;
+    lastChar = Token(getNextChar());
+    if (!getNumber(secVal))
+      return tok_error_date;
+    if (lastChar == Token('.')) {
+      lastChar = Token(getNextChar());
+      getNumber(msecVal);
+    }
+
+    return tok_time_literal;
+  }
+
+  Token getDateAndTimeLiteralTok() {
+    if (getDateLiteralTok() != tok_time_literal)
+      return tok_error_date;
+    if (lastChar != Token('-'))
+      return tok_error_time;
+    lastChar = Token(getNextChar());
+    if (getTimeOfDayLiteralTok() != tok_time_literal)
+      return tok_error_time;
+
+    return tok_time_literal;
+  }
+
+  Token getTimeLiteralTok() {
+    enum { None, Day, Hour, Min, Sec, MSec } pos, lastpos = None;
+    while (isdigit(lastChar) || lastChar==Token('_')) {
+      int num;
+      if (!getNumber(num))
+        return tok_error_time;
+      int kind = tolower(lastChar);
+      lastChar = Token(getNextChar());
+      switch (kind) {
+      case 'd': pos = Day; break;
+      case 'h': pos = Hour; break;
+      case 'm':
+        if (tolower(lastChar) == Token('s')) {
+          lastChar = Token(getNextChar());
+          pos = MSec;
+        } else {
+          pos = Min;
+        }
+        break;
+      case 's': pos = Sec; break;
+      default:
+        return tok_error_time;
+      }
+      if (pos < lastpos)
+        return tok_error_time;
+      switch (pos) {
+      case None: assert(false);
+      case Day: dayVal = num; break;
+      case Hour: hourVal = num; break;
+      case Min: minVal = num; break;
+      case Sec: secVal = num; break;
+      case MSec: msecVal = num; break;
+      }
+    }
+    return tok_time_literal;
+  }
+
   ///  Return the next token from standard input.
   Token getTok() {
     // Skip any whitespace.
@@ -598,8 +711,10 @@ private:
     lastLocation.col = curCol;
 
     literalType = tok_none;
+    yearVal = monVal = dayVal = 0;
+    hourVal = minVal = secVal = msecVal = 0;
 
-    // reserved word or identifier
+    // reserved word or identifier or typed literal
     if (isalpha(lastChar) || lastChar == '_') {
       Token tok = getReservedWordTok();
       if (lastChar == Token('#')) {
@@ -750,6 +865,15 @@ private:
   float realVal = 0;
 
   int64_t intVal = 0;
+
+  // If the current Token is a date or time, these contain the value
+  int yearVal = 0;
+  int monVal = 0;
+  int dayVal = 0;
+  int hourVal = 0;
+  int minVal = 0;
+  int secVal = 0;
+  int msecVal = 0;
 
   /// The last value returned by getNextChar(). We need to keep it around as we
   /// always need to read ahead one character to decide when to end a token and

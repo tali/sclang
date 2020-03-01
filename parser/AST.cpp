@@ -24,6 +24,8 @@
 #include <string>
 
 #include "llvm/ADT/Twine.h"
+#include "llvm/Support/FormatAdapters.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace sclang;
@@ -87,6 +89,7 @@ private:
   void dump(const IntegerConstantAST *node);
   void dump(const RealConstantAST *node);
   void dump(const StringConstantAST *node);
+  void dump(const TimeConstantAST *node);
   // Function and Function Block Calls
   void dump(const SubroutineProcessingAST *node);
   void dump(const llvm::ArrayRef<std::unique_ptr<ExpressionAST>>);
@@ -471,6 +474,7 @@ void ASTDumper::dump(const ExpressionAST *expr) {
   dispatch(IntegerConstantAST);
   dispatch(RealConstantAST);
   dispatch(StringConstantAST);
+  dispatch(TimeConstantAST);
   dispatch(SimpleVariableAST);
 //    dispatch(AbsoluteVariableAST);
 //    dispatch(VariableInDBAST);
@@ -480,7 +484,7 @@ void ASTDumper::dump(const ExpressionAST *expr) {
 #undef dispatch
   // No match, fallback to a generic message
   INDENT();
-  llvm::errs() << "<unknown expression, kind" << expr->getKind() << ">\n";
+  llvm::errs() << "<unknown expression, kind " << expr->getKind() << ">\n";
 }
 
 void ASTDumper::dump(const SimpleVariableAST *node) {
@@ -520,6 +524,15 @@ void ASTDumper::dump(const RealConstantAST *node) {
 void ASTDumper::dump(const StringConstantAST *node) {
   INDENT();
   llvm::errs() << "StringConstant '" << node->getValue() << "'\n";
+}
+
+void ASTDumper::dump(const TimeConstantAST *node) {
+  INDENT();
+  llvm::errs() << "TimeConstant ";
+  llvm::errs() << llvm::formatv("{0,0+4}-{1,0+2}-{2,0+2} {3,0+2}:{4,0+2}:{5,0+2}.{6,0+3}",
+                                node->getYear(), node->getMonth(), node->getDay(),
+                                node->getHour(), node->getMinute(), node->getSec(), node->getMSec());
+  llvm::errs() << " Type " << node->getType() << "\n";
 }
 
 // MARK: C.6 Function and Function Block Calls
