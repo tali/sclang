@@ -324,6 +324,10 @@ private:
     case tok_semicolon:
       lexer.consume(lexer.getCurToken());
       return ParseDeclarationSubsection();
+    case tok_const:
+      return ParseConstantSubsection();
+    case tok_label:
+      return ParseJumpLabelSubsection();
     case tok_var:
     case tok_var_temp:
     case tok_var_input:
@@ -331,8 +335,6 @@ private:
     case tok_var_in_out:
       return ParseVariableSubsection();
       break;
-    case tok_const:
-      return ParseConstantSubsection();
     }
   }
 
@@ -369,7 +371,6 @@ private:
      lexer.consume(tok_semicolon);
 
      return std::make_unique<ConstantDeclarationAST>(std::move(loc), std::move(identifier), std::move(value));
-
   }
 
   /// Parse a Constant Subsection
@@ -393,6 +394,47 @@ private:
     lexer.consume(tok_end_const);
 
     return std::make_unique<ConstantDeclarationSubsectionAST>(loc, std::move(consts));
+  }
+
+  /// Parse a Jump Label Declaration
+  ///
+  /// Jump Label Declaration = Identifier ";"
+  std::unique_ptr<JumpLabelDeclarationAST> ParseJumpLabelDeclaration() {
+    auto loc = lexer.getLastLocation();
+
+    auto identifier = ParseIdentifier();
+    if (identifier.empty()) return nullptr;
+
+     if (lexer.getCurToken() != tok_semicolon)
+       return parseError<JumpLabelDeclarationAST>(tok_semicolon, "to end constant declaration");
+     lexer.consume(tok_semicolon);
+
+     return std::make_unique<JumpLabelDeclarationAST>(std::move(loc), std::move(identifier));
+
+  }
+
+/// Parse a jump label subsection
+  ///
+  /// Jump Label Subsection ::=
+  /// "LABEL"
+  /// { Label Declaration }
+  /// "END_LABEL"
+  std::unique_ptr<JumpLabelDeclarationSubsectionAST> ParseJumpLabelSubsection() {
+    auto loc = lexer.getLastLocation();
+    lexer.consume(tok_label);
+
+    std::vector<std::unique_ptr<JumpLabelDeclarationAST>> consts;
+    while (lexer.getCurToken() != tok_end_label) {
+      auto constant = ParseJumpLabelDeclaration();
+      if (!constant) break;
+      consts.push_back(std::move(constant));
+    }
+    if (lexer.getCurToken() != tok_end_label)
+      return parseError<JumpLabelDeclarationSubsectionAST>(tok_end_label, "to end label declaration subsection");
+    lexer.consume(tok_end_label);
+
+    return std::make_unique<JumpLabelDeclarationSubsectionAST>(loc, std::move(consts));
+
   }
 
   /// Parse a  Variable Subsection

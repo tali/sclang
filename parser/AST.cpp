@@ -59,6 +59,7 @@ private:
   void dump(const DeclarationSubsectionAST *node);
   void dump(const ConstantDeclarationAST *node);
   void dump(const ConstantDeclarationSubsectionAST *node);
+  void dump(const JumpLabelDeclarationAST *node);
   void dump(const JumpLabelDeclarationSubsectionAST *node);
   void dump(const VariableDeclarationSubsectionAST *node);
   void dump(const VariableDeclarationAST *node);
@@ -175,9 +176,9 @@ void ASTDumper::dump(const OrganizationBlockAST *unit) {
 void ASTDumper::dump(const FunctionAST *unit) {
   INDENT();
   llvm::errs() << "Function " << unit->getIdentifier() << "\n";
+  dump(unit->getType());
   dump(unit->getAttributes());
   dump(unit->getDeclarations());
-  dump(unit->getType());
   dump(unit->getCode());
 }
 
@@ -244,6 +245,14 @@ void ASTDumper::dump(const ConstantDeclarationAST *node) {
 void ASTDumper::dump(const JumpLabelDeclarationSubsectionAST *node) {
   INDENT();
   llvm::errs() << "JumpLabelDeclarationSubsection\n";
+  for (auto const & decl : node->getValues()) {
+    dump(decl.get());
+  }
+}
+
+void ASTDumper::dump(const JumpLabelDeclarationAST *node) {
+  INDENT();
+  llvm::errs() << "JumpLabelDeclaration " << node->getIdentifier() << "\n";
 }
 
 void ASTDumper::dump(const VariableDeclarationSubsectionAST *node) {

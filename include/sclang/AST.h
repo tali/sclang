@@ -233,7 +233,7 @@ public:
   JumpLabelDeclarationSubsectionAST(Location loc, std::vector<std::unique_ptr<JumpLabelDeclarationAST>> values)
     : DeclarationSubsectionAST(Decl_JumpLabel, loc), values(std::move(values)) {}
 
-  llvm::ArrayRef<std::unique_ptr<JumpLabelDeclarationAST>> getValues() { return values; }
+  llvm::ArrayRef<std::unique_ptr<JumpLabelDeclarationAST>> getValues() const { return values; }
 
   /// LLVM style RTTI
   static bool classof(const DeclarationSubsectionAST *D) { return D->getKind() == Decl_JumpLabel; }
