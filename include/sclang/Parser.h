@@ -1172,6 +1172,12 @@ private:
       lexer.consume(tok_real_number_literal);
       return std::make_unique<RealConstantAST>(std::move(loc), value, type);
     }
+    case tok_false:
+      lexer.consume(tok_false);
+      return std::make_unique<IntegerConstantAST>(std::move(loc), 0, tok_bool);
+    case tok_true:
+      lexer.consume(tok_true);
+      return std::make_unique<IntegerConstantAST>(std::move(loc), 1, tok_bool);
     }
   }
 

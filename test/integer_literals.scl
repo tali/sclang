@@ -81,6 +81,14 @@ const
 // CHECK-NEXT: ConstantDeclaration I26
 // CHECK-NEXT: IntegerConstant 16 Type DWORD
 
+  B0 := FALSE;
+// CHECK-NEXT: ConstantDeclaration B0
+// CHECK-NEXT: IntegerConstant 0 Type BOOL
+
+  B1 := TRUE;
+// CHECK-NEXT: ConstantDeclaration B1
+// CHECK-NEXT: IntegerConstant 1 Type BOOL
+
 end_const
 
 begin
