@@ -9,21 +9,21 @@ var
 
  a : INT := -1;
 // CHECK: VariableDeclaration
-// CHECK:   VariableIdentifier `a`
+// CHECK:   VariableIdentifier a
 // CHECK:   ElementaryDataType Int
 // CHECK:   DataTypeInit
 // CHECK:     IntegerConstant -1
 
  b : INT := -2;
 // CHECK: VariableDeclaration
-// CHECK:   VariableIdentifier `b`
+// CHECK:   VariableIdentifier b
 // CHECK:   ElementaryDataType Int
 // CHECK:   DataTypeInit
 // CHECK:     IntegerConstant -2
 
  c : REAL := 10.1;
 // CHECK: VariableDeclaration
-// CHECK:   VariableIdentifier `c`
+// CHECK:   VariableIdentifier c
 // CHECK:   ElementaryDataType Real
 // CHECK:   DataTypeInit
 // CHECK:     RealConstant 1.010000e+01
@@ -36,13 +36,13 @@ var_input
   y : INT;
  end_struct;
 // CHECK: VariableDeclaration
-// CHECK:   VariableIdentifier `p`
+// CHECK:   VariableIdentifier p
 // CHECK:   StructDataTypeSpec
-// CHECK:     ComponentDeclaration 'x'
+// CHECK:     ComponentDeclaration x
 // CHECK:       ElementaryDataType Int
 // CHECK:       DataTypeInit
 // CHECK:         IntegerConstant 1
-// CHECK:     ComponentDeclaration 'y'
+// CHECK:     ComponentDeclaration y
 // CHECK:       ElementaryDataType Int
 end_var;
 
@@ -50,7 +50,7 @@ var_output
 // CHECK: ParameterSubsection Output
  s : array [1..2] of int;
 // CHECK: VariableDeclaration
-// CHECK:   VariableIdentifier `s`
+// CHECK:   VariableIdentifier s
 // CHECK:   ArrayDataTypeSpec [1..2]
 // CHECK:     ElementaryDataType Int
 

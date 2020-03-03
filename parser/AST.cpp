@@ -82,6 +82,7 @@ private:
   void dump(const InstructionAST *node);
   void dump(const ValueAssignmentAST *node);
   void dump(const SimpleVariableAST *node);
+  void dump(const IndexedVariableAST *node);
   // Value Assignments
   void dump(const ExpressionAST *node);
   void dump(const BinaryExpressionAST *node);
@@ -92,7 +93,6 @@ private:
   void dump(const TimeConstantAST *node);
   // Function and Function Block Calls
   void dump(const SubroutineProcessingAST *node);
-  void dump(const llvm::ArrayRef<std::unique_ptr<ExpressionAST>>);
   void dump(const FunctionCallAST *node);
   // Control Statements
   void dump(const IfThenAST *node);
@@ -109,6 +109,8 @@ private:
   void dump(const ReturnAST *node);
   void dump(const ExitAST *node);
   void dump(const GotoAST *node);
+
+  void dump(std::string, const llvm::ArrayRef<std::unique_ptr<ExpressionAST>>);
 
   // Actually print spaces matching the current indentation level
   void indent() {
@@ -300,7 +302,7 @@ void ASTDumper::dump(const VariableAttributeAST *node) {
 
 void ASTDumper::dump(const VariableIdentifierAST *node) {
   INDENT();
-  llvm::errs() << "VariableIdentifier `" << node->getIdentifier() << "`\n";
+  llvm::errs() << "VariableIdentifier " << node->getIdentifier() << "\n";
   for (auto &attr : node->getAttributes())
     dump(attr.get());
 }
@@ -395,7 +397,7 @@ void ASTDumper::dump(const ArrayDataTypeSpecAST *node) {
 
 void ASTDumper::dump(const ComponentDeclarationAST *node) {
   INDENT();
-  llvm::errs() << "ComponentDeclaration '" << node->getName() << "'\n";
+  llvm::errs() << "ComponentDeclaration " << node->getName() << "\n";
   dump(node->getDataType());
   auto init = node->getInitializer();
   if (init.hasValue())
@@ -411,7 +413,7 @@ void ASTDumper::dump(const StructDataTypeSpecAST *node) {
 
 void ASTDumper::dump(const UserDefinedTypeIdentifierAST *node) {
   INDENT();
-  llvm::errs() << "UserDefinedTypeIdentifier '" << node->getName() << "'\n";
+  llvm::errs() << "UserDefinedTypeIdentifier " << node->getName() << "\n";
 }
 
 void ASTDumper::dump(const DBAssignmentAST *node) {
@@ -476,6 +478,7 @@ void ASTDumper::dump(const ExpressionAST *expr) {
   dispatch(StringConstantAST);
   dispatch(TimeConstantAST);
   dispatch(SimpleVariableAST);
+  dispatch(IndexedVariableAST);
 //    dispatch(AbsoluteVariableAST);
 //    dispatch(VariableInDBAST);
   dispatch(FunctionCallAST);
@@ -490,6 +493,13 @@ void ASTDumper::dump(const ExpressionAST *expr) {
 void ASTDumper::dump(const SimpleVariableAST *node) {
   INDENT();
   llvm::errs() << "SimpleVariable " << node->getName() << "\n";
+}
+
+void ASTDumper::dump(const IndexedVariableAST *node) {
+  INDENT();
+  llvm::errs() << "IndexedVariable\n";
+  dump(node->getBase());
+  dump("Indices", node->getIndices());
 }
 
 void ASTDumper::dump(const BinaryExpressionAST *node) {
@@ -543,19 +553,11 @@ void ASTDumper::dump(const SubroutineProcessingAST *node) {
   dump(node->getCall());
 }
 
-void ASTDumper::dump(llvm::ArrayRef<std::unique_ptr<ExpressionAST>> parameters) {
-  INDENT();
-  llvm::errs() << "Parameters\n";
-  for (const auto & param : parameters) {
-    dump(param.get());
-  }
-}
-
 void ASTDumper::dump(const FunctionCallAST *node) {
   INDENT();
   llvm::errs() << "FunctionCall\n";
   dump(node->getFunction());
-  dump(node->getParameters());
+  dump("Parameters", node->getParameters());
 }
 
 
@@ -675,6 +677,14 @@ void ASTDumper::dump(const GotoAST *node) {
   llvm::errs() << "Goto " << node->getLabel() << "\n";
 }
 
+
+void ASTDumper::dump(std::string name, llvm::ArrayRef<std::unique_ptr<ExpressionAST>> parameters) {
+  INDENT();
+  llvm::errs() << name << "\n";
+  for (const auto & param : parameters) {
+    dump(param.get());
+  }
+}
 
 
 /// Print a module, actually loop over the functions and print them in sequence.

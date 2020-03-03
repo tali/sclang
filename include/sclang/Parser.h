@@ -1064,6 +1064,9 @@ private:
       if (binOp == tok_parenthese_open) {
         lhs = ParseCallExpression(std::move(lhs));
         continue;
+      } else if (binOp == tok_sbracket_open) {
+        lhs = ParseIndexedVariable(std::move(lhs));
+        continue;
       }
       lexer.consume(binOp);
       auto loc = lexer.getLastLocation();
@@ -1146,6 +1149,7 @@ private:
       return pred_exponent;
 
     case tok_parenthese_open:
+    case tok_sbracket_open:
       return pred_paren;
     case tok_dot:
       return pred_dot;
@@ -1186,6 +1190,32 @@ private:
       return std::make_unique<IntegerConstantAST>(std::move(loc), 1, tok_bool);
     }
   }
+
+  std::unique_ptr<ExpressionAST> ParseIndexedVariable(std::unique_ptr<ExpressionAST> base) {
+    auto loc = lexer.getLastLocation();
+    lexer.consume(tok_sbracket_open);
+
+    std::vector<std::unique_ptr<ExpressionAST>> indices;
+    bool anotherIndex = lexer.getCurToken() != tok_sbracket_close;
+    while (anotherIndex) {
+      auto index = ParseExpression();
+      if (!index)
+        return parseError<ExpressionAST>("index", "index");
+      indices.push_back(std::move(index));
+
+      if (lexer.getCurToken() == tok_comma)
+        lexer.consume(tok_comma);
+      else
+        anotherIndex = false;
+    }
+
+    if (lexer.getCurToken() != tok_sbracket_close)
+      return parseError<ExpressionAST>(tok_parenthese_close, "to end indices");
+    lexer.consume(tok_sbracket_close);
+
+    return std::make_unique<IndexedVariableAST>(std::move(loc), std::move(base), std::move(indices));
+  }
+
 
   // MARK: C.6 Function and Function Block Calls
 

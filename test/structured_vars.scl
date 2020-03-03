@@ -1,0 +1,34 @@
+// RUN: sclang --emit=ast %s 2>&1 | FileCheck %s
+
+function_block time_literals
+
+var_output
+  a : struct
+    b : int := 1;
+    c : int := 2;
+  end_struct;
+// CHECK: VariableDeclaration
+// CHECK-NEXT: VariableIdentifier a
+// CHECK-NEXT: StructDataTypeSpec
+// CHECK-NEXT:   ComponentDeclaration b
+// CHECK-NEXT:     ElementaryDataType Int
+end_var
+
+begin
+  a.b := 100;
+// CHECK: Assignment
+// CHECK-NEXT: BinaryExpression :=
+// CHECK-NEXT:   BinaryExpression .
+// CHECK-NEXT:     SimpleVariable a
+// CHECK-NEXT:     SimpleVariable b
+// CHECK-NEXT: Constant 100
+
+  a.c := 200;
+// CHECK: Assignment
+// CHECK-NEXT: BinaryExpression :=
+// CHECK-NEXT:   BinaryExpression .
+// CHECK-NEXT:     SimpleVariable a
+// CHECK-NEXT:     SimpleVariable c
+// CHECK-NEXT: Constant 200
+
+end_function_block

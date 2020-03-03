@@ -362,11 +362,6 @@ private:
       return nullptr;
     case ExpressionAST::Expr_SimpleVariable:
       return mlirGen(llvm::cast<SimpleVariableAST>(expr));
-    case ExpressionAST::Expr_StructuredVariable:
-      emitError(loc(expr.loc()))
-      << "StructuredVariable not implemented"; // TODO: TBD
-      return nullptr;
-      //return mlirGen(llvm::cast<StructuredVariableAST>(expr));
     case ExpressionAST::Expr_IndexedVariable:
       emitError(loc(expr.loc()))
       << "IndexedVariable not implemented"; // TODO: TBD
@@ -388,7 +383,6 @@ private:
     case ExpressionAST::Expr_StringConstant:
       return mlirGen(llvm::cast<StringConstantAST>(expr));
     case ExpressionAST::Expr_SimpleVariable:
-    case ExpressionAST::Expr_StructuredVariable:
     case ExpressionAST::Expr_IndexedVariable:
       return getRValue(expr);
     case ExpressionAST::Expr_FunctionCall:
@@ -428,11 +422,6 @@ private:
     if (auto variable = symbolTable.lookup(name))
       return variable;
     emitError(location) << "unknown variable '" << name << "'";
-    return nullptr;
-  }
-
-  mlir::Value mlirGen(const StructuredVariableAST &expr) {
-    emitError(loc(expr.loc())) << "StructuredVariableAST not implemented";
     return nullptr;
   }
 

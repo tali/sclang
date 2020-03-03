@@ -565,7 +565,6 @@ public:
     Expr_StringConstant,
     Expr_TimeConstant,
     Expr_SimpleVariable,
-    Expr_StructuredVariable,
     Expr_IndexedVariable,
     Expr_FunctionCall,
     Expr_Binary,
@@ -606,18 +605,9 @@ public:
 
   const ExpressionAST * getBase() const { return base.get(); }
   llvm::ArrayRef<std::unique_ptr<ExpressionAST>> getIndices() const { return indices; }
-};
 
-class StructuredVariableAST : public ExpressionAST {
-  std::unique_ptr<ExpressionAST> base;
-  std::string variable;
-
-public:
-  StructuredVariableAST(Location loc, std::unique_ptr<ExpressionAST> base, std::string variable)
-  : ExpressionAST(std::move(loc), Expr_StructuredVariable), base(std::move(base)), variable(std::move(variable)) {}
-
-  const ExpressionAST * getBase() const { return base.get(); }
-  llvm::StringRef getVariable() const { return variable; }
+  /// LLVM style RTTI
+  static bool classof(const ExpressionAST *e) { return e->getKind() == Expr_IndexedVariable; }
 };
 
 class BinaryExpressionAST : public ExpressionAST {
