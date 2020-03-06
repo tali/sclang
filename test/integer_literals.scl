@@ -97,6 +97,14 @@ const
 // CHECK-NEXT: ConstantDeclaration I26
 // CHECK-NEXT: IntegerConstant 16 Type DWORD
 
+  I27 := BYTE#16#C0;
+// CHECK-NEXT: ConstantDeclaration I27
+// CHECK-NEXT: IntegerConstant 192 Type BYTE
+
+  I28 := DW#16#FFFF_FFFF;
+// CHECK-NEXT: ConstantDeclaration I28
+// CHECK-NEXT: IntegerConstant -1 Type DWORD
+
   B0 := FALSE;
 // CHECK-NEXT: ConstantDeclaration B0
 // CHECK-NEXT: IntegerConstant 0 Type BOOL

@@ -23,6 +23,7 @@
 #define SCLANG_LEXER_H_
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringExtras.h"
 
 #include <memory>
 #include <string>
@@ -502,10 +503,10 @@ private:
   }
 
   Token getNumberLiteralTok() {
-    std::string numStr;
+    stringValue = "";
 
     if (lastChar == '-') {
-      numStr = "-";
+      stringValue = "-";
       lastChar = Token(getNextChar());
       if (!isdigit(lastChar))
         return Token('-');
@@ -514,23 +515,23 @@ private:
     enum State {
       Decimal, Binary, Octal, Hex, Real, Exponent
     } state = Decimal;
-    do {
+    while (true) {
       if (lastChar == '_')
         lastChar = Token(getNextChar());
       if (isdigit(lastChar)) {
-        numStr += lastChar;
+        stringValue += lastChar;
       } else if (isxdigit(lastChar) && state == Hex) {
-        numStr += lastChar;
+        stringValue += lastChar;
       } else if (lastChar == '#' && state == Decimal) {
-        if (numStr == "2")
+        if (stringValue == "2")
           state = Binary;
-        else if (numStr == "8")
+        else if (stringValue == "8")
           state = Octal;
-        else if (numStr == "16")
+        else if (stringValue == "16")
           state = Hex;
         else
           return tok_error_integer;
-        numStr = "";
+        stringValue = "";
       } else if (lastChar == '.' && state == Decimal) {
         lastChar = Token(getNextChar());
         if (lastChar == '.') {
@@ -538,39 +539,48 @@ private:
           lastChar = tok_range;
           break;
         }
-        numStr += '.';
+        stringValue += '.';
         state = Real;
         continue; // we already got the next char
       } else if ((lastChar == 'e' || lastChar == 'E') && (state == Decimal || state == Real)) {
-        numStr += 'e';
+        stringValue += 'e';
         state = Exponent;
         // the exponent is the only part where a sign is valid within the number
         lastChar = Token(getNextChar());
         if (lastChar == '-' || lastChar == '+') {
-          numStr += lastChar;
+          stringValue += lastChar;
           lastChar = Token(getNextChar());
         }
         continue;
+      } else {
+        // end of number
+        break;
       }
       lastChar = Token(getNextChar());
-    } while (isdigit(lastChar) || lastChar == '.' || lastChar == '_' || lastChar == 'e' || lastChar == 'E' || lastChar == '#');
+    }
 
     switch (state) {
     case Decimal:
-      intVal = stoll(numStr);
+      if (!llvm::to_integer(stringValue, intVal))
+        return tok_error_integer;
       return tok_integer_literal;
+
     case Binary:
-      intVal = stoll(numStr, nullptr, 2);
+      if (!llvm::to_integer(stringValue, intVal, 2))
+        return tok_error_integer;
       return tok_integer_literal;
     case Octal:
-      intVal = stoll(numStr, nullptr, 8);
+      if (!llvm::to_integer(stringValue, intVal, 8))
+        return tok_error_integer;
       return tok_integer_literal;
     case Hex:
-      intVal = stoll(numStr, nullptr, 16);
+      if (!llvm::to_integer(stringValue, intVal, 16))
+        return tok_error_integer;
       return tok_integer_literal;
     case Real:
     case Exponent:
-      realVal = stof(numStr, nullptr);
+      if (!llvm::to_float(stringValue, realVal))
+        return tok_error_real;
       return tok_real_number_literal;
     }
   }
@@ -621,9 +631,7 @@ private:
         number += lastChar;
       lastChar = Token(getNextChar());
     }
-    size_t idx;
-    val = stoll(number, &idx);
-    return idx==number.size();
+    return llvm::to_integer(number, val);
   }
 
   Token getDateLiteralTok() {
