@@ -1347,15 +1347,7 @@ private:
     auto loc = lexer.getLastLocation();
     lexer.consume(tok_for);
 
-    auto variable = ParseExpression();
-
-    if (lexer.getCurToken() != tok_assignment)
-      return parseError<ForDoAST>(tok_assignment, "for loop");
-    lexer.consume(tok_assignment);
-
-    auto initializer = ParseExpression();
-    if (!initializer)
-      return parseError<ForDoAST>("initializer", "for statement");
+    auto assignment = ParseExpression();
 
     if (lexer.getCurToken() != tok_to)
       return parseError<ForDoAST>(tok_to, "for loop");
@@ -1365,13 +1357,15 @@ private:
     if (!last)
       return parseError<ForDoAST>("expression", "for end value");
 
-    if (lexer.getCurToken() != tok_by)
-      return parseError<ForDoAST>(tok_by, "for loop");
-    lexer.consume(tok_by);
+    llvm::Optional<std::unique_ptr<ExpressionAST>> increment;
+    if (lexer.getCurToken() == tok_by) {
+      lexer.consume(tok_by);
 
-    auto increment = ParseExpression();
-    if (!increment)
-      return parseError<ForDoAST>("expression", "for increment");
+      auto inc = ParseExpression();
+      if (!inc)
+        return parseError<ForDoAST>("expression", "for increment");
+      increment = std::move(inc);
+    }
 
     if (lexer.getCurToken() != tok_do)
       return parseError<ForDoAST>(tok_do, "for loop");
@@ -1381,7 +1375,11 @@ private:
     if (!code)
       return parseError<ForDoAST>("code section", "for loop");
 
-    return std::make_unique<ForDoAST>(std::move(loc), std::move(variable), std::move(initializer), std::move(last), std::move(increment), std::move(code));
+    if (lexer.getCurToken() != tok_end_for)
+      return parseError<ForDoAST>(tok_end_for, "end of for loop");
+    lexer.consume(tok_end_for);
+
+    return std::make_unique<ForDoAST>(std::move(loc), std::move(assignment), std::move(last), std::move(increment), std::move(code));
   }
 
   std::unique_ptr<WhileDoAST> ParseWhileDo() {

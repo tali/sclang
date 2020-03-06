@@ -900,20 +900,22 @@ public:
 };
 
 class ForDoAST : public InstructionAST {
-  std::unique_ptr<ExpressionAST> variable;
-  std::unique_ptr<ExpressionAST> initial;
+  std::unique_ptr<ExpressionAST> assignment;
   std::unique_ptr<ExpressionAST> last;
-  std::unique_ptr<ExpressionAST> increment;
+  llvm::Optional<std::unique_ptr<ExpressionAST>> increment;
   std::unique_ptr<CodeSectionAST> code;
 
 public:
-  ForDoAST(Location loc, std::unique_ptr<ExpressionAST> variable, std::unique_ptr<ExpressionAST> initial, std::unique_ptr<ExpressionAST> last, std::unique_ptr<ExpressionAST> increment, std::unique_ptr<CodeSectionAST> code)
-  : InstructionAST(std::move(loc), Instr_ForDo), variable(std::move(variable)), initial(std::move(initial)), last(std::move(last)), increment(std::move(increment)), code(std::move(code)) {}
+  ForDoAST(Location loc, std::unique_ptr<ExpressionAST> assignment, std::unique_ptr<ExpressionAST> last, llvm::Optional<std::unique_ptr<ExpressionAST>> increment, std::unique_ptr<CodeSectionAST> code)
+  : InstructionAST(std::move(loc), Instr_ForDo), assignment(std::move(assignment)), last(std::move(last)), increment(std::move(increment)), code(std::move(code)) {}
 
-  const ExpressionAST * getVariable() const { return variable.get(); }
-  const ExpressionAST * getInitial() const { return initial.get(); }
+  const ExpressionAST * getAssignment() const { return assignment.get(); }
   const ExpressionAST * getLast() const { return last.get(); }
-  const ExpressionAST * getIncrement() const { return increment.get(); }
+  llvm::Optional<const ExpressionAST *> getIncrement() const {
+    if (!increment.hasValue())
+      return llvm::NoneType();
+    return increment.getValue().get();
+  };
   const CodeSectionAST * getCode() const { return code.get(); }
 
   /// LLVM style RTTI

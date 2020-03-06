@@ -1,0 +1,57 @@
+// RUN: sclang --emit=ast %s 2>&1 | FileCheck %s
+
+function_block for_do
+
+var_output
+  a : array[1..2] of int := 2(0);
+end_var
+
+var_temp
+  i : int;
+end_var
+
+begin
+// CHECK: CodeSection
+
+  for i := 1 to 2 do
+    a[i] := i;
+  end_for;
+// CHECK-NEXT: For
+// CHECK-NEXT:   BinaryExpression :=
+// CHECK-NEXT:     SimpleVariable i
+// CHECK-NEXT:     IntegerConstant 1
+// CHECK-NEXT: To
+// CHECK-NEXT:   IntegerConstant 2
+// CHECK-NEXT: Do
+// CHECK-NEXT:   CodeSection
+// CHECK-NEXT:     ValueAssignment
+// CHECK-NEXT:       BinaryExpression :=
+// CHECK-NEXT:         IndexedVariable
+// CHECK-NEXT:           SimpleVariable a
+// CHECK-NEXT:           Indices
+// CHECK-NEXT:             SimpleVariable i
+// CHECK-NEXT:         SimpleVariable i
+
+  for i := 2 to 1 by -1 do
+    a[i] := -1;
+  end_for;
+// CHECK-NEXT: For
+// CHECK-NEXT:   BinaryExpression :=
+// CHECK-NEXT:     SimpleVariable i
+// CHECK-NEXT:     IntegerConstant 2
+// CHECK-NEXT: To
+// CHECK-NEXT:   IntegerConstant 1
+// CHECK-NEXT: By
+// CHECK-NEXT:   IntegerConstant -1
+// CHECK-NEXT: Do
+// CHECK-NEXT:   CodeSection
+// CHECK-NEXT:     ValueAssignment
+// CHECK-NEXT:       BinaryExpression :=
+// CHECK-NEXT:         IndexedVariable
+// CHECK-NEXT:           SimpleVariable a
+// CHECK-NEXT:           Indices
+// CHECK-NEXT:             SimpleVariable i
+// CHECK-NEXT:         IntegerConstant -1
+
+
+end_function_block

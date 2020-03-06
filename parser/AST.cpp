@@ -640,17 +640,20 @@ void ASTDumper::dump(const CaseOfAST *node) {
   dump(node->getCode());
   auto elseBlock = node->getElseBlock();
   if (elseBlock.hasValue())
-    dump(node->getElseBlock().getValue());
+    dump(elseBlock.getValue());
 }
 
 void ASTDumper::dump(const ForDoAST *node) {
   INDENT();
   llvm::errs() << "For\n";
-  dump(node->getInitial());
+  dump(node->getAssignment());
   llvm::errs() << "To\n";
   dump(node->getLast());
-  llvm::errs() << "By\n";
-  dump(node->getIncrement());
+  auto increment = node->getIncrement();
+  if (increment.hasValue()) {
+    llvm::errs() << "By\n";
+    dump(increment.getValue());
+  }
   llvm::errs() << "Do\n";
   dump(node->getCode());
 }
