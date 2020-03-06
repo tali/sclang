@@ -559,7 +559,23 @@ private:
 
     // TODO: support for repetition factor
     auto value = ParseConstant();
-    list.push_back(std::move(value));
+    if (lexer.getCurToken() == tok_parenthese_open) {
+      // this was a repetition factor
+      if (value.get()->getKind() != ExpressionAST::Expr_IntegerConstant)
+        return parseError<DataTypeInitAST>(tok_integer_literal, "repetition factor");
+      lexer.consume(tok_parenthese_open);
+
+      int repetitions = llvm::dyn_cast<IntegerConstantAST>(value.get())->getValue();
+      auto value = ParseConstant();
+
+      if (lexer.getCurToken() != tok_parenthese_close)
+        return parseError<DataTypeInitAST>(tok_parenthese_close, "repetition factor");
+      lexer.consume(tok_parenthese_close);
+
+      list.push_back(std::make_unique<RepeatedConstantAST>(loc, repetitions, std::move(value)));
+    } else {
+      list.push_back(std::move(value));
+    }
 
     while(lexer.getCurToken() == tok_comma) {
       lexer.consume(tok_comma);

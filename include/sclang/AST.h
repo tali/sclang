@@ -574,6 +574,7 @@ public:
 class ExpressionAST {
 public:
   enum ExprASTKind {
+    Expr_RepeatedConstant,
     Expr_IntegerConstant,
     Expr_RealConstant,
     Expr_StringConstant,
@@ -667,6 +668,21 @@ public:
     : ExpressionAST(std::move(loc), kind), type(type) {}
 
   Token getType() const { return type; }
+};
+
+class RepeatedConstantAST : public ConstantAST {
+  int repetitions;
+  std::unique_ptr<ConstantAST> value;
+
+public:
+  RepeatedConstantAST(Location loc, int repetitions, std::unique_ptr<ConstantAST> value)
+  : ConstantAST(std::move(loc), Expr_RepeatedConstant, value->getType()), repetitions(repetitions), value(std::move(value)) {}
+
+  int getRepetitions() const { return repetitions; }
+  const ConstantAST * getValue() const { return value.get(); }
+
+  /// LLVM style RTTI
+  static bool classof(const ExpressionAST *e) { return e->getKind() == Expr_RepeatedConstant; }
 };
 
 class IntegerConstantAST : public ConstantAST {

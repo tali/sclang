@@ -88,6 +88,7 @@ private:
   void dump(const ExpressionAST *node);
   void dump(const BinaryExpressionAST *node);
   void dump(const UnaryExpressionAST *node);
+  void dump(const RepeatedConstantAST *node);
   void dump(const IntegerConstantAST *node);
   void dump(const RealConstantAST *node);
   void dump(const StringConstantAST *node);
@@ -479,6 +480,7 @@ void ASTDumper::dump(const ExpressionAST *expr) {
 #define dispatch(CLASS)                                                        \
   if (const CLASS *node = llvm::dyn_cast<CLASS>(expr))                         \
     return dump(node);
+  dispatch(RepeatedConstantAST);
   dispatch(IntegerConstantAST);
   dispatch(RealConstantAST);
   dispatch(StringConstantAST);
@@ -519,6 +521,12 @@ void ASTDumper::dump(const UnaryExpressionAST *node) {
   INDENT();
   llvm::errs() << "UnaryExpression " << node->getOp() << "\n";
   dump(node->getRhs());
+}
+
+void ASTDumper::dump(const RepeatedConstantAST *node) {
+  INDENT();
+  llvm::errs() << "RepeatedConstant " << node->getRepetitions() << "\n";
+  dump(node->getValue());
 }
 
 void ASTDumper::dump(const IntegerConstantAST *node) {
