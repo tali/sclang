@@ -267,7 +267,7 @@ private:
 
   /// Parse the block attribues
   ///
-  /// Block Attributes ::= [ "TITLE" "=" String Literal ] { Name ":" (String Literal | Identifier) }
+  /// Block Attributes ::= [ "TITLE" "=" String Literal ] { Name ":" (String Literal | Identifier { "." Identifier } ) }
   std::vector<std::unique_ptr<BlockAttributeAST>> ParseBlockAttributes() {
     std::vector<std::unique_ptr<BlockAttributeAST>> attrs;
 
@@ -287,6 +287,10 @@ private:
         case tok_string_literal:
           value = std::string(lexer.getStringValue());
           lexer.consume(tok_string_literal);
+          break;
+        case tok_real_number_literal:
+          value = std::string(lexer.getStringValue());
+          lexer.consume(tok_real_number_literal);
           break;
         }
       }

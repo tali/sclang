@@ -232,7 +232,7 @@ public:
   }
 
   llvm::StringRef getStringValue() {
-    assert(curTok == tok_string_literal);
+    assert(curTok == tok_string_literal || curTok == tok_real_number_literal);
     return stringValue;
   }
 
