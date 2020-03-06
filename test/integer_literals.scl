@@ -13,20 +13,36 @@ const
 // CHECK-NEXT: ConstantDeclaration I1
 // CHECK-NEXT: IntegerConstant 0 Type INT
 
-  I2 := DINT#0;
+  I2 := DI#0;
 // CHECK-NEXT: ConstantDeclaration I2
 // CHECK-NEXT: IntegerConstant 0 Type DINT
 
-  I3 := BYTE#0;
+  I3 := DINT#0;
 // CHECK-NEXT: ConstantDeclaration I3
+// CHECK-NEXT: IntegerConstant 0 Type DINT
+
+  I4 := B#0;
+// CHECK-NEXT: ConstantDeclaration I4
 // CHECK-NEXT: IntegerConstant 0 Type BYTE
 
-  I4 := WORD#0;
-// CHECK-NEXT: ConstantDeclaration I4
+  I5 := BYTE#0;
+// CHECK-NEXT: ConstantDeclaration I5
+// CHECK-NEXT: IntegerConstant 0 Type BYTE
+
+  I6 := W#0;
+// CHECK-NEXT: ConstantDeclaration I6
 // CHECK-NEXT: IntegerConstant 0 Type WORD
 
-  I5 := DWORD#0;
-// CHECK-NEXT: ConstantDeclaration I5
+  I7 := WORD#0;
+// CHECK-NEXT: ConstantDeclaration I7
+// CHECK-NEXT: IntegerConstant 0 Type WORD
+
+  I8 := DW#0;
+// CHECK-NEXT: ConstantDeclaration I8
+// CHECK-NEXT: IntegerConstant 0 Type DWORD
+
+  I9 := DWORD#0;
+// CHECK-NEXT: ConstantDeclaration I9
 // CHECK-NEXT: IntegerConstant 0 Type DWORD
 
   I10 := 1_0;
