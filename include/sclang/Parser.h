@@ -719,6 +719,24 @@ private:
     return std::make_unique<UserDefinedTypeIdentifierAST>(std::move(loc), identifier);
   }
 
+
+  /// Parse an Array Dimension
+  ///
+  ///  Array Dimension ::= Expression ".." Expression
+  std::unique_ptr<ArrayDimensionAST> ParseArrayDimension() {
+    auto loc = lexer.getLastLocation();
+
+    auto min = ParseExpression();
+
+    if (lexer.getCurToken() != tok_range)
+      return parseError<ArrayDimensionAST>(tok_range, "for array dimension");
+    lexer.consume(tok_range);
+
+    auto max = ParseExpression();
+
+    return std::make_unique<ArrayDimensionAST>(std::move(loc), std::move(min), std::move(max));
+  }
+
   /// Parse an Array Data Type Specification
   ///
   /// Array Data Type Specification ::= "ARRAY" "[" Index ".." Index { "," Index ".." Index } "]" "OF" Data Type Specification
@@ -730,41 +748,19 @@ private:
       return parseError<ArrayDataTypeSpecAST>(tok_sbracket_open, "for array dimensions");
     lexer.consume(tok_sbracket_open);
 
-    std::vector<std::pair<int32_t, int32_t>> dimensions;
-    if (lexer.getCurToken() != tok_integer_literal)
-      return parseError<ArrayDataTypeSpecAST>(tok_integer_literal, "for array dimensions");
-    auto min = lexer.getIntegerValue();
-    lexer.consume(tok_integer_literal);
-
-    if (lexer.getCurToken() != tok_range)
-      return parseError<ArrayDataTypeSpecAST>(tok_range, "for array dimensions");
-    lexer.consume(tok_range);
-
-    if (lexer.getCurToken() != tok_integer_literal)
-      return parseError<ArrayDataTypeSpecAST>(tok_integer_literal, "for array dimensions");
-    auto max = lexer.getIntegerValue();
-    lexer.consume(tok_integer_literal);
-
-    dimensions.push_back(std::make_pair(min, max));
+    std::vector<std::unique_ptr<ArrayDimensionAST>> dimensions;
+    auto dim = ParseArrayDimension();
+    if (!dim)
+      return nullptr;
+    dimensions.push_back(std::move(dim));
 
     while (lexer.getCurToken() == tok_comma) {
       lexer.consume(tok_comma);
 
-      if (lexer.getCurToken() != tok_integer_literal)
-        return parseError<ArrayDataTypeSpecAST>(tok_integer_literal, "for array dimensions");
-      auto min = lexer.getIntegerValue();
-      lexer.consume(tok_integer_literal);
-
-      if (lexer.getCurToken() != tok_range)
-        return parseError<ArrayDataTypeSpecAST>(tok_range, "for array dimensions");
-      lexer.consume(tok_range);
-
-      if (lexer.getCurToken() != tok_integer_literal)
-        return parseError<ArrayDataTypeSpecAST>(tok_integer_literal, "for array dimensions");
-      auto max = lexer.getIntegerValue();
-      lexer.consume(tok_integer_literal);
-
-      dimensions.push_back(std::make_pair(min, max));
+      auto dim = ParseArrayDimension();
+      if (!dim)
+        return nullptr;
+      dimensions.push_back(std::move(dim));
     }
 
     if (lexer.getCurToken() != tok_sbracket_close)

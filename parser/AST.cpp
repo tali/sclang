@@ -71,6 +71,7 @@ private:
   void dump(const DataTypeSpecAST *node);
   void dump(const ElementaryDataTypeAST *node);
   void dump(const StringDataTypeSpecAST *node);
+  void dump(const ArrayDimensionAST *node);
   void dump(const ArrayDataTypeSpecAST *node);
   void dump(const ComponentDeclarationAST *node);
   void dump(const StructDataTypeSpecAST *node);
@@ -385,13 +386,18 @@ void ASTDumper::dump(const StringDataTypeSpecAST *node) {
   llvm::errs() << "StringDataTypeSpec [" << node->getMaxLen() << "]\n";
 }
 
+void ASTDumper::dump(const ArrayDimensionAST *node) {
+  INDENT();
+  llvm::errs() << "ArrayDimension\n";
+  dump(node->getMin());
+  dump(node->getMax());
+}
+
 void ASTDumper::dump(const ArrayDataTypeSpecAST *node) {
   INDENT();
-  llvm::errs() << "ArrayDataTypeSpec";
-  for (auto const &dim : node->getDimensions()) {
-    llvm::errs() << " [" << dim.first << ".." << dim.second << "]";
-  }
-  llvm::errs() << "\n";
+  llvm::errs() << "ArrayDataTypeSpec\n";
+  for (auto const &dim : node->getDimensions())
+    dump(dim.get());
   dump(node->getDataType());
 }
 

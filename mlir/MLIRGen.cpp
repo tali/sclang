@@ -541,9 +541,30 @@ private:
     }
   }
 
+  mlir::LogicalResult getConstantInteger(const ExpressionAST &expr, int & value) {
+    switch (expr.getKind()) {
+    default:
+      emitError(loc(expr.loc())) << "constant integer expected";
+      return mlir::failure();
+    case ExpressionAST::Expr_IntegerConstant:
+      value = llvm::cast<IntegerConstantAST>(expr).getValue();
+      return mlir::success();
+    }
+  }
+
   mlir::Type getType(const ArrayDataTypeSpecAST &type) {
     mlir::Type elementType = getType(*type.getDataType());
-    return ArrayType::get(type.getDimensions(), elementType);
+    std::vector<ArrayType::DimTy> dimensions;
+    dimensions.reserve(type.getDimensions().size());
+    for (const auto & dim : type.getDimensions()) {
+      int min, max;
+      if (mlir::failed(getConstantInteger(*dim.get()->getMin(), min)))
+        return nullptr;
+      if (mlir::failed(getConstantInteger(*dim.get()->getMax(), max)))
+        return nullptr;
+      dimensions.push_back(std::make_pair(min, max));
+    }
+    return ArrayType::get(dimensions, elementType);
   }
 
   mlir::Type getType(const StructDataTypeSpecAST &type) {

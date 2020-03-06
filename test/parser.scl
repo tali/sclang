@@ -51,7 +51,10 @@ var_output
  s : array [1..2] of int;
 // CHECK: VariableDeclaration
 // CHECK:   VariableIdentifier s
-// CHECK:   ArrayDataTypeSpec [1..2]
+// CHECK:   ArrayDataTypeSpec
+// CHECK:     ArrayDimension
+// CHECK:       IntegerConstant 1
+// CHECK:       IntegerConstant 2
 // CHECK:     ElementaryDataType Int
 
 end_var;

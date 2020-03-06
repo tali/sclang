@@ -425,15 +425,29 @@ public:
   static bool classof(const DataTypeSpecAST *d) { return d->getKind() == DataType_String; }
 };
 
+class ArrayDimensionAST {
+  Location location;
+  std::unique_ptr<ExpressionAST> min;
+  std::unique_ptr<ExpressionAST> max;
+
+public:
+  ArrayDimensionAST(Location loc, std::unique_ptr<ExpressionAST> min, std::unique_ptr<ExpressionAST> max)
+    : location(std::move(loc)), min(std::move(min)), max(std::move(max)) {}
+
+  const Location &loc() const { return location; }
+  const ExpressionAST * getMin() const { return min.get(); }
+  const ExpressionAST * getMax() const { return max.get(); }
+};
+
 class ArrayDataTypeSpecAST : public DataTypeSpecAST {
-  std::vector<std::pair<int32_t, int32_t>> dimensions;
+  std::vector<std::unique_ptr<ArrayDimensionAST>> dimensions;
   std::unique_ptr<DataTypeSpecAST> dataType;
 
 public:
-  ArrayDataTypeSpecAST(Location loc, std::vector<std::pair<int32_t, int32_t>> dimensions, std::unique_ptr<DataTypeSpecAST> dataType)
+  ArrayDataTypeSpecAST(Location loc, std::vector<std::unique_ptr<ArrayDimensionAST>> dimensions, std::unique_ptr<DataTypeSpecAST> dataType)
     : DataTypeSpecAST(std::move(loc), DataType_Array), dimensions(std::move(dimensions)), dataType(std::move(dataType)) {}
 
-  llvm::ArrayRef<std::pair<int32_t, int32_t>> getDimensions() const { return dimensions; }
+  llvm::ArrayRef<std::unique_ptr<ArrayDimensionAST>> getDimensions() const { return dimensions; }
   const DataTypeSpecAST * getDataType() const { return dataType.get(); }
   /// LLVM style RTTI
   static bool classof(const DataTypeSpecAST *d) { return d->getKind() == DataType_Array; }
