@@ -599,12 +599,14 @@ private:
 
 class SimpleVariableAST : public ExpressionAST {
   std::string name;
+  bool symbol;
 
 public:
-  SimpleVariableAST(Location loc, std::string name)
-    : ExpressionAST(std::move(loc), Expr_SimpleVariable), name(std::move(name)) {}
+  SimpleVariableAST(Location loc, std::string name, bool symbol)
+    : ExpressionAST(std::move(loc), Expr_SimpleVariable), name(std::move(name)), symbol(symbol) {}
 
   llvm::StringRef getName() const { return name; }
+  bool isSymbol() const { return symbol; }
 
   /// LLVM style RTTI
   static bool classof(const ExpressionAST *e) { return e->getKind() == Expr_SimpleVariable; }

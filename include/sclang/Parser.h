@@ -937,7 +937,7 @@ private:
       return std::make_unique<SubroutineProcessingAST>(std::move(loc), std::move(expr));
     }
 
-    // TODO: function calls and jump labels
+    // TODO: jump labels
 
     return parseError<InstructionAST>("instruction", "in code block");
   }
@@ -956,8 +956,9 @@ private:
     case tok_minus:
       return ParseUnaryExpression();
     case tok_identifier:
-    case tok_symbol:
       return ParseIdentifierExpression();
+    case tok_symbol:
+      return ParseSymbolExpression();
     case tok_false:
     case tok_true:
       return ParseBooleanLiteralExpression();
@@ -1002,12 +1003,23 @@ private:
   std::unique_ptr<ExpressionAST> ParseIdentifierExpression() {
     auto loc = lexer.getLastLocation();
 
-    // TODO: TBD
-    auto variable = ParseIdentifier();
+    std::string variable(lexer.getIdentifier());
     if (variable.empty())
       return parseError<ExpressionAST>("variable", "for expression");
+    lexer.consume(tok_identifier);
 
-    return std::make_unique<SimpleVariableAST>(std::move(loc), std::move(variable));
+    return std::make_unique<SimpleVariableAST>(std::move(loc), std::move(variable), false);
+  }
+
+  std::unique_ptr<ExpressionAST> ParseSymbolExpression() {
+    auto loc = lexer.getLastLocation();
+
+    std::string name(lexer.getSymbol());
+    if (name.empty())
+      return parseError<ExpressionAST>("name", "for expression");
+    lexer.consume(tok_symbol);
+
+    return std::make_unique<SimpleVariableAST>(std::move(loc), std::move(name), true);
   }
 
   std::unique_ptr<ExpressionAST> ParseBooleanLiteralExpression() {

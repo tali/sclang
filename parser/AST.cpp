@@ -500,7 +500,11 @@ void ASTDumper::dump(const ExpressionAST *expr) {
 
 void ASTDumper::dump(const SimpleVariableAST *node) {
   INDENT();
-  llvm::errs() << "SimpleVariable " << node->getName() << "\n";
+  if (node->isSymbol()) {
+    llvm::errs() << "Symbol " << node->getName() << "\n";
+  } else {
+    llvm::errs() << "SimpleVariable " << node->getName() << "\n";
+  }
 }
 
 void ASTDumper::dump(const IndexedVariableAST *node) {

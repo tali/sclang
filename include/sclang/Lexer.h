@@ -602,6 +602,8 @@ private:
   }
 
   Token getStringLiteralTok() {
+    assert(lastChar == '\'');
+
     stringValue = "";
     char c;
     while (isprint(c = getNextChar()) && c != '\'') {
@@ -638,6 +640,19 @@ private:
       return tok_error_string;
     literalType = tok_string;
     return tok_string_literal;
+  }
+
+  Token getSymbolTok() {
+    assert(lastChar == '"');
+
+    stringValue = "";
+    while (isprint(lastChar = Token(getNextChar())) && lastChar != '"')
+      stringValue += (char)lastChar;
+    if (lastChar != '"' || stringValue.empty())
+      return tok_error_symbol;
+    lastChar = Token(getNextChar());
+    return tok_symbol;
+
   }
 
   bool getNumber(int &val) {
@@ -767,12 +782,7 @@ private:
     }
 
     if (lastChar == '"') { // Symbol
-      stringValue = "";
-      while (isprint(lastChar = Token(getNextChar())) && lastChar != '"')
-        stringValue += (char)lastChar;
-      if (lastChar != '"')
-        return tok_error_symbol;
-      return tok_symbol;
+      return getSymbolTok();
     }
 
     // MARK: number literals
