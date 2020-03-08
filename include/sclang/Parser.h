@@ -1083,8 +1083,12 @@ private:
       } else if (binOp == tok_sbracket_open) {
         lhs = ParseIndexedVariable(std::move(lhs));
         continue;
+      } else if (binOp == tok_integer_literal || binOp == tok_real_number_literal) {
+        binOp = tok_minus;
+        lexer.consumeMinus();
+      } else {
+        lexer.consume(binOp);
       }
-      lexer.consume(binOp);
       auto loc = lexer.getLastLocation();
 
       // Parse the primary expression after the binary operator.
@@ -1154,6 +1158,12 @@ private:
     case tok_minus:
     case tok_plus:
       return pred_add;
+    case tok_integer_literal:
+    case tok_real_number_literal:
+      if (lexer.isNegativeValue())
+        return pred_add;
+      else
+        return pred_none;
 
     case tok_times:
     case tok_divide:
@@ -1226,7 +1236,7 @@ private:
     }
 
     if (lexer.getCurToken() != tok_sbracket_close)
-      return parseError<ExpressionAST>(tok_parenthese_close, "to end indices");
+      return parseError<ExpressionAST>(tok_sbracket_close, "to end indices");
     lexer.consume(tok_sbracket_close);
 
     return std::make_unique<IndexedVariableAST>(std::move(loc), std::move(base), std::move(indices));

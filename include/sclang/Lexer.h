@@ -206,6 +206,20 @@ public:
     getNextToken();
   }
 
+  void consumeMinus() {
+    assert(isNegativeValue());
+    if (curTok == tok_integer_literal)
+      intVal = -intVal;
+    if (curTok == tok_real_number_literal)
+      realVal = -realVal;
+    negative = false;
+  }
+
+  bool isNegativeValue() {
+    assert(curTok == tok_integer_literal || curTok == tok_real_number_literal);
+    return negative;
+  }
+
   Token getLiteralType() {
     return literalType;
   }
@@ -504,9 +518,11 @@ private:
 
   Token getNumberLiteralTok() {
     stringValue = "";
+    negative = false;
 
     if (lastChar == '-') {
       stringValue = "-";
+      negative = true;
       lastChar = Token(getNextChar());
       if (!isdigit(lastChar))
         return Token('-');
@@ -873,6 +889,9 @@ private:
 
   /// If the current Token is an identifier, symbol, or string, this string contains the value.
   std::string stringValue;
+
+  /// If the current Token is a number literal, then true if that number is negative.
+  bool negative = false;
 
   /// If the current Token is a number, this contains the value.
   float realVal = 0;

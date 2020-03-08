@@ -1,0 +1,69 @@
+// RUN: sclang --emit=ast %s 2>&1 | FileCheck %s
+
+function_block expressions
+
+var_input
+  a : int;
+  b : int;
+end_var
+
+var_output
+  c : int;
+end_var
+
+begin
+// CHECK: CodeSection
+
+  c := a - 1;
+// CHECK-NEXT: ValueAssignment
+// CHECK-NEXT:   BinaryExpression :=
+// CHECK-NEXT:     SimpleVariable c
+// CHECK-NEXT:     BinaryExpression -
+// CHECK-NEXT:       SimpleVariable a
+// CHECK-NEXT:       IntegerConstant 1
+
+  c := a-1;
+// CHECK-NEXT: ValueAssignment
+// CHECK-NEXT:   BinaryExpression :=
+// CHECK-NEXT:     SimpleVariable c
+// CHECK-NEXT:     BinaryExpression -
+// CHECK-NEXT:       SimpleVariable a
+// CHECK-NEXT:       IntegerConstant 1
+
+  c := a + b;
+// CHECK-NEXT: ValueAssignment
+// CHECK-NEXT:   BinaryExpression :=
+// CHECK-NEXT:     SimpleVariable c
+// CHECK-NEXT:     BinaryExpression +
+// CHECK-NEXT:       SimpleVariable a
+// CHECK-NEXT:       SimpleVariable b
+
+  c := a * b;
+// CHECK-NEXT: ValueAssignment
+// CHECK-NEXT:   BinaryExpression :=
+// CHECK-NEXT:     SimpleVariable c
+// CHECK-NEXT:     BinaryExpression *
+// CHECK-NEXT:       SimpleVariable a
+// CHECK-NEXT:       SimpleVariable b
+
+  c := a + 2 * b;
+// CHECK-NEXT: ValueAssignment
+// CHECK-NEXT:   BinaryExpression :=
+// CHECK-NEXT:     SimpleVariable c
+// CHECK-NEXT:     BinaryExpression +
+// CHECK-NEXT:       SimpleVariable a
+// CHECK-NEXT:       BinaryExpression *
+// CHECK-NEXT:         IntegerConstant 2
+// CHECK-NEXT:         SimpleVariable b
+
+  c := a * 2 + b;
+// CHECK-NEXT: ValueAssignment
+// CHECK-NEXT:   BinaryExpression :=
+// CHECK-NEXT:     SimpleVariable c
+// CHECK-NEXT:     BinaryExpression +
+// CHECK-NEXT:       BinaryExpression *
+// CHECK-NEXT:         SimpleVariable a
+// CHECK-NEXT:         IntegerConstant 2
+// CHECK-NEXT:       SimpleVariable b
+
+end_function_block
