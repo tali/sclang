@@ -516,6 +516,8 @@ private:
 
   mlir::Type getType(const ElementaryDataTypeAST &type) {
     switch(type.getType()) {
+    case ElementaryDataTypeAST::Type_Void:
+      return builder.getNoneType();
     case ElementaryDataTypeAST::Type_Bool:
       return builder.getI1Type();
     case ElementaryDataTypeAST::Type_Byte:
