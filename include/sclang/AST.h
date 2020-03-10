@@ -136,12 +136,14 @@ public:
 };
 
 class DataBlockAST : public UnitAST {
+  std::unique_ptr<DataTypeSpecAST> type;
   std::unique_ptr<DBAssignmentSectionAST> assignments;
 
 public:
-  DataBlockAST(const std::string & identifier, Location loc, std::vector<std::unique_ptr<BlockAttributeAST>> attrs, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<DBAssignmentSectionAST> assignments)
-    : UnitAST(Unit_DataBlock, identifier, loc, std::move(attrs), std::move(declarations)), assignments(std::move(assignments)) {}
+  DataBlockAST(const std::string & identifier, Location loc, std::vector<std::unique_ptr<BlockAttributeAST>> attrs, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<DataTypeSpecAST> type, std::unique_ptr<DBAssignmentSectionAST> assignments)
+    : UnitAST(Unit_DataBlock, identifier, loc, std::move(attrs), std::move(declarations)), type(std::move(type)), assignments(std::move(assignments)) {}
 
+  const DataTypeSpecAST * getType() const { return type.get(); }
   const DBAssignmentSectionAST * getAssignments() const { return assignments.get(); }
 
   /// LLVM style RTTI
@@ -152,8 +154,8 @@ class UserDefinedTypeAST : public UnitAST {
   std::unique_ptr<DataTypeSpecAST> type;
 
 public:
-  UserDefinedTypeAST(const std::string & identifier, Location loc, std::vector<std::unique_ptr<BlockAttributeAST>> attrs, std::unique_ptr<DataTypeSpecAST> type)
-    : UnitAST(Unit_UserDefinedDataType, std::move(identifier), std::move(loc), std::move(attrs), nullptr), type(std::move(type)) {}
+  UserDefinedTypeAST(const std::string & identifier, Location loc, std::vector<std::unique_ptr<BlockAttributeAST>> attrs, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<DataTypeSpecAST> type)
+    : UnitAST(Unit_UserDefinedDataType, std::move(identifier), std::move(loc), std::move(attrs), std::move(declarations)), type(std::move(type)) {}
 
   const DataTypeSpecAST * getType() const { return type.get(); }
 

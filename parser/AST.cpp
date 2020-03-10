@@ -201,7 +201,7 @@ void ASTDumper::dump(const DataBlockAST *unit) {
   INDENT();
   llvm::errs() << "DataBlock " << unit->getIdentifier() << "\n";
   dump(unit->getAttributes());
-  dump(unit->getDeclarations());
+  dump(unit->getType());
   dump(unit->getAssignments());
 }
 

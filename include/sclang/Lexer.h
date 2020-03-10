@@ -230,6 +230,11 @@ public:
     return stringValue;
   }
 
+  llvm::StringRef getIdentifierLower() {
+    assert(curTok == tok_identifier);
+    return stringLowerValue;
+  }
+
   llvm::StringRef getSymbol() {
     assert(curTok == tok_symbol);
     return stringValue;
@@ -301,6 +306,7 @@ private:
       stringValue += (char)lastChar;
       lower += (char)tolower(lastChar);
     }
+    stringLowerValue = lower;
 
     if (lower == "and")
       return tok_and;
@@ -899,6 +905,9 @@ private:
 
   /// If the current Token is an identifier, symbol, or string, this string contains the value.
   std::string stringValue;
+
+  /// If the current Token is an identifier, symbol, or string, this string contains the value in lower case.
+  std::string stringLowerValue;
 
   /// If the current Token is a number literal, then true if that number is negative.
   bool negative = false;

@@ -1,0 +1,53 @@
+// RUN: sclang --emit=ast %s 2>&1 | FileCheck %s
+
+function_block fb1
+// CHECK: FunctionBlock fb1
+
+var_input
+  in : int;
+end_var;
+
+var_output
+  out : int;
+end_var
+
+var
+  state : int := 0;
+end_var
+
+begin
+  out := state;
+  state := in;
+end_function_block
+
+
+///////////////////
+
+
+data_block db1
+// CHECK: DataBlock db1
+
+  fb1
+
+begin
+end_data_block
+
+
+///////////////////
+
+
+function fc1 : void
+// CHECK: Function fc1
+// CHECK: ElementaryDataType Void
+
+begin
+// CHECK: CodeSection
+
+  db1.fb1();
+// CHECK-NEXT: Subroutine
+// CHECK-NEXT:   FunctionCall
+// CHECK-NEXT:     BinaryExpression .
+// CHECK-NEXT:       SimpleVariable db1
+// CHECK-NEXT:       SimpleVariable fb1
+
+end_function
