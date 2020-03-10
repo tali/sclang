@@ -13,7 +13,7 @@ const
 // CHECK-NEXT: ConstantDeclaration I1
 // CHECK-NEXT: IntegerConstant 0 Type INT
 
-  I2 := DI#0;
+  I2 := L#0;
 // CHECK-NEXT: ConstantDeclaration I2
 // CHECK-NEXT: IntegerConstant 0 Type DINT
 

@@ -470,7 +470,7 @@ private:
       if (lower == "b") return tok_byte;
       if (lower == "i") return tok_int;
       if (lower == "d") return tok_date;
-      if (lower == "di") return tok_dint;
+      if (lower == "l") return tok_dint;
       if (lower == "dt") return tok_date_and_time;
       if (lower == "dw") return tok_dword;
       if (lower == "t") return tok_time;
