@@ -371,6 +371,8 @@ private:
 
   mlir::Value getRValue(const ExpressionAST &expr) {
     auto memref = getLValue(expr);
+    if (!memref)
+      return nullptr;
     return builder.create<LoadOp>(loc(expr.loc()), memref);
   }
 
@@ -613,7 +615,11 @@ private:
     for (const auto & ifThen : ifThenElse.getThens()) {
       auto location = loc(ifThen->loc());
       auto condition = mlirGen(*ifThen->getCondition());
+      if (!condition)
+        return mlir::failure();
       auto cond = builder.create<IfThenElseOp>(location, condition);
+      if (!cond)
+        return mlir::failure();
       if (first) {
         old = builder.saveInsertionPoint();
         first = false;
