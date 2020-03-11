@@ -29,6 +29,7 @@ target_link_libraries(sclang
     MLIRAnalysis
     MLIRIR
     MLIRParser
+    MLIRSideEffects
     MLIRTransforms
 )
 
