@@ -23,6 +23,7 @@
 #define SCL_OPS
 
 include "mlir/IR/OpBase.td"
+include "mlir/Interfaces/SideEffects.td"
 
 // Provide a definition of the 'scl' dialect in the ODS framework so that we
 // can define our operations.
@@ -72,7 +73,7 @@ class UnaryArithmeticOp<string mnemonic, list<OpTrait> traits = []> :
     AssemblyFormat<"attr-dict $rhs `:` type($rhs)">;
 
 class FuncTerminatorOp<string mnemonic, list<OpTrait> traits = []> :
-    SCL_Op<mnemonic, !listconcat(traits, [Terminator, HasParent<"FuncOp">])>,
+    SCL_Op<mnemonic, !listconcat(traits, [NoSideEffect, Terminator, HasParent<"FuncOp">])>,
     AssemblyFormat<"attr-dict">;
 
 //
@@ -126,7 +127,7 @@ def StoreOp : SCL_Op<"store", [SameOperandsElementType]> {
 // MAKR: control flow
 //
 
-def TerminatorOp : SCL_Op<"terminator", [Terminator]> {
+def TerminatorOp : SCL_Op<"terminator", [NoSideEffect, Terminator]> {
   let assemblyFormat = "attr-dict";
 }
 
@@ -149,7 +150,7 @@ def IfThenElseOp : SCL_Op<"if">, SingleBlockImplicitTerminator<"terminator"> {
 // MARK: terminator operations
 //
 
-def ContinueOp : SCL_Op<"continue", [Terminator]> {
+def ContinueOp : SCL_Op<"continue", [NoSideEffect, Terminator]> {
   let summary = "continue operation";
   let description = [{
     A CONTINUE statement is used to terminate the execution of the current iteration of a loop (initiated by a FOR, WHILE or REPEAT statement) and to restart processing within the loop.
