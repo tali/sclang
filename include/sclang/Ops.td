@@ -88,7 +88,7 @@ def TempVariableOp : SCL_Op<"tmpvar"> {
   let assemblyFormat = "$name attr-dict `:` type($result)";
 }
 
-def ConstantOp : SCL_Op<"constant", [NoSideEffect]> {
+def ConstantOp : SCL_Op<"constant", [ConstantLike, NoSideEffect]> {
   let summary = "literal constant";
   let arguments = (ins AnyAttr:$value);
   let results = (outs AnyType:$result);
