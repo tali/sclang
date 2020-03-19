@@ -56,6 +56,21 @@ using llvm::Twine;
 
 namespace {
 
+class VariableSymbol {
+  mlir::Type type;
+  mlir::Value value;
+  bool memref;
+
+public:
+  VariableSymbol() : type(), value(), memref(false) {}
+  VariableSymbol(mlir::Type type, mlir::Value value, bool memref) :
+    type(type), value(value), memref(memref) {}
+
+  mlir::Type getType() const { return type; }
+  mlir::Value getValue() const { return value; }
+  bool isMemref() const { return memref; }
+};
+
 /// Implementation of a simple MLIR emission from the SCL AST.
 ///
 /// This will emit operations that are specific to the SCL language, preserving
@@ -103,7 +118,7 @@ private:
   /// Entering a function creates a new scope, and the function arguments are
   /// added to the mapping. When the processing of a function is terminated, the
   /// scope is destroyed and the mappings created in this scope are dropped.
-  llvm::ScopedHashTable<StringRef, mlir::Value> symbolTable;
+  llvm::ScopedHashTable<StringRef, VariableSymbol> symbolTable;
 
   /// Helper conversion for a SCL AST location to an MLIR location.
   mlir::Location loc(Location loc) {
@@ -113,10 +128,11 @@ private:
 
   /// Declare a variable in the current scope, return success if the variable
   /// wasn't declared yet.
-  mlir::LogicalResult declare(llvm::StringRef var, mlir::Value value) {
+  mlir::LogicalResult declare(llvm::StringRef var, mlir::Type type, mlir::Value value, bool memref) {
+    assert(!var.empty());
     if (symbolTable.count(var))
       return mlir::failure();
-    symbolTable.insert(var, value);
+    symbolTable.insert(var, VariableSymbol(type, value, memref));
     return mlir::success();
   }
 
@@ -134,31 +150,19 @@ private:
     }
   }
 
-  /// Append all the types of a variable declaration to an array
-  void addVariableTypes(const VariableDeclarationSubsectionAST & decls, std::vector<mlir::Type> & types) {
+  /// Append all the types and names of a variable declaration to an array
+  void addVariables(const VariableDeclarationSubsectionAST & decls, std::vector<mlir::Type> & types, std::vector<std::string> & names) {
     const auto & values = decls.getValues();
-    types.reserve(types.size() + values.size());
+    types.reserve(types.size() + types.size());
+    names.reserve(names.size() + names.size());
     for (const auto & decl : values) {
       auto type = getType(*decl->getDataType());
-      types.push_back(type);
-    }
-  }
-
-  /// Append all the types of a variable declaration to an array
-  void addVariables(const VariableDeclarationSubsectionAST & decls, std::vector<std::tuple<mlir::Type, llvm::Optional<mlir::Value>, std::string, mlir::Location>> & vars) {
-    const auto & values = decls.getValues();
-    vars.reserve(vars.size() + values.size());
-    for (const auto & decl : values) {
-      auto type = getType(*decl->getDataType());
-      llvm::Optional<mlir::Value> init;
-      auto initAst = decl->getInitializer();
-      if (initAst)
-        init = mlirGen(*initAst.getValue());
+      // TODO: initializer
       for (const auto & var : decl->getVars()) {
         // TODO: attributes
         auto name = std::string(var->getIdentifier());
-        auto location = loc(var->loc());
-        vars.push_back(std::make_tuple(type, init, name, location));
+        types.push_back(type);
+        names.push_back(name);
       }
     }
   }
@@ -170,14 +174,19 @@ private:
 
   mlir::FuncOp mlirGen(const FunctionAST &func) {
     auto location = loc(func.loc());
+    std::string name(func.getIdentifier());
 
     // Create a scope in the symbol table to hold variable declarations.
-    llvm::ScopedHashTableScope<StringRef, mlir::Value> var_scope(symbolTable);
+    llvm::ScopedHashTableScope<StringRef, VariableSymbol> var_scope(symbolTable);
 
-    std::vector<mlir::Type> inputs;
-    std::vector<mlir::Type> outputs;
+    std::vector<mlir::Type> input_types;
+    std::vector<std::string> input_names;
+    std::vector<mlir::Type> output_types;
+    std::vector<std::string> output_names;
     std::vector<const VariableDeclarationSubsectionAST*> tempvar;
-    outputs.push_back(getType(*func.getType()));
+    // register function result as output variable
+    output_types.push_back(getType(*func.getType()));
+    output_names.push_back(name);
 
     // Parse the declaration subsections
     const auto & declarations = func.getDeclarations()->getDecls();
@@ -193,14 +202,14 @@ private:
         const auto & vardecls = llvm::cast<VariableDeclarationSubsectionAST>(*decl);
         switch (vardecls.getKind()) {
         case VariableDeclarationSubsectionAST::VarInput:
-          addVariableTypes(vardecls, inputs);
+          addVariables(vardecls, input_types, input_names);
           break;
         case VariableDeclarationSubsectionAST::VarOutput:
-          addVariableTypes(vardecls, outputs);
+          addVariables(vardecls, output_types, output_names);
           break;
         case VariableDeclarationSubsectionAST::VarInOut:
-          addVariableTypes(vardecls, inputs);
-          addVariableTypes(vardecls, outputs);
+          addVariables(vardecls, input_types, input_names);
+          addVariables(vardecls, output_types, output_names);
           break;
         case VariableDeclarationSubsectionAST::Var:
         case VariableDeclarationSubsectionAST::VarTemp:
@@ -211,8 +220,8 @@ private:
     }
     // Create an MLIR function
 
-    auto func_type = builder.getFunctionType(inputs, outputs);
-    auto function =  mlir::FuncOp::create(location, func.getIdentifier(), func_type);
+    auto func_type = builder.getFunctionType(input_types, output_types);
+    auto function =  mlir::FuncOp::create(location, name, func_type);
     if (!function)
       return nullptr;
 
@@ -226,6 +235,16 @@ private:
     // function.
     builder.setInsertionPointToStart(&entryBlock);
 
+    // Declare all the function arguments in the symbol table.
+    for (const auto &name_value :
+         llvm::zip(input_types, input_names, entryBlock.getArguments())) {
+      auto type = std::get<0>(name_value);
+      auto name = std::get<1>(name_value);
+      auto value = std::get<2>(name_value);
+      if (failed(declare(name, type, value, false)))
+        return nullptr;
+    }
+
     // prologue: stack space for temporary variables
     for (const auto subsection : tempvar) {
       for (const auto & decl : subsection->getValues()) {
@@ -235,12 +254,22 @@ private:
         for (const auto & var : decl->getVars()) {
           auto location = loc(var->loc());
           auto varStorage = builder.create<TempVariableOp>(location, memRefType, builder.getStringAttr(var->getIdentifier()));
-          declare(var->getIdentifier(), varStorage);
+          declare(var->getIdentifier(), type, varStorage, true);
           if (init) {
             builder.create<StoreOp>(location, varStorage, mlirGen(*init.getValue()));
           }
         }
       }
+    }
+
+    // Declare all the function outputs in the symbol table.
+    for (const auto &name_value :
+         llvm::zip(output_types, output_names)) {
+      auto type = std::get<0>(name_value);
+      auto name = std::get<1>(name_value);
+      auto memRefType = mlir::MemRefType::get({}, type);
+      auto varStorage = builder.create<TempVariableOp>(location, memRefType, builder.getStringAttr(name));
+      declare(name, type, varStorage, true);
     }
 
     // Emit the body of the function.
@@ -297,7 +326,7 @@ private:
 
   /// Codegen a code section, return failure if one statement hit an error.
   mlir::LogicalResult mlirGen(const CodeSectionAST &code) {
-    ScopedHashTableScope<StringRef, mlir::Value> var_scope(symbolTable);
+    //ScopedHashTableScope<StringRef, mlir::Value> var_scope(symbolTable);
 
     for (auto &instr : code.getInstructions()) {
       // Generic expression dispatch codegen.
@@ -341,7 +370,7 @@ private:
     const auto & expr = llvm::cast<BinaryExpressionAST>(*instr.getExpression());
     assert(expr.getOp() == tok_assignment);
 
-    mlir::Value lhs = getLValue(*expr.getLhs());
+    mlir::Value lhs = mlirGenLValue(*expr.getLhs());
     if (!lhs)
       return mlir::failure();
     mlir::Value rhs = mlirGen(*expr.getRhs());
@@ -353,27 +382,20 @@ private:
     return mlir::success();
   }
 
-  mlir::Value getLValue(const ExpressionAST &expr) {
+  mlir::Value mlirGenLValue(const ExpressionAST &expr) {
     auto location = loc(expr.loc());
 
     switch(expr.getKind()) {
     default:
-      emitError(location) << "not a lvalue";
+      emitError(location) << "not a lvalue, kind " << (int)expr.getKind();
       return nullptr;
     case ExpressionAST::Expr_SimpleVariable:
-      return mlirGen(llvm::cast<SimpleVariableAST>(expr));
+      return mlirGenLValue(llvm::cast<SimpleVariableAST>(expr));
     case ExpressionAST::Expr_IndexedVariable:
       emitError(loc(expr.loc()))
       << "IndexedVariable not implemented"; // TODO: TBD
       return nullptr;
     }
-  }
-
-  mlir::Value getRValue(const ExpressionAST &expr) {
-    auto memref = getLValue(expr);
-    if (!memref)
-      return nullptr;
-    return builder.create<LoadOp>(loc(expr.loc()), memref);
   }
 
   mlir::Value mlirGen(const ExpressionAST &expr) {
@@ -385,16 +407,15 @@ private:
     case ExpressionAST::Expr_StringConstant:
       return mlirGen(llvm::cast<StringConstantAST>(expr));
     case ExpressionAST::Expr_SimpleVariable:
-    case ExpressionAST::Expr_IndexedVariable:
-      return getRValue(expr);
-    case ExpressionAST::Expr_FunctionCall:
-      emitError(loc(expr.loc()))
-      << "FunctionCall not implemented"; // TODO: TBD
-      return nullptr;
+      return mlirGen(llvm::cast<SimpleVariableAST>(expr));
     case ExpressionAST::Expr_Binary:
       return mlirGen(llvm::cast<BinaryExpressionAST>(expr));
     case ExpressionAST::Expr_Unary:
       return mlirGen(llvm::cast<UnaryExpressionAST>(expr));
+    default:
+      emitError(loc(expr.loc()))
+      << "expression kind not implemented"; // TODO: TBD
+      return nullptr;
     }
   }
 
@@ -421,9 +442,22 @@ private:
     auto location = loc(expr.loc());
     auto name = llvm::cast<SimpleVariableAST>(expr).getName();
 
-    if (auto variable = symbolTable.lookup(name))
-      return variable;
+    auto variable = symbolTable.lookup(name);
+    if (variable.isMemref())
+      return builder.create<LoadOp>(location, variable.getValue());
+    if (variable.getValue())
+      return variable.getValue();
     emitError(location) << "unknown variable '" << name << "'";
+    return nullptr;
+  }
+
+  mlir::Value mlirGenLValue(const SimpleVariableAST &expr) {
+    auto location = loc(expr.loc());
+    auto name = llvm::cast<SimpleVariableAST>(expr).getName();
+    auto variable = symbolTable.lookup(name);
+    if (variable.isMemref())
+      return variable.getValue();
+    emitError(location) << "not a lvalue, variable " << name;
     return nullptr;
   }
 

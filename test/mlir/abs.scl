@@ -1,0 +1,39 @@
+// RUN: sclang --emit=mlir %s 2>&1 | FileCheck %s
+
+function abs : int
+// CHECK:      func @abs(%arg0: i16) -> i16
+// CHECK-NEXT:   [[RET:%[0-9]+]] = scl.tmpvar "abs" : memref<i16>
+
+var_input
+ in : INT;
+end_var;
+
+begin
+  if in < 0 then
+// CHECK: [[C0:%[0-9]+]] = scl.constant 0 : i16
+// CHECK: [[LT:%[0-9]+]] = scl.cmplt %arg0, [[C0]]
+// CHECK: scl.if
+
+    abs := -in;
+// CHECK: [[NEG:%[0-9]+]] = scl.negate %arg0
+// CHECK: scl.store [[RET]] : memref<i16> = [[NEG]]
+// CHECK: scl.terminator
+
+  elsif in > 0 then
+// CHECK: [[C0:%[0-9]+]] = scl.constant 0 : i16
+// CHECK: [[GT:%[0-9]+]] = scl.cmpgt %arg0, [[C0]]
+// CHECK: scl.if
+
+    abs := in;
+// CHECK: scl.store [[RET]] : memref<i16> = %arg0
+// CHECK: scl.terminator
+
+  else
+
+    abs := 0;
+// CHECK: [[C0:%[0-9]+]] = scl.constant 0 : i16
+// CHECK: scl.store [[RET]] : memref<i16> = [[C0]]
+// CHECK: scl.terminator
+
+  end_if;
+end_function
