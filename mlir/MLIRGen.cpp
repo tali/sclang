@@ -185,8 +185,11 @@ private:
     std::vector<std::string> output_names;
     std::vector<const VariableDeclarationSubsectionAST*> tempvar;
     // register function result as output variable
-    output_types.push_back(getType(*func.getType()));
-    output_names.push_back(name);
+    auto retType = getType(*func.getType());
+    if (!retType.isa<mlir::NoneType>()) {
+      output_types.push_back(retType);
+      output_names.push_back(name);
+    }
 
     // Parse the declaration subsections
     const auto & declarations = func.getDeclarations()->getDecls();
