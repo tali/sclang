@@ -46,13 +46,13 @@ class IntegerConstantAST;
 
 // MARK: C.1 Subunits of SCL Source Files
 
-class BlockAttributeAST {
+class AttributeAST {
   Location location;
   std::string name;
   std::string value;
 
 public:
-  BlockAttributeAST(Location location, llvm::StringRef name, llvm::StringRef value) :
+  AttributeAST(Location location, llvm::StringRef name, llvm::StringRef value) :
     location(std::move(location)), name(std::move(name)), value(std::move(value)) {}
 
   const Location &loc() const { return location; }
@@ -71,14 +71,14 @@ public:
     Unit_UserDefinedDataType,
   };
 
-  UnitAST(UnitASTKind kind, const std::string & identifier, Location location, std::vector<std::unique_ptr<BlockAttributeAST>> attrs, std::unique_ptr<DeclarationSectionAST> declarations)
+  UnitAST(UnitASTKind kind, const std::string & identifier, Location location, std::vector<std::unique_ptr<AttributeAST>> attrs, std::unique_ptr<DeclarationSectionAST> declarations)
       : kind(kind), identifier(identifier), attributes(std::move(attrs)), declarations(std::move(declarations)), location(location) {}
 
   virtual ~UnitAST() = default;
 
   UnitASTKind getKind() const { return kind; }
   llvm::StringRef getIdentifier() const { return identifier; }
-  llvm::ArrayRef<std::unique_ptr<BlockAttributeAST>> getAttributes() const { return attributes; }
+  llvm::ArrayRef<std::unique_ptr<AttributeAST>> getAttributes() const { return attributes; }
   const DeclarationSectionAST * getDeclarations() const { return declarations.get(); }
 
   const Location &loc() const { return location; }
@@ -86,7 +86,7 @@ public:
 private:
   const UnitASTKind kind;
   std::string identifier;
-  std::vector<std::unique_ptr<BlockAttributeAST>> attributes;
+  std::vector<std::unique_ptr<AttributeAST>> attributes;
   std::unique_ptr<DeclarationSectionAST> declarations;
   Location location;
 };
@@ -98,7 +98,7 @@ class OrganizationBlockAST : public UnitAST {
   std::unique_ptr<CodeSectionAST> code;
 
 public:
-  OrganizationBlockAST(const std::string & identifier, Location loc, std::vector<std::unique_ptr<BlockAttributeAST>> attrs, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<CodeSectionAST> code)
+  OrganizationBlockAST(const std::string & identifier, Location loc, std::vector<std::unique_ptr<AttributeAST>> attrs, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<CodeSectionAST> code)
     : UnitAST(Unit_OrganizationBlock, identifier, std::move(loc), std::move(attrs), std::move(declarations)), code(std::move(code)) {}
 
   const CodeSectionAST * getCode() const { return code.get(); }
@@ -112,7 +112,7 @@ class FunctionAST : public UnitAST {
   std::unique_ptr<CodeSectionAST> code;
 
 public:
-  FunctionAST(const std::string & identifier, Location loc, std::unique_ptr<DataTypeSpecAST> type, std::vector<std::unique_ptr<BlockAttributeAST>> attrs, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<CodeSectionAST> code)
+  FunctionAST(const std::string & identifier, Location loc, std::unique_ptr<DataTypeSpecAST> type, std::vector<std::unique_ptr<AttributeAST>> attrs, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<CodeSectionAST> code)
     : UnitAST(Unit_Function, identifier, std::move(loc), std::move(attrs), std::move(declarations)), type(std::move(type)), code(std::move(code)) {}
 
   const DataTypeSpecAST * getType() const { return type.get(); }
@@ -126,7 +126,7 @@ class FunctionBlockAST : public UnitAST {
   std::unique_ptr<CodeSectionAST> code;
 
 public:
-  FunctionBlockAST(const std::string & identifier, Location loc, std::vector<std::unique_ptr<BlockAttributeAST>> attrs, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<CodeSectionAST> code)
+  FunctionBlockAST(const std::string & identifier, Location loc, std::vector<std::unique_ptr<AttributeAST>> attrs, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<CodeSectionAST> code)
     : UnitAST(Unit_FunctionBlock, identifier, loc, std::move(attrs), std::move(declarations)), code(std::move(code)) {}
 
   const CodeSectionAST * getCode() const { return code.get(); }
@@ -140,7 +140,7 @@ class DataBlockAST : public UnitAST {
   std::unique_ptr<DBAssignmentSectionAST> assignments;
 
 public:
-  DataBlockAST(const std::string & identifier, Location loc, std::vector<std::unique_ptr<BlockAttributeAST>> attrs, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<DataTypeSpecAST> type, std::unique_ptr<DBAssignmentSectionAST> assignments)
+  DataBlockAST(const std::string & identifier, Location loc, std::vector<std::unique_ptr<AttributeAST>> attrs, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<DataTypeSpecAST> type, std::unique_ptr<DBAssignmentSectionAST> assignments)
     : UnitAST(Unit_DataBlock, identifier, loc, std::move(attrs), std::move(declarations)), type(std::move(type)), assignments(std::move(assignments)) {}
 
   const DataTypeSpecAST * getType() const { return type.get(); }
@@ -154,7 +154,7 @@ class UserDefinedTypeAST : public UnitAST {
   std::unique_ptr<DataTypeSpecAST> type;
 
 public:
-  UserDefinedTypeAST(const std::string & identifier, Location loc, std::vector<std::unique_ptr<BlockAttributeAST>> attrs, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<DataTypeSpecAST> type)
+  UserDefinedTypeAST(const std::string & identifier, Location loc, std::vector<std::unique_ptr<AttributeAST>> attrs, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<DataTypeSpecAST> type)
     : UnitAST(Unit_UserDefinedDataType, std::move(identifier), std::move(loc), std::move(attrs), std::move(declarations)), type(std::move(type)) {}
 
   const DataTypeSpecAST * getType() const { return type.get(); }
@@ -241,32 +241,18 @@ public:
   static bool classof(const DeclarationSubsectionAST *D) { return D->getKind() == Decl_JumpLabel; }
 };
 
-class VariableAttributeAST {
-  Location location;
-  std::string key;
-  std::string value;
-
-public:
-  VariableAttributeAST(Location loc, llvm::StringRef key, llvm::StringRef value)
-    : location(loc),  key(key), value(value) {}
-
-  const Location &loc() const { return location; }
-  llvm::StringRef getKey() const { return key; }
-  llvm::StringRef getValue() const { return value; }
-};
-
 class VariableIdentifierAST {
   Location location;
   std::string identifier;
-  std::vector<std::unique_ptr<VariableAttributeAST>> attributes;
+  std::vector<std::unique_ptr<AttributeAST>> attributes;
 
 public:
   const Location &loc() const { return location; }
     llvm::StringRef getIdentifier() const { return identifier; }
-    llvm::ArrayRef<std::unique_ptr<VariableAttributeAST>> getAttributes() const { return attributes; }
+    llvm::ArrayRef<std::unique_ptr<AttributeAST>> getAttributes() const { return attributes; }
 
     VariableIdentifierAST(Location loc, llvm::StringRef identifier,
-                           std::vector<std::unique_ptr<VariableAttributeAST>> attributes)
+                           std::vector<std::unique_ptr<AttributeAST>> attributes)
       : location(loc), identifier(identifier), attributes(std::move(attributes)) {}
 };
 

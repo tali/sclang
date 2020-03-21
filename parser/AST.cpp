@@ -49,8 +49,8 @@ public:
 private:
   // Subunits of SCL Source Files
   void dump(const UnitAST *Node);
-  void dump(const llvm::ArrayRef<std::unique_ptr<BlockAttributeAST>> attr);
-  void dump(const BlockAttributeAST *attr);
+  void dump(const llvm::ArrayRef<std::unique_ptr<AttributeAST>> attr);
+  void dump(const AttributeAST *attr);
   void dump(const OrganizationBlockAST *node);
   void dump(const FunctionAST *node);
   void dump(const FunctionBlockAST *node);
@@ -65,7 +65,6 @@ private:
   void dump(const JumpLabelDeclarationSubsectionAST *node);
   void dump(const VariableDeclarationSubsectionAST *node);
   void dump(const VariableDeclarationAST *node);
-  void dump(const VariableAttributeAST *node);
   void dump(const VariableIdentifierAST *node);
   void dump(const DataTypeInitAST *node);
   void dump(const DataTypeSpecAST *node);
@@ -154,12 +153,12 @@ void ASTDumper::dump(const UnitAST *unit) {
   llvm::errs() << "<unknown Expr, kind " << unit->getKind() << ">\n";
 }
 
-void ASTDumper::dump(const BlockAttributeAST *attr) {
+void ASTDumper::dump(const AttributeAST *attr) {
   INDENT();
   llvm::errs() << "Attribute " << attr->getName() << " : " << attr->getValue() << "\n";
 }
 
-void ASTDumper::dump(llvm::ArrayRef<std::unique_ptr<BlockAttributeAST>> attrs) {
+void ASTDumper::dump(llvm::ArrayRef<std::unique_ptr<AttributeAST>> attrs) {
   if (attrs.empty()) return;
   INDENT();
   llvm::errs() << "Attributes\n";
@@ -295,11 +294,6 @@ void ASTDumper::dump(const VariableDeclarationAST *node) {
   auto init = node->getInitializer();
   if (init.hasValue())
     dump(init.getValue());
-}
-
-void ASTDumper::dump(const VariableAttributeAST *node) {
-  INDENT();
-  llvm::errs() << "VariableAttribute\n";
 }
 
 void ASTDumper::dump(const VariableIdentifierAST *node) {
