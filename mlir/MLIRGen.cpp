@@ -60,15 +60,17 @@ class VariableSymbol {
   mlir::Type type;
   mlir::Value value;
   bool memref;
+  bool direct;
 
 public:
-  VariableSymbol() : type(), value(), memref(false) {}
+  VariableSymbol() : type(), value(), memref(false), direct(false) {}
   VariableSymbol(mlir::Type type, mlir::Value value, bool memref) :
-    type(type), value(value), memref(memref) {}
+    type(type), value(value), memref(memref), direct(!memref) {}
 
   mlir::Type getType() const { return type; }
   mlir::Value getValue() const { return value; }
   bool isMemref() const { return memref; }
+  bool isDirect() const { return direct; }
 };
 
 /// Implementation of a simple MLIR emission from the SCL AST.
@@ -448,7 +450,7 @@ private:
     auto variable = symbolTable.lookup(name);
     if (variable.isMemref())
       return builder.create<LoadOp>(location, variable.getValue());
-    if (variable.getValue())
+    if (variable.isDirect())
       return variable.getValue();
     emitError(location) << "unknown variable '" << name << "'";
     return nullptr;
