@@ -140,7 +140,7 @@ template <typename T> static std::string loc(T *Node) {
 /// Dispatch to a generic expressions to the appropriate subclass using RTTI
 void ASTDumper::dump(const UnitAST *unit) {
 #define dispatch(CLASS)                                                        \
-  if (const CLASS *node = llvm::dyn_cast<CLASS>(unit))                               \
+  if (const CLASS *node = llvm::dyn_cast<CLASS>(unit))                         \
     return dump(node);
   dispatch(OrganizationBlockAST);
   dispatch(FunctionAST);
@@ -223,7 +223,7 @@ void ASTDumper::dump(const DeclarationSectionAST *section) {
 
 void ASTDumper::dump(const DeclarationSubsectionAST *subsection) {
 #define dispatch(CLASS)                                                        \
-  if (const CLASS *node = llvm::dyn_cast<CLASS>(subsection))                         \
+  if (const CLASS *node = llvm::dyn_cast<CLASS>(subsection))                   \
     return dump(node);
   dispatch(ConstantDeclarationSubsectionAST);
   dispatch(JumpLabelDeclarationSubsectionAST);
@@ -312,7 +312,7 @@ void ASTDumper::dump(const DataTypeInitAST *node) {
 
 void ASTDumper::dump(const DataTypeSpecAST *dataType) {
   #define dispatch(CLASS)                                                      \
-    if (const CLASS *node = llvm::dyn_cast<CLASS>(dataType))                         \
+    if (const CLASS *node = llvm::dyn_cast<CLASS>(dataType))                   \
       return dump(node);
     dispatch(ElementaryDataTypeAST);
     dispatch(StringDataTypeSpecAST);
@@ -441,8 +441,8 @@ void ASTDumper::dump(const CodeSectionAST *node) {
 }
 
 void ASTDumper::dump(const InstructionAST *code) {
-    #define dispatch(CLASS)                                                        \
-      if (const CLASS *node = llvm::dyn_cast<CLASS>(code))                         \
+    #define dispatch(CLASS)                                                    \
+      if (const CLASS *node = llvm::dyn_cast<CLASS>(code))                     \
         return dump(node);
       dispatch(JumpLabelAST);
       dispatch(ValueAssignmentAST);
@@ -551,9 +551,11 @@ void ASTDumper::dump(const StringConstantAST *node) {
 void ASTDumper::dump(const TimeConstantAST *node) {
   INDENT();
   llvm::errs() << "TimeConstant ";
-  llvm::errs() << llvm::formatv("{0,0+4}-{1,0+2}-{2,0+2} {3,0+2}:{4,0+2}:{5,0+2}.{6,0+3}",
-                                node->getYear(), node->getMonth(), node->getDay(),
-                                node->getHour(), node->getMinute(), node->getSec(), node->getMSec());
+  llvm::errs() << llvm::formatv(
+    "{0,0+4}-{1,0+2}-{2,0+2} {3,0+2}:{4,0+2}:{5,0+2}.{6,0+3}",
+    node->getYear(), node->getMonth(), node->getDay(),
+    node->getHour(), node->getMinute(), node->getSec(), node->getMSec()
+  );
   llvm::errs() << " Type " << node->getType() << "\n";
 }
 
@@ -599,7 +601,7 @@ void ASTDumper::dump(const IfThenElseAST *node) {
 
 void ASTDumper::dump(const CaseValueAST *value) {
 #define dispatch(CLASS)                                                        \
-  if (const CLASS *node = llvm::dyn_cast<CLASS>(value))                         \
+  if (const CLASS *node = llvm::dyn_cast<CLASS>(value))                        \
     return dump(node);
   dispatch(CaseValueSingleAST);
   dispatch(CaseValueRangeAST);

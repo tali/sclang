@@ -206,6 +206,7 @@ public:
     getNextToken();
   }
 
+  /// Split a negative value token into a minus and a number, then consume the minus.
   void consumeMinus() {
     assert(isNegativeValue());
     if (curTok == tok_integer_literal)
@@ -215,46 +216,57 @@ public:
     negative = false;
   }
 
+  /// Return `true` if the current token starts with a minus.
+  /// The token can either be used as negative value or the minus can be consumed by `consumeMinus()`.
   bool isNegativeValue() {
     assert(curTok == tok_integer_literal || curTok == tok_real_number_literal);
     return negative;
   }
 
+  /// Return the type of the literal expression, or `tok_none` if there is none.
+  /// The type can be specified as prefix, e.g. as `INT#23`.
   Token getLiteralType() {
+    assert(curTok == tok_integer_literal || curTok == tok_real_number_literal || curTok == tok_string_literal || curTok == tok_time_literal);
     return literalType;
   }
 
-  /// Return the current identifier (prereq: getCurToken() == tok_identifier)
+  /// Return the current identifier, when the current token is an identifier..
   llvm::StringRef getIdentifier() {
     assert(curTok == tok_identifier);
     return stringValue;
   }
 
+  /// Like `getIdentifier()`, but returns current identifier as lower-case string.
   llvm::StringRef getIdentifierLower() {
     assert(curTok == tok_identifier);
     return stringLowerValue;
   }
 
+  /// Return the name of a symbol, when the current token is a symbol
   llvm::StringRef getSymbol() {
     assert(curTok == tok_symbol);
     return stringValue;
   }
 
+  /// Return the value of an integer literal.
   int64_t getIntegerValue() {
     assert(curTok == tok_integer_literal);
     return intVal;
   }
 
+  /// Return the value of a real number literal.
   float getRealNumberValue() {
     assert(curTok == tok_real_number_literal);
     return realVal;
   }
 
+  /// Return the value of a number literal, as raw string value.
   llvm::StringRef getStringValue() {
     assert(curTok == tok_string_literal || curTok == tok_real_number_literal);
     return stringValue;
   }
 
+  /// Get the value of a time literal, separated into time components.
   void getTimeValue(int &year, int &mon, int &day, int &hour, int &min, int &sec, int &msec) {
     assert(curTok == tok_time_literal);
     year = yearVal;
@@ -299,6 +311,10 @@ private:
     return nextchar;
   }
 
+  // MARK: reserved words
+
+  /// Return token for reserved word.
+  /// If the current token is not a reserved word, then interpret it as an identifier.
   Token getReservedWordTok() {
     stringValue = (char)lastChar;
     std::string lower { (char)tolower(lastChar) };
@@ -487,6 +503,9 @@ private:
     return tok_identifier;
   }
 
+  /// Return a literal constant based on the given type.
+  /// Assumes that we stopped parsing at a `#` character which separates
+  /// the type of a literal constant from the value and consumes the entire literal.
   Token getTypedLiteralTok(Token type) {
     assert(lastChar == Token('#'));
     literalType = type;
@@ -522,6 +541,10 @@ private:
     }
   }
 
+  // MARK: number literals
+
+  /// Return a number literal, consumes all numeric characters.
+  /// The value of the literal can be obtained with `getIntegerValue()`, `getRealNumberValue()`, or `getStringValue()`.
   Token getNumberLiteralTok() {
     stringValue = "";
     negative = false;
@@ -607,6 +630,10 @@ private:
     }
   }
 
+  // MARK: strings and symbols
+
+  /// Return a string literal.
+  /// Consumes all characters belonging to the string. The literal value can be obtained using `getStringValue`.
   Token getStringLiteralTok() {
     assert(lastChar == '\'');
 
@@ -648,6 +675,9 @@ private:
     return tok_string_literal;
   }
 
+  /// Return a symbol token.
+  /// Consumes all characters belonging to the symbol;
+  /// the symbol name can be retrieved by `getSymbolValue()`.
   Token getSymbolTok() {
     assert(lastChar == '"');
 
@@ -661,6 +691,9 @@ private:
 
   }
 
+  // MARK: date and time literals
+
+  /// Consume a number and write it to `val`.
   bool getNumber(int &val) {
     std::string number;
     while (isdigit(lastChar) || lastChar==Token('_')) {
@@ -671,6 +704,7 @@ private:
     return llvm::to_integer(number, val);
   }
 
+  /// Return a date literal token (YYYY-MM-DD).
   Token getDateLiteralTok() {
     if (!getNumber(yearVal) || lastChar != Token('-'))
       return tok_error_date;
@@ -684,6 +718,7 @@ private:
     return tok_time_literal;
   }
 
+  /// Return a time literal token (HH:MM:SS[.msec]).
   Token getTimeOfDayLiteralTok() {
     if (!getNumber(hourVal) || lastChar != Token(':'))
       return tok_error_date;
@@ -701,6 +736,7 @@ private:
     return tok_time_literal;
   }
 
+  /// Return a combined date and time literal (YYYY-MM-DD-HH:MM:SS[.msec]).
   Token getDateAndTimeLiteralTok() {
     if (getDateLiteralTok() != tok_time_literal)
       return tok_error_date;
@@ -713,6 +749,7 @@ private:
     return tok_time_literal;
   }
 
+  /// Return a time duration literal ([NNd] [NNh] [NNm] [NNs]).
   Token getTimeLiteralTok() {
     enum { None, Day, Hour, Min, Sec, MSec } pos, lastpos = None;
     while (isdigit(lastChar) || lastChar==Token('_')) {
@@ -750,6 +787,87 @@ private:
     return tok_time_literal;
   }
 
+  // MARK: operators and comments
+
+  Token getOperatorTok() {
+    switch (lastChar) {
+    default:
+      assert(false);
+    case '.':
+      lastChar = Token(getNextChar());
+      if (lastChar == '.') {
+        lastChar = Token(getNextChar());
+        return tok_range;
+      }
+      return tok_dot;
+    case ':':
+      lastChar = Token(getNextChar());
+      if (lastChar == '=') {
+        lastChar = Token(getNextChar());
+        return tok_assignment;
+      }
+      return tok_colon;
+    case '*':
+      lastChar = Token(getNextChar());
+      if (lastChar == '*') {
+        lastChar = Token(getNextChar());
+        return tok_exponent;
+      }
+      return tok_times;
+    case '>':
+      lastChar = Token(getNextChar());
+      if (lastChar == '=') {
+        lastChar = Token(getNextChar());
+        return tok_cmp_ge;
+      }
+      return tok_cmp_gt;
+    case '<':
+      lastChar = Token(getNextChar());
+      if (lastChar == '=') {
+        lastChar = Token(getNextChar());
+        return tok_cmp_le;
+      } else if (lastChar == '>') {
+        lastChar = Token(getNextChar());
+        return tok_cmp_ne;
+      }
+      return tok_cmp_lt;
+    case '=':
+      lastChar = Token(getNextChar());
+      if (lastChar == '>') {
+        lastChar = Token(getNextChar());
+        return tok_assign_output;
+      }
+      return tok_cmp_eq;
+    case '/':
+      lastChar = Token(getNextChar());
+      if (lastChar == '/') { // Comment until end of line.
+        do {
+          lastChar = Token(getNextChar());
+          if (lastChar == EOF)
+            return tok_eof;
+        } while (lastChar != '\n' && lastChar != '\r');
+        return getTok();
+      } else
+        return Token('/');
+    case '(':
+      lastChar = Token(getNextChar());
+      if (lastChar == '*') { // comment block
+        Token last2;
+        do {
+          last2 = lastChar;
+          lastChar = Token(getNextChar());
+          if (lastChar == EOF)
+            return tok_eof;
+        } while (!(last2 == '*' && lastChar == ')'));
+        lastChar = Token(getNextChar());
+        // end of comment
+        return getTok();
+      } else { // no comment block, just an opening paranthesis
+        return Token('(');
+      }
+    }
+  }
+
   ///  Return the next token from standard input.
   Token getTok() {
     // Skip any whitespace.
@@ -781,8 +899,6 @@ private:
       return tok_identifier;
     }
 
-    // MARK: strings and symbols
-
     if (lastChar == '\'') { // String literal
       return getStringLiteralTok();
     }
@@ -791,97 +907,14 @@ private:
       return getSymbolTok();
     }
 
-    // MARK: number literals
-
     if (isdigit(lastChar) || lastChar == '-') { // Number: [0-9.]+
       return getNumberLiteralTok();
     }
 
-    // MARK: multi-character operators
-
-    if (lastChar == '.') {
-      lastChar = Token(getNextChar());
-      if (lastChar == '.') {
-        lastChar = Token(getNextChar());
-        return tok_range;
-      }
-      return tok_dot;
-    }
-    if (lastChar == ':') {
-      lastChar = Token(getNextChar());
-      if (lastChar == '=') {
-        lastChar = Token(getNextChar());
-        return tok_assignment;
-      }
-      return tok_colon;
-    }
-    if (lastChar == '*') {
-      lastChar = Token(getNextChar());
-      if (lastChar == '*') {
-        lastChar = Token(getNextChar());
-        return tok_exponent;
-      }
-      return tok_times;
-    }
-    if (lastChar == '>') {
-      lastChar = Token(getNextChar());
-      if (lastChar == '=') {
-        lastChar = Token(getNextChar());
-        return tok_cmp_ge;
-      }
-      return tok_cmp_gt;
-    }
-    if (lastChar == '<') {
-      lastChar = Token(getNextChar());
-      if (lastChar == '=') {
-        lastChar = Token(getNextChar());
-        return tok_cmp_le;
-      }
-      if (lastChar == '>') {
-        lastChar = Token(getNextChar());
-        return tok_cmp_ne;
-      }
-      return tok_cmp_lt;
-    }
-    if (lastChar == '=') {
-      lastChar = Token(getNextChar());
-      if (lastChar == '>') {
-        lastChar = Token(getNextChar());
-        return tok_assign_output;
-      }
-      return tok_cmp_eq;
-    }
-
-    // MARK: comments
-
-    if (lastChar == '/') {
-      lastChar = Token(getNextChar());
-      if (lastChar == '/') { // Comment until end of line.
-        do {
-          lastChar = Token(getNextChar());
-          if (lastChar == EOF)
-            return tok_eof;
-        } while (lastChar != '\n' && lastChar != '\r');
-        return getTok();
-      } else
-        return Token('/');
-    }
-    if (lastChar == '(') {
-      lastChar = Token(getNextChar());
-      if (lastChar == '*') { // comment block
-        Token last2;
-        do {
-          last2 = lastChar;
-          lastChar = Token(getNextChar());
-          if (lastChar == EOF)
-            return tok_eof;
-        } while (!(last2 == '*' && lastChar == ')'));
-        lastChar = Token(getNextChar());
-        // end of comment
-        return getTok();
-      } else { // no comment block, just an opening paranthesis
-        return Token('(');
-      }
+    if (lastChar == '.' || lastChar == ':' || lastChar == '*' ||
+        lastChar == '>' || lastChar == '<' || lastChar == '=' ||
+        lastChar == '/' || lastChar == '(') {
+      return getOperatorTok();
     }
 
     // Check for end of file.  Don't eat the EOF.
