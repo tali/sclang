@@ -153,7 +153,7 @@ private:
   }
 
   /// Append all the types and names of a variable declaration to an array
-  void addVariables(const VariableDeclarationSubsectionAST & decls, std::vector<mlir::Type> & types, std::vector<std::string> & names) {
+  void addVariables(const VariableDeclarationSubsectionAST & decls, std::vector<mlir::Type> & types, std::vector<llvm::StringRef> & names) {
     const auto & values = decls.getValues();
     types.reserve(types.size() + types.size());
     names.reserve(names.size() + names.size());
@@ -162,9 +162,8 @@ private:
       // TODO: initializer
       for (const auto & var : decl->getVars()) {
         // TODO: attributes
-        auto name = std::string(var->getIdentifier());
         types.push_back(type);
-        names.push_back(name);
+        names.push_back(var->getIdentifier());
       }
     }
   }
@@ -182,9 +181,9 @@ private:
     llvm::ScopedHashTableScope<StringRef, VariableSymbol> var_scope(symbolTable);
 
     std::vector<mlir::Type> input_types;
-    std::vector<std::string> input_names;
+    std::vector<llvm::StringRef> input_names;
     std::vector<mlir::Type> output_types;
-    std::vector<std::string> output_names;
+    std::vector<llvm::StringRef> output_names;
     std::vector<const VariableDeclarationSubsectionAST*> tempvar;
     // register function result as output variable
     auto retType = getType(*func.getType());
