@@ -10,19 +10,25 @@ branches:
   only:
     - master
 
-compiler:
-  - gcc
-  - clang
+jobs:
+  include:
+  - name: "GCC Release build"
+    compiler: gcc
+    env: BUILD_FLAGS="-DCMAKE_BUILD_TYPE=Release"
+  - name: "CLANG Release build"
+    compiler: clang
+    env: BUILD_FLAGS="-DCMAKE_BUILD_TYPE=Release"
+  - name: "Address/UB Sanitizer debug build"
+    compiler: clang
+    env: BUILD_FLAGS="-DCMAKE_BUILD_TYPE=Debug -DLLVM_USE_SANITIZER='Address;Undefined'"
 
 script:
   - git clone https://github.com/llvm/llvm-project --depth 1
   - git clone . llvm-project/sclang
   - mkdir build && cd build
   - cmake -GNinja ../llvm-project/llvm
-      -DLLVM_EXTERNAL_PROJECTS=sclang
-      -DLLVM_ENABLE_PROJECTS="sclang;mlir"
-      -DLLVM_ENABLE_ASSERTIONS=ON
-      -DCMAKE_BUILD_TYPE=Release
+      -DLLVM_EXTERNAL_PROJECTS=sclang -DLLVM_ENABLE_PROJECTS="sclang;mlir"
+      -DLLVM_ENABLE_ASSERTIONS=ON $BUILD_FLAGS
   - cmake --build . --target check-sclang
   - cmake --build . --target SclangUnitTests && tools/sclang/unittests/Lexer/LexerTests
 
