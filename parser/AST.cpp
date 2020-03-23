@@ -44,6 +44,7 @@ struct Indent {
 /// the way. The only data member is the current indentation level.
 class ASTDumper {
 public:
+  ASTDumper(llvm::raw_ostream & outs) : outs(outs) {}
   void dump(const ModuleAST *Node);
 
 private:
@@ -116,9 +117,10 @@ private:
   // Actually print spaces matching the current indentation level
   void indent() {
     for (int i = 0; i < curIndent; i++)
-      llvm::errs() << "  ";
+      outs << "  ";
   }
   int curIndent = 0;
+  llvm::raw_ostream & outs;
 };
 
 } // namespace
@@ -150,18 +152,18 @@ void ASTDumper::dump(const UnitAST *unit) {
 #undef dispatch
   // No match, fallback to a generic message
   INDENT();
-  llvm::errs() << "<unknown Expr, kind " << unit->getKind() << ">\n";
+  outs << "<unknown Expr, kind " << unit->getKind() << ">\n";
 }
 
 void ASTDumper::dump(const AttributeAST *attr) {
   INDENT();
-  llvm::errs() << "Attribute " << attr->getName() << " : " << attr->getValue() << "\n";
+  outs << "Attribute " << attr->getName() << " : " << attr->getValue() << "\n";
 }
 
 void ASTDumper::dump(llvm::ArrayRef<std::unique_ptr<AttributeAST>> attrs) {
   if (attrs.empty()) return;
   INDENT();
-  llvm::errs() << "Attributes\n";
+  outs << "Attributes\n";
   for (auto const & attr : attrs) {
     dump(attr.get());
   }
@@ -173,7 +175,7 @@ void ASTDumper::dump(llvm::ArrayRef<std::unique_ptr<AttributeAST>> attrs) {
 /// recurse in the initializer value.
 void ASTDumper::dump(const OrganizationBlockAST *unit) {
   INDENT();
-  llvm::errs() << "OrganizationBlock " << unit->getIdentifier() << "\n";
+  outs << "OrganizationBlock " << unit->getIdentifier() << "\n";
   dump(unit->getAttributes());
   dump(unit->getDeclarations());
   dump(unit->getCode());
@@ -181,7 +183,7 @@ void ASTDumper::dump(const OrganizationBlockAST *unit) {
 
 void ASTDumper::dump(const FunctionAST *unit) {
   INDENT();
-  llvm::errs() << "Function " << unit->getIdentifier() << "\n";
+  outs << "Function " << unit->getIdentifier() << "\n";
   dump(unit->getType());
   dump(unit->getAttributes());
   dump(unit->getDeclarations());
@@ -190,7 +192,7 @@ void ASTDumper::dump(const FunctionAST *unit) {
 
 void ASTDumper::dump(const FunctionBlockAST *unit) {
   INDENT();
-  llvm::errs() << "FunctionBlock " << unit->getIdentifier() << "\n";
+  outs << "FunctionBlock " << unit->getIdentifier() << "\n";
   dump(unit->getAttributes());
   dump(unit->getDeclarations());
   dump(unit->getCode());
@@ -198,7 +200,7 @@ void ASTDumper::dump(const FunctionBlockAST *unit) {
 
 void ASTDumper::dump(const DataBlockAST *unit) {
   INDENT();
-  llvm::errs() << "DataBlock " << unit->getIdentifier() << "\n";
+  outs << "DataBlock " << unit->getIdentifier() << "\n";
   dump(unit->getAttributes());
   dump(unit->getType());
   dump(unit->getAssignments());
@@ -206,7 +208,7 @@ void ASTDumper::dump(const DataBlockAST *unit) {
 
 void ASTDumper::dump(const UserDefinedTypeAST *unit) {
   INDENT();
-  llvm::errs() << "UserDefinedType " << unit->getIdentifier() << "\n";
+  outs << "UserDefinedType " << unit->getIdentifier() << "\n";
   dump(unit->getType());
   dump(unit->getAttributes());
 }
@@ -215,7 +217,7 @@ void ASTDumper::dump(const UserDefinedTypeAST *unit) {
 
 void ASTDumper::dump(const DeclarationSectionAST *section) {
   INDENT();
-  llvm::errs() << "DeclarationSection\n";
+  outs << "DeclarationSection\n";
   for (auto &subsection : section->getDecls()) {
     dump(subsection.get());
   }
@@ -231,12 +233,12 @@ void ASTDumper::dump(const DeclarationSubsectionAST *subsection) {
 #undef dispatch
   // No match, fallback to a generic message
   INDENT();
-  llvm::errs() << "<unknown declaration subsection, kind" << subsection->getKind() << ">\n";
+  outs << "<unknown declaration subsection, kind" << subsection->getKind() << ">\n";
 }
 
 void ASTDumper::dump(const ConstantDeclarationSubsectionAST *node) {
   INDENT();
-  llvm::errs() << "ConstantDeclarationSubsection\n";
+  outs << "ConstantDeclarationSubsection\n";
   for (auto const & decl : node->getValues()) {
     dump(decl.get());
   }
@@ -244,13 +246,13 @@ void ASTDumper::dump(const ConstantDeclarationSubsectionAST *node) {
 
 void ASTDumper::dump(const ConstantDeclarationAST *node) {
   INDENT();
-  llvm::errs() << "ConstantDeclaration " << node->getName() << "\n";
+  outs << "ConstantDeclaration " << node->getName() << "\n";
   dump(node->getValue());
 }
 
 void ASTDumper::dump(const JumpLabelDeclarationSubsectionAST *node) {
   INDENT();
-  llvm::errs() << "JumpLabelDeclarationSubsection\n";
+  outs << "JumpLabelDeclarationSubsection\n";
   for (auto const & decl : node->getValues()) {
     dump(decl.get());
   }
@@ -258,26 +260,26 @@ void ASTDumper::dump(const JumpLabelDeclarationSubsectionAST *node) {
 
 void ASTDumper::dump(const JumpLabelDeclarationAST *node) {
   INDENT();
-  llvm::errs() << "JumpLabelDeclaration " << node->getIdentifier() << "\n";
+  outs << "JumpLabelDeclaration " << node->getIdentifier() << "\n";
 }
 
 void ASTDumper::dump(const VariableDeclarationSubsectionAST *node) {
   INDENT();
   switch(node->getKind()) {
   case VariableDeclarationSubsectionAST::Var:
-    llvm::errs() << "VariableSubsection\n";
+    outs << "VariableSubsection\n";
     break;
   case VariableDeclarationSubsectionAST::VarTemp:
-    llvm::errs() << "TemporaryVariableSubsection\n";
+    outs << "TemporaryVariableSubsection\n";
     break;
   case VariableDeclarationSubsectionAST::VarInput:
-    llvm::errs() << "ParameterSubsection Input\n";
+    outs << "ParameterSubsection Input\n";
     break;
   case VariableDeclarationSubsectionAST::VarOutput:
-    llvm::errs() << "ParameterSubsection Output\n";
+    outs << "ParameterSubsection Output\n";
     break;
   case VariableDeclarationSubsectionAST::VarInOut:
-    llvm::errs() << "ParameterSubsection InOut\n";
+    outs << "ParameterSubsection InOut\n";
     break;
   }
   auto values = node->getValues();
@@ -287,7 +289,7 @@ void ASTDumper::dump(const VariableDeclarationSubsectionAST *node) {
 
 void ASTDumper::dump(const VariableDeclarationAST *node) {
   INDENT();
-  llvm::errs() << "VariableDeclaration\n";
+  outs << "VariableDeclaration\n";
   for (auto &var : node->getVars())
     dump(var.get());
   dump(node->getDataType());
@@ -298,14 +300,14 @@ void ASTDumper::dump(const VariableDeclarationAST *node) {
 
 void ASTDumper::dump(const VariableIdentifierAST *node) {
   INDENT();
-  llvm::errs() << "VariableIdentifier " << node->getIdentifier() << "\n";
+  outs << "VariableIdentifier " << node->getIdentifier() << "\n";
   for (auto &attr : node->getAttributes())
     dump(attr.get());
 }
 
 void ASTDumper::dump(const DataTypeInitAST *node) {
   INDENT();
-  llvm::errs() << "DataTypeInit\n";
+  outs << "DataTypeInit\n";
   for (auto &init : node->getList())
     dump(init.get());
 }
@@ -322,75 +324,75 @@ void ASTDumper::dump(const DataTypeSpecAST *dataType) {
   #undef dispatch
   // No match, fallback to a generic message
   INDENT();
-  llvm::errs() << "<unknown data type, kind" << dataType->getKind() << ">\n";
+  outs << "<unknown data type, kind" << dataType->getKind() << ">\n";
 }
 
 void ASTDumper::dump(const ElementaryDataTypeAST *node) {
   INDENT();
   switch (node->getType()) {
   case sclang::ElementaryDataTypeAST::Type_Void:
-    llvm::errs() << "ElementaryDataType Void\n"; return;
+    outs << "ElementaryDataType Void\n"; return;
   case ElementaryDataTypeAST::Type_Bool:
-    llvm::errs() << "ElementaryDataType Bool\n"; return;
+    outs << "ElementaryDataType Bool\n"; return;
   case ElementaryDataTypeAST::Type_Byte:
-    llvm::errs() << "ElementaryDataType Byte\n"; return;
+    outs << "ElementaryDataType Byte\n"; return;
   case ElementaryDataTypeAST::Type_Word:
-    llvm::errs() << "ElementaryDataType Word\n"; return;
+    outs << "ElementaryDataType Word\n"; return;
   case ElementaryDataTypeAST::Type_DWord:
-    llvm::errs() << "ElementaryDataType DWord\n"; return;
+    outs << "ElementaryDataType DWord\n"; return;
   case ElementaryDataTypeAST::Type_Char:
-    llvm::errs() << "ElementaryDataType Char\n"; return;
+    outs << "ElementaryDataType Char\n"; return;
   case ElementaryDataTypeAST::Type_Int:
-    llvm::errs() << "ElementaryDataType Int\n"; return;
+    outs << "ElementaryDataType Int\n"; return;
   case ElementaryDataTypeAST::Type_DInt:
-    llvm::errs() << "ElementaryDataType DInt\n"; return;
+    outs << "ElementaryDataType DInt\n"; return;
   case ElementaryDataTypeAST::Type_Real:
-    llvm::errs() << "ElementaryDataType Real\n"; return;
+    outs << "ElementaryDataType Real\n"; return;
   case ElementaryDataTypeAST::Type_S5Time:
-    llvm::errs() << "ElementaryDataType S5Time\n"; return;
+    outs << "ElementaryDataType S5Time\n"; return;
   case ElementaryDataTypeAST::Type_Time:
-    llvm::errs() << "ElementaryDataType Time\n"; return;
+    outs << "ElementaryDataType Time\n"; return;
   case ElementaryDataTypeAST::Type_TimeOfDay:
-    llvm::errs() << "ElementaryDataType TimeOfDay\n"; return;
+    outs << "ElementaryDataType TimeOfDay\n"; return;
   case ElementaryDataTypeAST::Type_Date:
-    llvm::errs() << "ElementaryDataType Date\n"; return;
+    outs << "ElementaryDataType Date\n"; return;
   case ElementaryDataTypeAST::Type_DateAndTime:
-    llvm::errs() << "ElementaryDataType DateAndTime\n"; return;
+    outs << "ElementaryDataType DateAndTime\n"; return;
   case ElementaryDataTypeAST::Type_Timer:
-    llvm::errs() << "ElementaryDataType Timer\n"; return;
+    outs << "ElementaryDataType Timer\n"; return;
   case ElementaryDataTypeAST::Type_Counter:
-    llvm::errs() << "ElementaryDataType Counter\n"; return;
+    outs << "ElementaryDataType Counter\n"; return;
   case ElementaryDataTypeAST::Type_Any:
-    llvm::errs() << "ElementaryDataType Any\n"; return;
+    outs << "ElementaryDataType Any\n"; return;
   case ElementaryDataTypeAST::Type_Pointer:
-    llvm::errs() << "ElementaryDataType Pointer\n"; return;
+    outs << "ElementaryDataType Pointer\n"; return;
   case ElementaryDataTypeAST::Type_BlockFC:
-    llvm::errs() << "ElementaryDataType BlockFC\n"; return;
+    outs << "ElementaryDataType BlockFC\n"; return;
   case ElementaryDataTypeAST::Type_BlockFB:
-    llvm::errs() << "ElementaryDataType BlockFB\n"; return;
+    outs << "ElementaryDataType BlockFB\n"; return;
   case ElementaryDataTypeAST::Type_BlockDB:
-    llvm::errs() << "ElementaryDataType BlockDB\n"; return;
+    outs << "ElementaryDataType BlockDB\n"; return;
   case ElementaryDataTypeAST::Type_BlockSDB:
-    llvm::errs() << "ElementaryDataType BlockSDB\n"; return;
+    outs << "ElementaryDataType BlockSDB\n"; return;
   }
-  llvm::errs() << "<unknown ElementaryDataType, type " << node->getType() << ">\n";
+  outs << "<unknown ElementaryDataType, type " << node->getType() << ">\n";
 }
 
 void ASTDumper::dump(const StringDataTypeSpecAST *node) {
   INDENT();
-  llvm::errs() << "StringDataTypeSpec [" << node->getMaxLen() << "]\n";
+  outs << "StringDataTypeSpec [" << node->getMaxLen() << "]\n";
 }
 
 void ASTDumper::dump(const ArrayDimensionAST *node) {
   INDENT();
-  llvm::errs() << "ArrayDimension\n";
+  outs << "ArrayDimension\n";
   dump(node->getMin());
   dump(node->getMax());
 }
 
 void ASTDumper::dump(const ArrayDataTypeSpecAST *node) {
   INDENT();
-  llvm::errs() << "ArrayDataTypeSpec\n";
+  outs << "ArrayDataTypeSpec\n";
   for (auto const &dim : node->getDimensions())
     dump(dim.get());
   dump(node->getDataType());
@@ -398,7 +400,7 @@ void ASTDumper::dump(const ArrayDataTypeSpecAST *node) {
 
 void ASTDumper::dump(const ComponentDeclarationAST *node) {
   INDENT();
-  llvm::errs() << "ComponentDeclaration " << node->getName() << "\n";
+  outs << "ComponentDeclaration " << node->getName() << "\n";
   dump(node->getDataType());
   auto init = node->getInitializer();
   if (init.hasValue())
@@ -407,24 +409,24 @@ void ASTDumper::dump(const ComponentDeclarationAST *node) {
 
 void ASTDumper::dump(const StructDataTypeSpecAST *node) {
   INDENT();
-  llvm::errs() << "StructDataTypeSpec\n";
+  outs << "StructDataTypeSpec\n";
   for (auto const &component : node->getComponents())
     dump(component.get());
 }
 
 void ASTDumper::dump(const UserDefinedTypeIdentifierAST *node) {
   INDENT();
-  llvm::errs() << "UserDefinedTypeIdentifier " << node->getName() << "\n";
+  outs << "UserDefinedTypeIdentifier " << node->getName() << "\n";
 }
 
 void ASTDumper::dump(const DBAssignmentAST *node) {
   INDENT();
-  llvm::errs() << "DBAssignment ''\n";
+  outs << "DBAssignment ''\n";
 }
 
 void ASTDumper::dump(const DBAssignmentSectionAST *node) {
   INDENT();
-  llvm::errs() << "DBAssignmentSection\n";
+  outs << "DBAssignmentSection\n";
   for (auto const &assign : node->getAssignments())
     dump(assign.get());
 }
@@ -435,7 +437,7 @@ void ASTDumper::dump(const DBAssignmentSectionAST *node) {
 
 void ASTDumper::dump(const CodeSectionAST *node) {
   INDENT();
-  llvm::errs() << "CodeSection\n";
+  outs << "CodeSection\n";
   for (auto const &instr : node->getInstructions())
     dump(instr.get());
 }
@@ -459,14 +461,14 @@ void ASTDumper::dump(const InstructionAST *code) {
     #undef dispatch
       // No match, fallback to a generic message
       INDENT();
-      llvm::errs() << "<unknown instruction, kind" << code->getKind() << ">\n";
+      outs << "<unknown instruction, kind" << code->getKind() << ">\n";
 }
 
 // MARK: C.5 Value Assignments
 
 void ASTDumper::dump(const ValueAssignmentAST *node) {
   INDENT();
-  llvm::errs() << "ValueAssignment\n";
+  outs << "ValueAssignment\n";
   dump(node->getExpression());
 }
 
@@ -489,87 +491,87 @@ void ASTDumper::dump(const ExpressionAST *expr) {
 #undef dispatch
   // No match, fallback to a generic message
   INDENT();
-  llvm::errs() << "<unknown expression, kind " << expr->getKind() << ">\n";
+  outs << "<unknown expression, kind " << expr->getKind() << ">\n";
 }
 
 void ASTDumper::dump(const SimpleVariableAST *node) {
   INDENT();
   if (node->isSymbol()) {
-    llvm::errs() << "Symbol " << node->getName() << "\n";
+    outs << "Symbol " << node->getName() << "\n";
   } else {
-    llvm::errs() << "SimpleVariable " << node->getName() << "\n";
+    outs << "SimpleVariable " << node->getName() << "\n";
   }
 }
 
 void ASTDumper::dump(const IndexedVariableAST *node) {
   INDENT();
-  llvm::errs() << "IndexedVariable\n";
+  outs << "IndexedVariable\n";
   dump(node->getBase());
   dump("Indices", node->getIndices());
 }
 
 void ASTDumper::dump(const BinaryExpressionAST *node) {
   INDENT();
-  llvm::errs() << "BinaryExpression " << node->getOp() << "\n";
+  outs << "BinaryExpression " << node->getOp() << "\n";
   dump(node->getLhs());
   dump(node->getRhs());
 }
 
 void ASTDumper::dump(const UnaryExpressionAST *node) {
   INDENT();
-  llvm::errs() << "UnaryExpression " << node->getOp() << "\n";
+  outs << "UnaryExpression " << node->getOp() << "\n";
   dump(node->getRhs());
 }
 
 void ASTDumper::dump(const RepeatedConstantAST *node) {
   INDENT();
-  llvm::errs() << "RepeatedConstant " << node->getRepetitions() << "\n";
+  outs << "RepeatedConstant " << node->getRepetitions() << "\n";
   dump(node->getValue());
 }
 
 void ASTDumper::dump(const IntegerConstantAST *node) {
   INDENT();
-  llvm::errs() << "IntegerConstant " << node->getValue();
+  outs << "IntegerConstant " << node->getValue();
   if (node->getType())
-    llvm::errs() << " Type " << node->getType();
-  llvm::errs() << "\n";
+    outs << " Type " << node->getType();
+  outs << "\n";
 }
 
 void ASTDumper::dump(const RealConstantAST *node) {
   INDENT();
-  llvm::errs() << "RealConstant " << node->getValue();
+  outs << "RealConstant " << node->getValue();
   if (node->getType())
-    llvm::errs() << " Type " << node->getType();
-  llvm::errs() << "\n";
+    outs << " Type " << node->getType();
+  outs << "\n";
 }
 
 void ASTDumper::dump(const StringConstantAST *node) {
   INDENT();
-  llvm::errs() << "StringConstant '" << node->getValue() << "'\n";
+  outs << "StringConstant '" << node->getValue() << "'\n";
 }
 
 void ASTDumper::dump(const TimeConstantAST *node) {
   INDENT();
-  llvm::errs() << "TimeConstant ";
-  llvm::errs() << llvm::formatv(
+  outs << "TimeConstant ";
+  outs << llvm::formatv(
     "{0,0+4}-{1,0+2}-{2,0+2} {3,0+2}:{4,0+2}:{5,0+2}.{6,0+3}",
     node->getYear(), node->getMonth(), node->getDay(),
     node->getHour(), node->getMinute(), node->getSec(), node->getMSec()
   );
-  llvm::errs() << " Type " << node->getType() << "\n";
+  outs << " Type " << node->getType() << "\n";
 }
 
 // MARK: C.6 Function and Function Block Calls
 
 void ASTDumper::dump(const SubroutineProcessingAST *node) {
   INDENT();
-  llvm::errs() << "Subroutine\n";
+  outs << "Subroutine\n";
   dump(node->getCall());
 }
 
 void ASTDumper::dump(const FunctionCallAST *node) {
   INDENT();
-  llvm::errs() << "FunctionCall\n";
+  outs << "FunctionCall\n";
   dump(node->getFunction());
   dump("Parameters", node->getParameters());
 }
@@ -579,14 +581,14 @@ void ASTDumper::dump(const FunctionCallAST *node) {
 
 void ASTDumper::dump(const IfThenAST *node) {
   INDENT();
-  llvm::errs() << "IfThen\n";
+  outs << "IfThen\n";
   dump(node->getCondition());
   dump(node->getCodeBlock());
 }
 
 void ASTDumper::dump(const IfThenElseAST *node) {
   INDENT();
-  llvm::errs() << "IfThenElse\n";
+  outs << "IfThenElse\n";
 
   for (auto const & then : node->getThens())
     dump(then.get());
@@ -594,7 +596,7 @@ void ASTDumper::dump(const IfThenElseAST *node) {
   auto elseBlock = node->getElseBlock();
   if (elseBlock.hasValue()) {
     INDENT();
-    llvm::errs() << "Else\n";
+    outs << "Else\n";
     dump(elseBlock.getValue());
   }
 }
@@ -608,25 +610,25 @@ void ASTDumper::dump(const CaseValueAST *value) {
 #undef dispatch
   // No match, fallback to a generic message
   INDENT();
-  llvm::errs() << "<unknown case value, kind" << value->getKind() << ">\n";
+  outs << "<unknown case value, kind" << value->getKind() << ">\n";
 }
 
 void ASTDumper::dump(const CaseValueSingleAST *node) {
   INDENT();
-  llvm::errs() << "CaseValueSingle\n";
+  outs << "CaseValueSingle\n";
   dump(node->getValue());
 }
 
 void ASTDumper::dump(const CaseValueRangeAST *node) {
   INDENT();
-  llvm::errs() << "CaseValueRange\n";
+  outs << "CaseValueRange\n";
   dump(node->getMin());
   dump(node->getMax());
 }
 
 void ASTDumper::dump(const CaseBlockAST *node) {
   INDENT();
-  llvm::errs() << "CaseBlock\n";
+  outs << "CaseBlock\n";
   for (auto const & value : node->getValues())
     dump(value.get());
   dump(node->getCodeBlock());
@@ -634,9 +636,9 @@ void ASTDumper::dump(const CaseBlockAST *node) {
 
 void ASTDumper::dump(const CaseOfAST *node) {
   INDENT();
-  llvm::errs() << "Case\n";
+  outs << "Case\n";
   dump(node->getExpr());
-  llvm::errs() << "Of\n";
+  outs << "Of\n";
   dump(node->getCode());
   auto elseBlock = node->getElseBlock();
   if (elseBlock.hasValue())
@@ -645,59 +647,59 @@ void ASTDumper::dump(const CaseOfAST *node) {
 
 void ASTDumper::dump(const ForDoAST *node) {
   INDENT();
-  llvm::errs() << "For\n";
+  outs << "For\n";
   dump(node->getAssignment());
-  llvm::errs() << "To\n";
+  outs << "To\n";
   dump(node->getLast());
   auto increment = node->getIncrement();
   if (increment.hasValue()) {
-    llvm::errs() << "By\n";
+    outs << "By\n";
     dump(increment.getValue());
   }
-  llvm::errs() << "Do\n";
+  outs << "Do\n";
   dump(node->getCode());
 }
 
 void ASTDumper::dump(const WhileDoAST *node) {
   INDENT();
-  llvm::errs() << "While\n";
+  outs << "While\n";
   dump(node->getCondition());
-  llvm::errs() << "Do\n";
+  outs << "Do\n";
   dump(node->getCode());
 }
 
 void ASTDumper::dump(const RepeatUntilAST *node) {
   INDENT();
-  llvm::errs() << "Repeat\n";
+  outs << "Repeat\n";
   dump(node->getCode());
-  llvm::errs() << "Until\n";
+  outs << "Until\n";
   dump(node->getCondition());
 }
 
 void ASTDumper::dump(const ContinueAST *node) {
   INDENT();
-  llvm::errs() << "Continue\n";
+  outs << "Continue\n";
 }
 
 void ASTDumper::dump(const ReturnAST *node) {
   INDENT();
-  llvm::errs() << "Return\n";
+  outs << "Return\n";
 }
 
 void ASTDumper::dump(const ExitAST *node) {
   INDENT();
-  llvm::errs() << "Exit\n";
+  outs << "Exit\n";
 }
 
 void ASTDumper::dump(const GotoAST *node) {
   INDENT();
-  llvm::errs() << "Goto " << node->getLabel() << "\n";
+  outs << "Goto " << node->getLabel() << "\n";
 }
 
 
 void ASTDumper::dump(std::string name, llvm::ArrayRef<std::unique_ptr<ExpressionAST>> parameters) {
   INDENT();
-  llvm::errs() << name << "\n";
+  outs << name << "\n";
   for (const auto & param : parameters) {
     dump(param.get());
   }
@@ -707,7 +709,7 @@ void ASTDumper::dump(std::string name, llvm::ArrayRef<std::unique_ptr<Expression
 /// Print a module, actually loop over the functions and print them in sequence.
 void ASTDumper::dump(const ModuleAST *Node) {
   INDENT();
-  llvm::errs() << "Module:\n";
+  outs << "Module:\n";
   for (auto const &unit : *Node)
     dump(unit.get());
 }
@@ -715,6 +717,8 @@ void ASTDumper::dump(const ModuleAST *Node) {
 namespace sclang {
 
 // Public API
-void dump(const ModuleAST &module) { ASTDumper().dump(&module); }
+void dump(const ModuleAST &module) {
+  ASTDumper(llvm::outs()).dump(&module);
+}
 
 } // namespace sclang

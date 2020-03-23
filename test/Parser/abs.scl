@@ -1,4 +1,4 @@
-// RUN: sclang --emit=ast %s 2>&1 | FileCheck %s
+// RUN: sclang --emit=ast %s | FileCheck %s
 
 function abs : int
 // CHECK: Function abs

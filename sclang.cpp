@@ -90,7 +90,7 @@ int dumpMLIR() {
     if (!module)
       return 1;
 
-    module->dump();
+    module->print(llvm::outs());
     return 0;
   }
 
@@ -111,13 +111,13 @@ int dumpMLIR() {
     return 3;
   }
 
-  module->dump();
+  module->print(llvm::outs());
   return 0;
 }
 
 int dumpAST() {
   if (inputType == InputType::MLIR) {
-    llvm::errs() << "Can't dump a Toy AST when the input is MLIR\n";
+    llvm::errs() << "Can't dump AST when the input is MLIR\n";
     return 5;
   }
 

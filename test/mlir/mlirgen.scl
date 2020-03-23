@@ -1,4 +1,4 @@
-// RUN: sclang --emit=mlir %s 2>&1 | FileCheck %s
+// RUN: sclang --emit=mlir %s | FileCheck %s
 function abc : int
 // CHECK: func @abc() -> i16 {
 
