@@ -137,14 +137,14 @@ public:
 
 class DataBlockAST : public UnitAST {
   std::unique_ptr<DataTypeSpecAST> type;
-  std::unique_ptr<DBAssignmentSectionAST> assignments;
+  std::unique_ptr<CodeSectionAST> assignments;
 
 public:
-  DataBlockAST(const std::string & identifier, Location loc, std::vector<std::unique_ptr<AttributeAST>> attrs, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<DataTypeSpecAST> type, std::unique_ptr<DBAssignmentSectionAST> assignments)
+  DataBlockAST(const std::string & identifier, Location loc, std::vector<std::unique_ptr<AttributeAST>> attrs, std::unique_ptr<DeclarationSectionAST> declarations, std::unique_ptr<DataTypeSpecAST> type, std::unique_ptr<CodeSectionAST> assignments)
     : UnitAST(Unit_DataBlock, identifier, loc, std::move(attrs), std::move(declarations)), type(std::move(type)), assignments(std::move(assignments)) {}
 
   const DataTypeSpecAST * getType() const { return type.get(); }
-  const DBAssignmentSectionAST * getAssignments() const { return assignments.get(); }
+  const CodeSectionAST * getAssignments() const { return assignments.get(); }
 
   /// LLVM style RTTI
   static bool classof(const UnitAST *u) { return u->getKind() == Unit_DataBlock; }
@@ -310,25 +310,6 @@ public:
 
   DeclarationSectionAST(Location loc, std::vector<std::unique_ptr<DeclarationSubsectionAST>> decls)
     : location(loc), declarations(std::move(decls)) {}
-};
-
-class DBAssignmentAST {
-  Location location;
-
-public:
-  DBAssignmentAST(Location loc)
-    : location(loc) {}
-};
-
-class DBAssignmentSectionAST {
-  Location location;
-  std::vector<std::unique_ptr<DBAssignmentAST>> assignments;
-
-public:
-  DBAssignmentSectionAST(Location loc, std::vector<std::unique_ptr<DBAssignmentAST>> assignments)
-    : location(loc), assignments(std::move(assignments)) {}
-
-  llvm::ArrayRef<std::unique_ptr<DBAssignmentAST>> getAssignments() const { return assignments; }
 };
 
 // MARK: C.3 Data Types in SCL

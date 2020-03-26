@@ -76,8 +76,6 @@ private:
   void dump(const ComponentDeclarationAST *node);
   void dump(const StructDataTypeSpecAST *node);
   void dump(const UserDefinedTypeIdentifierAST *node);
-  void dump(const DBAssignmentAST *node);
-  void dump(const DBAssignmentSectionAST *node);
   // Code Section
   void dump(const CodeSectionAST *node);
   void dump(const InstructionAST *node);
@@ -417,18 +415,6 @@ void ASTDumper::dump(const StructDataTypeSpecAST *node) {
 void ASTDumper::dump(const UserDefinedTypeIdentifierAST *node) {
   INDENT();
   outs << "UserDefinedTypeIdentifier " << node->getName() << "\n";
-}
-
-void ASTDumper::dump(const DBAssignmentAST *node) {
-  INDENT();
-  outs << "DBAssignment ''\n";
-}
-
-void ASTDumper::dump(const DBAssignmentSectionAST *node) {
-  INDENT();
-  outs << "DBAssignmentSection\n";
-  for (auto const &assign : node->getAssignments())
-    dump(assign.get());
 }
 
 // MARK: C.3

@@ -234,7 +234,7 @@ private:
 
     if (lexer.getCurToken() == tok_begin)
       lexer.consume(tok_begin);
-    auto assignments = ParseDBAssignmentSection();
+    auto assignments = ParseCodeSection();
 
     auto nodecls = NoDeclarationSection(loc);
     auto unit = std::make_unique<DataBlockAST>(std::move(identifier), std::move(loc), std::move(attrs), std::move(nodecls), std::move(type), std::move(assignments));
@@ -379,18 +379,6 @@ private:
       return ParseVariableSubsection();
       break;
     }
-  }
-
-  /// Parse a DB Assignment section
-  ///
-  /// DB Assignment Section ::=
-  /// { Simple Variable ":=" Constant ";" }
-  std::unique_ptr<DBAssignmentSectionAST> ParseDBAssignmentSection() {
-    auto loc = lexer.getLastLocation();
-
-    std::vector<std::unique_ptr<DBAssignmentAST>> assignments;
-
-    return std::make_unique<DBAssignmentSectionAST>(std::move(loc), std::move(assignments));
   }
 
   /// Parse a Constant Declaration
