@@ -70,6 +70,7 @@ public:
 
   ExpressionAST(Location loc, ExprASTKind kind)
     : location(std::move(loc)), kind(kind) {}
+  virtual ~ExpressionAST() = default;
 
   const Location &loc() const { return location; }
   ExprASTKind getKind() const { return kind; }
@@ -256,6 +257,7 @@ public:
 
   DataTypeSpecAST(Location loc, DataTypeASTKind kind)
     : location(std::move(loc)), kind(kind) {}
+  virtual ~DataTypeSpecAST() = default;
 
   const Location &loc() const { return location; }
   DataTypeASTKind getKind() const { return kind; }
@@ -425,6 +427,7 @@ public:
 
   InstructionAST(Location loc, InstrASTKind kind)
     : location(std::move(loc)), kind(kind) {}
+  virtual ~InstructionAST() = default;
 
   InstrASTKind getKind() const { return kind; }
   const Location &loc() const { return location; }
@@ -724,7 +727,6 @@ public:
 
   DeclarationSubsectionAST(DeclarationASTKind kind, Location location)
         : kind(kind), location(location) {}
-
   virtual ~DeclarationSubsectionAST() = default;
 
   DeclarationASTKind getKind() const { return kind; }
@@ -874,7 +876,6 @@ public:
 
   UnitAST(UnitASTKind kind, const std::string & identifier, Location location, std::vector<std::unique_ptr<AttributeAST>> attrs, std::unique_ptr<DeclarationSectionAST> declarations)
       : kind(kind), identifier(identifier), attributes(std::move(attrs)), declarations(std::move(declarations)), location(location) {}
-
   virtual ~UnitAST() = default;
 
   UnitASTKind getKind() const { return kind; }
