@@ -2,16 +2,24 @@
 
 function_block time_literals
 
+const
+  X := 2;
+end_const
+
 var_output
   a : struct
     b : int := 1;
-    c : int := 2;
+    c : int := X;
   end_struct;
 // CHECK: VariableDeclaration
 // CHECK-NEXT: VariableIdentifier a
 // CHECK-NEXT: StructDataTypeSpec
 // CHECK-NEXT:   ComponentDeclaration b
 // CHECK-NEXT:     ElementaryDataType Int
+// CHECK-NEXT:   IntegerConstant 1
+// CHECK-NEXT:   ComponentDeclaration c
+// CHECK-NEXT:     ElementaryDataType Int
+// CHECK-NEXT:   SimpleVariable X
 end_var
 
 begin

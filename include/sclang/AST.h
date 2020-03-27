@@ -56,6 +56,7 @@ public:
 class ExpressionAST {
 public:
   enum ExprASTKind {
+    Expr_List,
     Expr_RepeatedConstant,
     Expr_IntegerConstant,
     Expr_RealConstant,
@@ -78,6 +79,20 @@ public:
 private:
   Location location;
   ExprASTKind kind;
+};
+
+
+class ExpressionListAST : public ExpressionAST {
+  std::vector<std::unique_ptr<ExpressionAST>> values;
+
+public:
+  ExpressionListAST(Location loc, std::vector<std::unique_ptr<ExpressionAST>> values)
+  : ExpressionAST(std::move(loc), Expr_List), values(std::move(values)) {}
+
+  llvm::ArrayRef<std::unique_ptr<ExpressionAST>> getValues() const { return values; }
+
+  /// LLVM style RTTI
+  static bool classof(const ExpressionAST *e) { return e->getKind() == Expr_List; }
 };
 
 
@@ -161,16 +176,16 @@ public:
 
 
 
-class RepeatedConstantAST : public ConstantAST {
-  int repetitions;
-  std::unique_ptr<ConstantAST> value;
+class RepeatedConstantAST : public ExpressionAST {
+  int32_t repetitions;
+  std::unique_ptr<ExpressionAST> value;
 
 public:
-  RepeatedConstantAST(Location loc, int repetitions, std::unique_ptr<ConstantAST> value)
-  : ConstantAST(std::move(loc), Expr_RepeatedConstant, value->getType()), repetitions(repetitions), value(std::move(value)) {}
+  RepeatedConstantAST(Location loc, int repetitions, std::unique_ptr<ExpressionAST> value)
+  : ExpressionAST(std::move(loc), Expr_RepeatedConstant), repetitions(repetitions), value(std::move(value)) {}
 
   int getRepetitions() const { return repetitions; }
-  const ConstantAST * getValue() const { return value.get(); }
+  const ExpressionAST * getValue() const { return value.get(); }
 
   /// LLVM style RTTI
   static bool classof(const ExpressionAST *e) { return e->getKind() == Expr_RepeatedConstant; }
@@ -268,19 +283,6 @@ private:
 };
 
 
-class DataTypeInitAST {
-  Location location;
-  std::vector<std::unique_ptr<ConstantAST>> list;
-
-public:
-  DataTypeInitAST(Location loc, std::vector<std::unique_ptr<ConstantAST>> list)
-   : location(std::move(loc)), list(std::move(list)) {}
-
-  const Location &loc() const { return location; }
-  llvm::ArrayRef<std::unique_ptr<ConstantAST>> getList() const { return list; }
-};
-
-
 class ElementaryDataTypeAST : public DataTypeSpecAST {
 public:
   enum ElementaryTypeASTKind {
@@ -361,16 +363,16 @@ class ComponentDeclarationAST {
   Location location;
   std::string name;
   std::unique_ptr<DataTypeSpecAST> dataType;
-  llvm::Optional<std::unique_ptr<DataTypeInitAST>> initializer;
+  llvm::Optional<std::unique_ptr<ExpressionAST>> initializer;
 
 public:
-  ComponentDeclarationAST(Location loc, std::string name, std::unique_ptr<DataTypeSpecAST> dataType, llvm::Optional<std::unique_ptr<DataTypeInitAST>> init)
+  ComponentDeclarationAST(Location loc, std::string name, std::unique_ptr<DataTypeSpecAST> dataType, llvm::Optional<std::unique_ptr<ExpressionAST>> init)
     : location(std::move(loc)), name(std::move(name)), dataType(std::move(dataType)), initializer(std::move(init)) {}
 
   const Location &loc() const { return location; }
   llvm::StringRef getName() const { return name; }
   const DataTypeSpecAST * getDataType() const { return dataType.get(); }
-  llvm::Optional<const DataTypeInitAST *> getInitializer() const {
+  llvm::Optional<const ExpressionAST *> getInitializer() const {
     if (!initializer.hasValue())
       return llvm::NoneType();
     return initializer.getValue().get();
@@ -741,15 +743,15 @@ private:
 class ConstantDeclarationAST {
   Location location;
   std::string name;
-  std::unique_ptr<ConstantAST> value;
+  std::unique_ptr<ExpressionAST> value;
 
 public:
-  ConstantDeclarationAST(Location loc, llvm::StringRef name, std::unique_ptr<ConstantAST> value)
+  ConstantDeclarationAST(Location loc, llvm::StringRef name, std::unique_ptr<ExpressionAST> value)
     : location(loc), name(std::move(name)), value(std::move(value)) {}
 
   const Location &loc() const { return location; }
   llvm::StringRef getName() const { return name; }
-  const ConstantAST* getValue() const { return value.get(); }
+  const ExpressionAST* getValue() const { return value.get(); }
 };
 
 class ConstantDeclarationSubsectionAST : public DeclarationSubsectionAST {
@@ -809,13 +811,13 @@ class VariableDeclarationAST {
   Location location;
   std::vector<std::unique_ptr<VariableIdentifierAST>> vars;
   std::unique_ptr<DataTypeSpecAST> dataType;
-  llvm::Optional<std::unique_ptr<DataTypeInitAST>> initializer;
+  llvm::Optional<std::unique_ptr<ExpressionAST>> initializer;
 
 public:
   const Location &loc() const { return location; }
   llvm::ArrayRef<std::unique_ptr<VariableIdentifierAST>> getVars() const { return vars; }
   const DataTypeSpecAST *getDataType() const { return dataType.get(); }
-  llvm::Optional<DataTypeInitAST*> const getInitializer() const {
+  llvm::Optional<ExpressionAST*> const getInitializer() const {
     if (!initializer.hasValue())
       return llvm::NoneType();
     return initializer.getValue().get();
@@ -824,7 +826,7 @@ public:
   VariableDeclarationAST(Location loc,
                          std::vector<std::unique_ptr<VariableIdentifierAST>> vars,
                          std::unique_ptr<DataTypeSpecAST> dataType,
-                         llvm::Optional<std::unique_ptr<DataTypeInitAST>> init)
+                         llvm::Optional<std::unique_ptr<ExpressionAST>> init)
     : location(loc), vars(std::move(vars)),
       dataType(std::move(dataType)), initializer(std::move(init))
   {}

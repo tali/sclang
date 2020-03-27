@@ -394,7 +394,7 @@ private:
       return parseError<ConstantDeclarationAST>(tok_assignment, "for constant assignment");
     lexer.consume(tok_assignment);
 
-    auto value = ParseConstant();
+    auto value = ParseExpression();
     if (!value) return nullptr;
 
      if (lexer.getCurToken() != tok_semicolon)
@@ -560,9 +560,12 @@ private:
     auto type = ParseDataTypeSpec();
     if (!type) return nullptr;
 
-    llvm::Optional<std::unique_ptr<DataTypeInitAST>> init;
-    if (lexer.getCurToken() == tok_assignment)
-      init = ParseDataTypeInitialization();
+    llvm::Optional<std::unique_ptr<ExpressionAST>> init;
+    if (lexer.getCurToken() == tok_assignment) {
+      lexer.consume(tok_assignment);
+
+      init = ParseExpression(pred_list);
+    }
 
     if (lexer.getCurToken() != tok_semicolon)
       return parseError<VariableDeclarationAST>(tok_semicolon, "to end variable declaration");
@@ -571,52 +574,6 @@ private:
     return std::make_unique<VariableDeclarationAST>(std::move(loc), std::move(vars), std::move(type), std::move(init));
   }
 
-  /// Parse a Data Type Initialization
-  ///
-  /// Data Type Initialization ::= ":=" ( Constant | Array Initialization List )
-  std::unique_ptr<DataTypeInitAST> ParseDataTypeInitialization() {
-    lexer.consume(tok_assignment);
-
-    return ParseArrayInitializationList();
-  }
-
-  /// Parse an Array Initialization List
-  ///
-  /// Array Initialization List ::= ( Constant | Decimal Digit String "(" Array Initialization List ")" ) { "," ... }
-  std::unique_ptr<DataTypeInitAST> ParseArrayInitializationList() {
-    auto loc = lexer.getLastLocation();
-
-    auto list = std::vector<std::unique_ptr<ConstantAST>>();
-
-    // TODO: support for repetition factor
-    auto value = ParseConstant();
-    if (lexer.getCurToken() == tok_parenthese_open) {
-      // this was a repetition factor
-      if (value.get()->getKind() != ExpressionAST::Expr_IntegerConstant)
-        return parseError<DataTypeInitAST>(tok_integer_literal, "repetition factor");
-      lexer.consume(tok_parenthese_open);
-
-      int repetitions = llvm::dyn_cast<IntegerConstantAST>(value.get())->getValue();
-      auto value = ParseConstant();
-
-      if (lexer.getCurToken() != tok_parenthese_close)
-        return parseError<DataTypeInitAST>(tok_parenthese_close, "repetition factor");
-      lexer.consume(tok_parenthese_close);
-
-      list.push_back(std::make_unique<RepeatedConstantAST>(loc, repetitions, std::move(value)));
-    } else {
-      list.push_back(std::move(value));
-    }
-
-    while(lexer.getCurToken() == tok_comma) {
-      lexer.consume(tok_comma);
-
-      auto value = ParseConstant();
-      list.push_back(std::move(value));
-    }
-
-    return std::make_unique<DataTypeInitAST>(std::move(loc), std::move(list));
-  }
 
   // Instance Declaration is parsed as Variable Declaration
 
@@ -738,9 +695,9 @@ private:
     if (lexer.getCurToken() == tok_sbracket_open) {
       lexer.consume(tok_sbracket_open);
 
-      auto len = ParseConstant();
-      if (len->getKind() == ExpressionAST::Expr_IntegerConstant) {
-        length = llvm::dyn_cast<IntegerConstantAST>(len.get())->getValue();
+      auto len = ParseExpression();
+      if (len && llvm::isa<IntegerConstantAST>(len)) {
+        length = llvm::cast<IntegerConstantAST>(len.get())->getValue();
       } else {
         return parseError<StringDataTypeSpecAST>("integer constant", "for string type" );
       }
@@ -837,9 +794,12 @@ private:
 
     auto dataType = ParseDataTypeSpec();
 
-    llvm::Optional<std::unique_ptr<DataTypeInitAST>> init;
-    if (lexer.getCurToken() == tok_assignment)
-      init = ParseDataTypeInitialization();
+    llvm::Optional<std::unique_ptr<ExpressionAST>> init;
+    if (lexer.getCurToken() == tok_assignment) {
+      lexer.consume(tok_assignment);
+
+      init = ParseExpression(pred_list);
+    }
 
     if (lexer.getCurToken() != tok_semicolon)
       return parseError<ComponentDeclarationAST>(tok_semicolon, "for struct component declaration");
@@ -1116,8 +1076,14 @@ private:
 
       // Okay, we know this is a binop.
       auto binOp = lexer.getCurToken();
-      if (binOp == tok_parenthese_open) {
-        lhs = ParseCallExpression(std::move(lhs));
+      if (binOp == tok_comma) {
+        lhs = ParseListExpression(std::move(lhs));
+        continue;
+      } else if (binOp == tok_parenthese_open) {
+        if (llvm::isa<IntegerConstantAST>(lhs))
+          lhs = ParseRepeatedExpression(std::move(lhs));
+        else
+          lhs = ParseCallExpression(std::move(lhs));
         continue;
       } else if (binOp == tok_sbracket_open) {
         lhs = ParseIndexedVariable(std::move(lhs));
@@ -1150,7 +1116,8 @@ private:
     }
   }
 
-  static const int pred_none = -101;
+  static const int pred_none = -404;
+  static const int pred_list = -101;
   static const int pred_default = -100;
   static const int pred_assignment = -11;
   static const int pred_or = -10;
@@ -1169,6 +1136,9 @@ private:
     switch (lexer.getCurToken()) {
     default:
       return pred_none;
+
+    case tok_comma:
+      return pred_list;
 
     case tok_assignment:
     case tok_assign_output:
@@ -1229,31 +1199,35 @@ private:
     return ParseBinaryExpressionRHS(pred, std::move(lhs));
   }
 
-  std::unique_ptr<ConstantAST> ParseConstant() {
-    auto loc = lexer.getLastLocation();
+  std::unique_ptr<ExpressionAST> ParseRepeatedExpression(std::unique_ptr<ExpressionAST> repetitions) {
+    int32_t reps = llvm::cast<IntegerConstantAST>(repetitions.get())->getValue();
+    lexer.consume(tok_parenthese_open);
 
-    switch(lexer.getCurToken()) {
-    default:
-      return parseError<ConstantAST>("<numeric value>, <character string>, or <constant name>", "in constant expression");
-    case tok_identifier: {
-      auto value = lexer.getIdentifier();
-      Token type = lexer.getLiteralType();
-      lexer.consume(tok_identifier);
-      return std::make_unique<StringConstantAST>(std::move(loc), value, type);
+    auto repeated = ParseExpression(pred_list);
+
+    if (lexer.getCurToken() != tok_parenthese_close)
+      return parseError<ExpressionAST>(tok_parenthese_close, "to end constant list");
+    lexer.consume(tok_parenthese_close);
+
+    return std::make_unique<RepeatedConstantAST>(repetitions->loc(), reps, std::move(repeated));
+  }
+
+  std::unique_ptr<ExpressionAST> ParseListExpression(std::unique_ptr<ExpressionAST> first) {
+
+    std::vector<std::unique_ptr<ExpressionAST>> list;
+    list.reserve(2);
+    list.push_back(std::move(first));
+
+    while (lexer.getCurToken() == tok_comma) {
+      lexer.consume(tok_comma);
+
+      auto next = ParseExpression();
+      if (!next)
+        return parseError<ExpressionAST>("expression", "list expression");
+
+      list.push_back(std::move(next));
     }
-    case tok_integer_literal:
-      return ParseIntegerLiteralExpression();
-    case tok_real_number_literal:
-      return ParseRealNumberLiteralExpression();
-    case tok_time_literal:
-      return ParseTimeLiteralExpression();
-    case tok_false:
-      lexer.consume(tok_false);
-      return std::make_unique<IntegerConstantAST>(std::move(loc), 0, tok_bool);
-    case tok_true:
-      lexer.consume(tok_true);
-      return std::make_unique<IntegerConstantAST>(std::move(loc), 1, tok_bool);
-    }
+    return std::make_unique<ExpressionListAST>(first->loc(), std::move(list));
   }
 
   std::unique_ptr<ExpressionAST> ParseIndexedVariable(std::unique_ptr<ExpressionAST> base) {

@@ -67,7 +67,6 @@ private:
   void dump(const VariableDeclarationSubsectionAST *node);
   void dump(const VariableDeclarationAST *node);
   void dump(const VariableIdentifierAST *node);
-  void dump(const DataTypeInitAST *node);
   void dump(const DataTypeSpecAST *node);
   void dump(const ElementaryDataTypeAST *node);
   void dump(const StringDataTypeSpecAST *node);
@@ -84,16 +83,17 @@ private:
   void dump(const IndexedVariableAST *node);
   // Value Assignments
   void dump(const ExpressionAST *node);
+  void dump(const ExpressionListAST *node);
+  void dump(const RepeatedConstantAST *node);
   void dump(const BinaryExpressionAST *node);
   void dump(const UnaryExpressionAST *node);
-  void dump(const RepeatedConstantAST *node);
   void dump(const IntegerConstantAST *node);
   void dump(const RealConstantAST *node);
   void dump(const StringConstantAST *node);
   void dump(const TimeConstantAST *node);
+  void dump(const FunctionCallAST *node);
   // Function and Function Block Calls
   void dump(const SubroutineProcessingAST *node);
-  void dump(const FunctionCallAST *node);
   // Control Statements
   void dump(const IfThenAST *node);
   void dump(const IfThenElseAST *node);
@@ -303,13 +303,6 @@ void ASTDumper::dump(const VariableIdentifierAST *node) {
     dump(attr.get());
 }
 
-void ASTDumper::dump(const DataTypeInitAST *node) {
-  INDENT();
-  outs << "DataTypeInit\n";
-  for (auto &init : node->getList())
-    dump(init.get());
-}
-
 void ASTDumper::dump(const DataTypeSpecAST *dataType) {
   #define dispatch(CLASS)                                                      \
     if (const CLASS *node = llvm::dyn_cast<CLASS>(dataType))                   \
@@ -462,6 +455,7 @@ void ASTDumper::dump(const ExpressionAST *expr) {
 #define dispatch(CLASS)                                                        \
   if (const CLASS *node = llvm::dyn_cast<CLASS>(expr))                         \
     return dump(node);
+  dispatch(ExpressionListAST);
   dispatch(RepeatedConstantAST);
   dispatch(IntegerConstantAST);
   dispatch(RealConstantAST);
@@ -478,6 +472,19 @@ void ASTDumper::dump(const ExpressionAST *expr) {
   // No match, fallback to a generic message
   INDENT();
   outs << "<unknown expression, kind " << expr->getKind() << ">\n";
+}
+
+void ASTDumper::dump(const ExpressionListAST *node) {
+  INDENT();
+  outs << "ExpressionList\n";
+  for (auto &value : node->getValues())
+    dump(value.get());
+}
+
+void ASTDumper::dump(const RepeatedConstantAST *node) {
+  INDENT();
+  outs << "RepeatedConstant " << node->getRepetitions() << "\n";
+  dump(node->getValue());
 }
 
 void ASTDumper::dump(const SimpleVariableAST *node) {
@@ -507,12 +514,6 @@ void ASTDumper::dump(const UnaryExpressionAST *node) {
   INDENT();
   outs << "UnaryExpression " << node->getOp() << "\n";
   dump(node->getRhs());
-}
-
-void ASTDumper::dump(const RepeatedConstantAST *node) {
-  INDENT();
-  outs << "RepeatedConstant " << node->getRepetitions() << "\n";
-  dump(node->getValue());
 }
 
 void ASTDumper::dump(const IntegerConstantAST *node) {

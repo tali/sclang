@@ -312,22 +312,6 @@ private:
 
   // MARK: C.3 Data Types in SCL
 
-  mlir::Value mlirGen(const DataTypeInitAST &init) {
-    auto location = loc(init.loc());
-
-    const auto list = init.getList();
-    if (list.empty()) return nullptr;
-
-    if (list.size() > 1) {
-      emitError(location);
-      return nullptr;
-    }
-
-    for (const auto & cvalue : list) {
-      return mlirGen(*cvalue.get());
-    }
-  }
-
   /// Codegen a code section, return failure if one statement hit an error.
   mlir::LogicalResult mlirGen(const CodeSectionAST &code) {
     //ScopedHashTableScope<StringRef, mlir::Value> var_scope(symbolTable);

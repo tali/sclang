@@ -11,9 +11,8 @@ var_output
 // CHECK-NEXT:     IntegerConstant 1
 // CHECK-NEXT:     IntegerConstant 2
 // CHECK-NEXT:   ElementaryDataType Int
-// CHECK-NEXT:   DataTypeInit
-// CHECK-NEXT:     RepeatedConstant 2
-// CHECK-NEXT:       IntegerConstant 0
+// CHECK-NEXT:   RepeatedConstant 2
+// CHECK-NEXT:     IntegerConstant 0
 end_var
 
 begin
