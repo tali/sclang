@@ -30,7 +30,6 @@ script:
       -DLLVM_EXTERNAL_PROJECTS=sclang -DLLVM_ENABLE_PROJECTS="sclang;mlir"
       -DLLVM_ENABLE_ASSERTIONS=ON $BUILD_FLAGS
   - cmake --build . --target check-sclang
-  - cmake --build . --target SclangUnitTests && tools/sclang/unittests/Lexer/LexerTests
 
 git:
   depth: 1

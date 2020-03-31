@@ -37,5 +37,4 @@ add_subdirectory(include)
 add_subdirectory(parser)
 add_subdirectory(mlir)
 add_subdirectory(test)
-add_subdirectory(unittests)
 
