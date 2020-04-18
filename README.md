@@ -5,7 +5,7 @@
 # BUILDING
 
 ```
-git clone https://github.com/llvm/llvm-project
+git clone https://github.com/tali/llvm-project
 cd llvm-project
 git clone https://github.com/tali/sclang
 mkdir build

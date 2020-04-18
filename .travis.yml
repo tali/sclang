@@ -23,7 +23,7 @@ jobs:
     env: BUILD_FLAGS="-DCMAKE_BUILD_TYPE=Debug -DLLVM_USE_SANITIZER='Address;Undefined'"
 
 script:
-  - git clone https://github.com/llvm/llvm-project --depth 1
+  - git clone https://github.com/tali/llvm-project --depth 1
   - git clone . llvm-project/sclang
   - mkdir build && cd build
   - cmake -GNinja ../llvm-project/llvm

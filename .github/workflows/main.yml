@@ -23,7 +23,7 @@ jobs:
     - name: Check-out llvm-project
       uses: actions/checkout@v2
       with:
-        repository: llvm/llvm-project
+        repository: tali/llvm-project
     - name: Check-out sclang
       uses: actions/checkout@v2
       with:
