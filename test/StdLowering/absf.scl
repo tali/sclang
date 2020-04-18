@@ -1,0 +1,32 @@
+// RUN: sclang --emit=mlir-std %s | FileCheck %s
+
+// CHECK:      func @abs(%arg0: f32) -> f32
+function abs : real
+
+var_input
+ in : real;
+end_var;
+
+begin
+
+// CHECK: [[C0:%[a-z0-9]+]] = constant 0.000000e+00 : f32
+// CHECK: cmpf "ult", %arg0, [[C0]]
+  if in < 0.0 then
+
+// CHECK: [[NEG:%[0-9]+]] = negf %arg0 : f32
+// CHECK: store [[NEG]],
+    abs := -in;
+
+// CHECK: cmpf "ugt", %arg0, [[C0]]
+  elsif in > 0.0 then
+
+// CHECK: store %arg0,
+    abs := in;
+
+  else
+
+// CHECK: store [[C0]],
+    abs := 0.0;
+
+  end_if;
+end_function

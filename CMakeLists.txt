@@ -13,12 +13,14 @@ add_llvm_executable(sclang
   include/sclang/AST.h
   include/sclang/Lexer.h
   include/sclang/Parser.h
+  include/sclang/Passes.h
   include/sclang/Dialect.h
   include/sclang/MLIRGen.h
   include/sclang/Ops.td
   parser/AST.cpp
   parser/Lexer.cpp
   mlir/Dialect.cpp
+  mlir/LowerToStd.cpp
   mlir/MLIRGen.cpp
   sclang.cpp
 
@@ -29,8 +31,10 @@ include_directories(include/)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/include/)
 include_directories(${MLIR_INCLUDE_DIR})
 include_directories(${MLIR_MAIN_SRC_DIR})
+get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
 target_link_libraries(sclang
   PRIVATE
+    ${dialect_libs}
     MLIRAnalysis
     MLIRIR
     MLIRParser

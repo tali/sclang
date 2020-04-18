@@ -126,8 +126,9 @@ def StoreOp : SCL_Op<"store", [SameOperandsElementType]> {
   let assemblyFormat = "attr-dict $lhs `:` type($lhs) `=` $rhs `:` type($rhs)";
 }
 
+
 //
-// MAKR: control flow
+// MARK: control flow
 //
 
 def TerminatorOp : SCL_Op<"terminator", [NoSideEffect, Terminator]> {
