@@ -278,7 +278,7 @@ namespace {
 void print(StructType type, mlir::DialectAsmPrinter &printer) {
   // Print the struct type according to the parser format.
   printer << "struct<";
-  mlir::interleaveComma(type.getElementTypes(), printer);
+  llvm::interleaveComma(type.getElementTypes(), printer);
   printer << '>';
 }
 
