@@ -88,11 +88,14 @@ def TempVariableOp : SCL_Op<"tmpvar"> {
   let assemblyFormat = "$name attr-dict `:` type($result)";
 }
 
-def ConstantOp : SCL_Op<"constant", [ConstantLike, NoSideEffect]> {
+def ConstantOp : SCL_Op<"constant", [
+    NoSideEffect,
+    TypesMatchWith<"result type matches constant", "value", "result", "$_self">
+  ]> {
   let summary = "literal constant";
   let arguments = (ins AnyAttr:$value);
   let results = (outs AnyType:$result);
-  let assemblyFormat = "$value attr-dict `:` type($result)";
+  let assemblyFormat = "attr-dict $value";
 }
 
 def LoadOp : SCL_Op<"load", [SameOperandsAndResultElementType]> {

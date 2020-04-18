@@ -10,7 +10,7 @@ var
 
  b : INT := -2;
 // CHECK-DAG: [[varB:%[0-9]+]] = scl.tmpvar "b" : memref<i16>
-// CHECK-DAG: [[constB:%[0-9]+]] = scl.constant -2 : i16 : i16
+// CHECK-DAG: [[constB:%[0-9]+]] = scl.constant -2 : i16
 // CHECK:     scl.store [[varB]] : memref<i16> = [[constB]] : i16
 
 end_var;
@@ -24,7 +24,7 @@ begin
 
     a := b * 5;
 // CHECK-DAG:   [[valueB:%[+-9]+]] = scl.load [[varB]] : memref<i16> : i16
-// CHECK-DAG:   [[const5:%[0-9]+]] = scl.constant 5 : i16 : i16
+// CHECK-DAG:   [[const5:%[0-9]+]] = scl.constant 5 : i16
 // CHECK-DAG:   [[mul5:%[0-9]+]] = scl.mul [[valueB]], [[const5]] : i16
 // CHECK:       scl.store [[varA]] : memref<i16> = [[mul5]] : i16
 
@@ -33,8 +33,8 @@ begin
 // CHECK:     },  {
 
     b := 2 + 3 * a;
-// CHECK-DAG:   [[const2:%[0-9]+]] = scl.constant 2 : i16 : i16
-// CHECK-DAG:   [[const3:%[0-9]+]] = scl.constant 3 : i16 : i16
+// CHECK-DAG:   [[const2:%[0-9]+]] = scl.constant 2 : i16
+// CHECK-DAG:   [[const3:%[0-9]+]] = scl.constant 3 : i16
 // CHECK-DAG:   [[valueA:%[0-9]+]] = scl.load [[varA]] : memref<i16> : i16
 // CHECK-DAG:   [[mul3:%[0-9]+]] = scl.mul [[const3]], [[valueA]] : i16
 // CHECK-DAG:   [[add2:%[0-9]+]] = scl.add [[const2]], [[mul3]] : i16
