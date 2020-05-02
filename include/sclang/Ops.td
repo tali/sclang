@@ -109,7 +109,7 @@ def LoadOp : SCL_Op<"load", [SameOperandsAndResultElementType]> {
   let assemblyFormat = "$address `:` type($address) attr-dict `:` type($result)";
 
   let builders = [
-    OpBuilder<"Builder *b, OperationState &state, Value memref", [{
+    OpBuilder<"OpBuilder &b, OperationState &state, Value memref", [{
       auto elementType = memref.getType().cast<MemRefType>().getElementType();
       build(b, state, elementType, memref);
     }]>
