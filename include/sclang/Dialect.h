@@ -15,8 +15,7 @@
 // limitations under the License.
 // =============================================================================
 //
-// This file implements the IR Dialect for the Toy language.
-// See g3doc/Tutorials/Toy/Ch-2.md for more information.
+// This file implements the IR Dialect for the SCL language.
 //
 //===----------------------------------------------------------------------===//
 
@@ -61,7 +60,7 @@ enum Types {
 
 /// This class defines the SCL array type.
 class ArrayType : public mlir::Type::TypeBase<ArrayType, mlir::Type,
-                                               detail::ArrayTypeStorage> {
+                                              detail::ArrayTypeStorage> {
 public:
   /// Inherit some necessary constructors from 'TypeBase'.
   using Base::Base;
@@ -73,7 +72,8 @@ public:
 
   /// Create an instance of a `StructType` with the given element types. There
   /// *must* be atleast one element type.
-  static ArrayType get(llvm::ArrayRef<DimTy> dimensions, mlir::Type elementType);
+  static ArrayType get(llvm::ArrayRef<DimTy> dimensions,
+                       mlir::Type elementType);
 
   /// Returns the element types of this struct type.
   llvm::ArrayRef<DimTy> getDimensions();
@@ -105,7 +105,6 @@ public:
   /// Returns the number of element type held by this struct.
   size_t getNumElementTypes() { return getElementTypes().size(); }
 };
-
 
 /// Include the auto-generated header file containing the declarations of the
 /// toy operations.

@@ -28,7 +28,7 @@ std::unique_ptr<mlir::Pass> createLowerToStdPass();
 /// for a subset of the SCL IR (e.g. if-then-else, for-do).
 std::unique_ptr<mlir::Pass> createLowerToLoopPass();
 
-} // end namespace toy
+} // namespace sclang
 } // end namespace mlir
 
 #endif // SCLANG_PASSES_H

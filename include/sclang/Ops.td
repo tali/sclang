@@ -157,25 +157,27 @@ def IfThenElseOp : SCL_Op<"if">, SingleBlockImplicitTerminator<"terminator"> {
 def ContinueOp : SCL_Op<"continue", [NoSideEffect, Terminator]> {
   let summary = "continue operation";
   let description = [{
-    A CONTINUE statement is used to terminate the execution of the current iteration of a loop (initiated by a FOR, WHILE or REPEAT statement) and to restart processing within the loop.
+    A CONTINUE statement is used to terminate the execution of the current
+    iteration of a loop (initiated by a FOR, WHILE or REPEAT statement)
+    and to restart processing within the loop.
   }];
   let assemblyFormat = "attr-dict";
 }
 
-
 def ReturnOp : FuncTerminatorOp<"return"> {
   let summary = "return operation";
   let description = [{
-    A RETURN statement causes the program to exit the block (OB, FB or FC) currently being processed and to return to the calling block or the operating system if the block being exited is an OB.
+    A RETURN statement causes the program to exit the block (OB, FB or FC)
+    currently being processed and to return to the calling block or the
+    operating system if the block being exited is an OB.
   }];
 }
-
 
 def ExitOp : FuncTerminatorOp<"exit"> {
   let summary = "exit operation";
   let description = [{
-    An EXIT statement is used to exit a loop (FOR, WHILE or REPEAT loop) at any point regardless of whether the break condition is satisfied.
-
+    An EXIT statement is used to exit a loop (FOR, WHILE or REPEAT loop) at
+    any point regardless of whether the break condition is satisfied.
   }];
 }
 

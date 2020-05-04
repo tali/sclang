@@ -22,7 +22,6 @@
 
 using namespace mlir;
 
-
 namespace {
 //===----------------------------------------------------------------------===//
 // ToyToAffine RewritePatterns: Binary operations
@@ -44,21 +43,23 @@ using AddOpLowering = BinaryOpLowering<scl::AddOp, AddFOp>;
 using MulOpLowering = BinaryOpLowering<scl::MulOp, MulFOp>;
 
 template <typename CompareOp, mlir::CmpFPredicate predicate>
-struct CompareOpLowering: public ConversionPattern {
+struct CompareOpLowering : public ConversionPattern {
   CompareOpLowering(MLIRContext *ctx)
       : ConversionPattern(CompareOp::getOperationName(), 1, ctx) {}
 
   LogicalResult
   matchAndRewrite(Operation *op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
-    rewriter.replaceOpWithNewOp<CmpFOp>(op, predicate, operands[0], operands[1]);
+    rewriter.replaceOpWithNewOp<CmpFOp>(op, predicate, operands[0],
+                                        operands[1]);
     return success();
   }
 };
-using LessThanLowering = CompareOpLowering<scl::LessThanOp, mlir::CmpFPredicate::ULT>;
-using GreaterThanLowering = CompareOpLowering<scl::GreaterThanOp, mlir::CmpFPredicate::UGT>;
+using LessThanLowering =
+    CompareOpLowering<scl::LessThanOp, mlir::CmpFPredicate::ULT>;
+using GreaterThanLowering =
+    CompareOpLowering<scl::GreaterThanOp, mlir::CmpFPredicate::UGT>;
 using EqualLowering = CompareOpLowering<scl::EqualOp, mlir::CmpFPredicate::UEQ>;
-
 
 template <typename BinaryOp, typename LoweredBinaryOp>
 struct UnaryOpLowering : public ConversionPattern {
@@ -74,17 +75,16 @@ struct UnaryOpLowering : public ConversionPattern {
 };
 using UnaryMinusOpLowering = UnaryOpLowering<scl::UnaryMinusOp, NegFOp>;
 
-
 // MARK: ConstantOpLowering
 
 struct ConstantOpLowering : public OpRewritePattern<scl::ConstantOp> {
-using OpRewritePattern<scl::ConstantOp>::OpRewritePattern;
+  using OpRewritePattern<scl::ConstantOp>::OpRewritePattern;
 
-LogicalResult matchAndRewrite(scl::ConstantOp op,
-                              PatternRewriter &rewriter) const final {
+  LogicalResult matchAndRewrite(scl::ConstantOp op,
+                                PatternRewriter &rewriter) const final {
 
     // directly lower to Std
-  rewriter.replaceOpWithNewOp<ConstantOp>(op, op.value());
+    rewriter.replaceOpWithNewOp<ConstantOp>(op, op.value());
     return success();
   }
 };
@@ -115,14 +115,14 @@ struct StoreOpLowering : public OpRewritePattern<scl::StoreOp> {
 
 } // end anonymous namespace.
 
-
 // MARK: SclToStdLoweringPass
 
 /// This is a partial lowering to affine loops of the toy operations that are
 /// computationally intensive (like matmul for example...) while keeping the
 /// rest of the code in the Toy dialect.
 namespace {
-struct SclToStdLoweringPass : public PassWrapper<SclToStdLoweringPass, FunctionPass> {
+struct SclToStdLoweringPass
+    : public PassWrapper<SclToStdLoweringPass, FunctionPass> {
   void runOnFunction() final;
 };
 } // end anonymous namespace.
@@ -140,18 +140,11 @@ void SclToStdLoweringPass::runOnFunction() {
   target.addLegalOp<scl::TerminatorOp>();
 
   OwningRewritePatternList patterns;
-  patterns.insert<
-    AddOpLowering,
-    ConstantOpLowering,
-    EqualLowering,
-    GreaterThanLowering,
-    LessThanLowering,
-    LoadOpLowering,
-    MulOpLowering,
-//    ReturnOpLowering,
-    StoreOpLowering,
-    UnaryMinusOpLowering
-  >(&getContext());
+  patterns.insert<AddOpLowering, ConstantOpLowering, EqualLowering,
+                  GreaterThanLowering, LessThanLowering, LoadOpLowering,
+                  MulOpLowering,
+                  
+                  StoreOpLowering, UnaryMinusOpLowering>(&getContext());
 
   if (failed(applyPartialConversion(getFunction(), target, patterns)))
     signalPassFailure();

@@ -22,8 +22,8 @@
 #ifndef SCLANG_LEXER_H_
 #define SCLANG_LEXER_H_
 
-#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringRef.h"
 
 #include <memory>
 #include <string>
@@ -147,17 +147,17 @@ enum Token : int {
   tok_cmp_eq = '=',
 
   // comments
-  tok_blockcomment_open = -85, // (*
+  tok_blockcomment_open = -85,  // (*
   tok_blockcomment_close = -86, // *)
-  tok_linecomment = -87, // //
+  tok_linecomment = -87,        // //
 
   // multi character operators
-  tok_assignment = -88, // :=
-  tok_exponent = -89, // **
-  tok_range = -90, // ..
-  tok_cmp_le = -91, // <=
-  tok_cmp_ge = -92, // >=
-  tok_cmp_ne = -93, // <>
+  tok_assignment = -88,    // :=
+  tok_exponent = -89,      // **
+  tok_range = -90,         // ..
+  tok_cmp_le = -91,        // <=
+  tok_cmp_ge = -92,        // >=
+  tok_cmp_ne = -93,        // <>
   tok_assign_output = -94, // =>
 
   // names and literals
@@ -176,7 +176,7 @@ enum Token : int {
   tok_error_date = -905,
   tok_error_time = -906,
 };
-llvm::raw_ostream& operator<< (llvm::raw_ostream& s, Token token);
+llvm::raw_ostream &operator<<(llvm::raw_ostream &s, Token token);
 
 /// The Lexer is an abstract base class providing all the facilities that the
 /// Parser expects. It goes through the stream one token at a time and keeps
@@ -206,7 +206,8 @@ public:
     getNextToken();
   }
 
-  /// Split a negative value token into a minus and a number, then consume the minus.
+  /// Split a negative value token into a minus and a number, then consume the
+  /// minus.
   void consumeMinus() {
     assert(isNegativeValue());
     if (curTok == tok_integer_literal)
@@ -217,7 +218,8 @@ public:
   }
 
   /// Return `true` if the current token starts with a minus.
-  /// The token can either be used as negative value or the minus can be consumed by `consumeMinus()`.
+  /// The token can either be used as negative value or the minus can be
+  /// consumed by `consumeMinus()`.
   bool isNegativeValue() {
     assert(curTok == tok_integer_literal || curTok == tok_real_number_literal);
     return negative;
@@ -226,7 +228,8 @@ public:
   /// Return the type of the literal expression, or `tok_none` if there is none.
   /// The type can be specified as prefix, e.g. as `INT#23`.
   Token getLiteralType() {
-    assert(curTok == tok_integer_literal || curTok == tok_real_number_literal || curTok == tok_string_literal || curTok == tok_time_literal);
+    assert(curTok == tok_integer_literal || curTok == tok_real_number_literal ||
+           curTok == tok_string_literal || curTok == tok_time_literal);
     return literalType;
   }
 
@@ -236,7 +239,8 @@ public:
     return stringValue;
   }
 
-  /// Like `getIdentifier()`, but returns current identifier as lower-case string.
+  /// Like `getIdentifier()`, but returns current identifier as lower-case
+  /// string.
   llvm::StringRef getIdentifierLower() {
     assert(curTok == tok_identifier);
     return stringLowerValue;
@@ -267,7 +271,8 @@ public:
   }
 
   /// Get the value of a time literal, separated into time components.
-  void getTimeValue(int &year, int &mon, int &day, int &hour, int &min, int &sec, int &msec) {
+  void getTimeValue(int &year, int &mon, int &day, int &hour, int &min,
+                    int &sec, int &msec) {
     assert(curTok == tok_time_literal);
     year = yearVal;
     mon = monVal;
@@ -314,10 +319,11 @@ private:
   // MARK: reserved words
 
   /// Return token for reserved word.
-  /// If the current token is not a reserved word, then interpret it as an identifier.
+  /// If the current token is not a reserved word, then interpret it as an
+  /// identifier.
   Token getReservedWordTok() {
     stringValue = (char)lastChar;
-    std::string lower { (char)tolower(lastChar) };
+    std::string lower{(char)tolower(lastChar)};
     while (isalnum((lastChar = Token(getNextChar()))) || lastChar == '_') {
       stringValue += (char)lastChar;
       lower += (char)tolower(lastChar);
@@ -489,15 +495,24 @@ private:
 
     // expand shortcuts for typed literals
     if (lastChar == '#') {
-      if (lower == "b") return tok_byte;
-      if (lower == "i") return tok_int;
-      if (lower == "d") return tok_date;
-      if (lower == "l") return tok_dint;
-      if (lower == "dt") return tok_date_and_time;
-      if (lower == "dw") return tok_dword;
-      if (lower == "t") return tok_time;
-      if (lower == "tod") return tok_time_of_day;
-      if (lower == "w") return tok_word;
+      if (lower == "b")
+        return tok_byte;
+      if (lower == "i")
+        return tok_int;
+      if (lower == "d")
+        return tok_date;
+      if (lower == "l")
+        return tok_dint;
+      if (lower == "dt")
+        return tok_date_and_time;
+      if (lower == "dw")
+        return tok_dword;
+      if (lower == "t")
+        return tok_time;
+      if (lower == "tod")
+        return tok_time_of_day;
+      if (lower == "w")
+        return tok_word;
     }
 
     return tok_identifier;
@@ -505,7 +520,8 @@ private:
 
   /// Return a literal constant based on the given type.
   /// Assumes that we stopped parsing at a `#` character which separates
-  /// the type of a literal constant from the value and consumes the entire literal.
+  /// the type of a literal constant from the value and consumes the entire
+  /// literal.
   Token getTypedLiteralTok(Token type) {
     assert(lastChar == Token('#'));
     literalType = type;
@@ -544,7 +560,8 @@ private:
   // MARK: number literals
 
   /// Return a number literal, consumes all numeric characters.
-  /// The value of the literal can be obtained with `getIntegerValue()`, `getRealNumberValue()`, or `getStringValue()`.
+  /// The value of the literal can be obtained with `getIntegerValue()`,
+  /// `getRealNumberValue()`, or `getStringValue()`.
   Token getNumberLiteralTok() {
     stringValue = "";
     negative = false;
@@ -557,9 +574,7 @@ private:
         return Token('-');
     }
 
-    enum State {
-      Decimal, Binary, Octal, Hex, Real, Exponent
-    } state = Decimal;
+    enum State { Decimal, Binary, Octal, Hex, Real, Exponent } state = Decimal;
     while (true) {
       if (lastChar == '_')
         lastChar = Token(getNextChar());
@@ -587,7 +602,8 @@ private:
         stringValue += '.';
         state = Real;
         continue; // we already got the next char
-      } else if ((lastChar == 'e' || lastChar == 'E') && (state == Decimal || state == Real)) {
+      } else if ((lastChar == 'e' || lastChar == 'E') &&
+                 (state == Decimal || state == Real)) {
         stringValue += 'e';
         state = Exponent;
         // the exponent is the only part where a sign is valid within the number
@@ -633,7 +649,8 @@ private:
   // MARK: strings and symbols
 
   /// Return a string literal.
-  /// Consumes all characters belonging to the string. The literal value can be obtained using `getStringValue`.
+  /// Consumes all characters belonging to the string. The literal value can be
+  /// obtained using `getStringValue`.
   Token getStringLiteralTok() {
     assert(lastChar == '\'');
 
@@ -649,18 +666,23 @@ private:
         case Token('\''):
           stringValue += c;
           break;
-        case Token('l'): case Token('L'):
-        case Token('p'): case Token('P'):
+        case Token('l'):
+        case Token('L'):
+        case Token('p'):
+        case Token('P'):
           stringValue += '\n'; // TODO: check
           break;
-        case Token('r'): case Token('R'):
+        case Token('r'):
+        case Token('R'):
           stringValue += '\r';
           break;
-        case Token('t'): case Token('T'):
+        case Token('t'):
+        case Token('T'):
           stringValue += '\t';
           break;
         case Token('>'): // TODO: check
-          while (getNextChar() != '$');
+          while (getNextChar() != '$')
+            ;
           if (getNextChar() != '<')
             return tok_error_string;
         }
@@ -688,7 +710,6 @@ private:
       return tok_error_symbol;
     lastChar = Token(getNextChar());
     return tok_symbol;
-
   }
 
   // MARK: date and time literals
@@ -696,7 +717,7 @@ private:
   /// Consume a number and write it to `val`.
   bool getNumber(int &val) {
     std::string number;
-    while (isdigit(lastChar) || lastChar==Token('_')) {
+    while (isdigit(lastChar) || lastChar == Token('_')) {
       if (isdigit(lastChar))
         number += lastChar;
       lastChar = Token(getNextChar());
@@ -752,15 +773,19 @@ private:
   /// Return a time duration literal ([NNd] [NNh] [NNm] [NNs]).
   Token getTimeLiteralTok() {
     enum { None, Day, Hour, Min, Sec, MSec } pos, lastpos = None;
-    while (isdigit(lastChar) || lastChar==Token('_')) {
+    while (isdigit(lastChar) || lastChar == Token('_')) {
       int num;
       if (!getNumber(num))
         return tok_error_time;
       int kind = tolower(lastChar);
       lastChar = Token(getNextChar());
       switch (kind) {
-      case 'd': pos = Day; break;
-      case 'h': pos = Hour; break;
+      case 'd':
+        pos = Day;
+        break;
+      case 'h':
+        pos = Hour;
+        break;
       case 'm':
         if (tolower(lastChar) == Token('s')) {
           lastChar = Token(getNextChar());
@@ -769,19 +794,32 @@ private:
           pos = Min;
         }
         break;
-      case 's': pos = Sec; break;
+      case 's':
+        pos = Sec;
+        break;
       default:
         return tok_error_time;
       }
       if (pos < lastpos)
         return tok_error_time;
       switch (pos) {
-      case None: assert(false);
-      case Day: dayVal = num; break;
-      case Hour: hourVal = num; break;
-      case Min: minVal = num; break;
-      case Sec: secVal = num; break;
-      case MSec: msecVal = num; break;
+      case None:
+        assert(false);
+      case Day:
+        dayVal = num;
+        break;
+      case Hour:
+        hourVal = num;
+        break;
+      case Min:
+        minVal = num;
+        break;
+      case Sec:
+        secVal = num;
+        break;
+      case MSec:
+        msecVal = num;
+        break;
       }
     }
     return tok_time_literal;
@@ -936,13 +974,16 @@ private:
   /// if current Token is a literal, this stores the type
   Token literalType;
 
-  /// If the current Token is an identifier, symbol, or string, this string contains the value.
+  /// If the current Token is an identifier, symbol, or string, this string
+  /// contains the value.
   std::string stringValue;
 
-  /// If the current Token is an identifier, symbol, or string, this string contains the value in lower case.
+  /// If the current Token is an identifier, symbol, or string, this string
+  /// contains the value in lower case.
   std::string stringLowerValue;
 
-  /// If the current Token is a number literal, then true if that number is negative.
+  /// If the current Token is a number literal, then true if that number is
+  /// negative.
   bool negative = false;
 
   /// If the current Token is a number, this contains the value.

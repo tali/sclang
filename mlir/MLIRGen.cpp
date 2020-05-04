@@ -64,8 +64,8 @@ class VariableSymbol {
 
 public:
   VariableSymbol() : type(), value(), memref(false), direct(false) {}
-  VariableSymbol(mlir::Type type, mlir::Value value, bool memref) :
-    type(type), value(value), memref(memref), direct(!memref) {}
+  VariableSymbol(mlir::Type type, mlir::Value value, bool memref)
+      : type(type), value(value), memref(memref), direct(!memref) {}
 
   mlir::Type getType() const { return type; }
   mlir::Value getValue() const { return value; }
@@ -124,13 +124,14 @@ private:
 
   /// Helper conversion for a SCL AST location to an MLIR location.
   mlir::Location loc(Location loc) {
-    return builder.getFileLineColLoc(builder.getIdentifier(*loc.file),
-                                     loc.line, loc.col);
+    return builder.getFileLineColLoc(builder.getIdentifier(*loc.file), loc.line,
+                                     loc.col);
   }
 
   /// Declare a variable in the current scope, return success if the variable
   /// wasn't declared yet.
-  mlir::LogicalResult declare(llvm::StringRef var, mlir::Type type, mlir::Value value, bool memref) {
+  mlir::LogicalResult declare(llvm::StringRef var, mlir::Type type,
+                              mlir::Value value, bool memref) {
     assert(!var.empty());
     if (symbolTable.count(var))
       return mlir::failure();
@@ -153,14 +154,16 @@ private:
   }
 
   /// Append all the types and names of a variable declaration to an array
-  void addVariables(const VariableDeclarationSubsectionAST & decls, std::vector<mlir::Type> & types, std::vector<llvm::StringRef> & names) {
-    const auto & values = decls.getValues();
+  void addVariables(const VariableDeclarationSubsectionAST &decls,
+                    std::vector<mlir::Type> &types,
+                    std::vector<llvm::StringRef> &names) {
+    const auto &values = decls.getValues();
     types.reserve(types.size() + types.size());
     names.reserve(names.size() + names.size());
-    for (const auto & decl : values) {
+    for (const auto &decl : values) {
       auto type = getType(*decl->getDataType());
       // TODO: initializer
-      for (const auto & var : decl->getVars()) {
+      for (const auto &var : decl->getVars()) {
         // TODO: attributes
         types.push_back(type);
         names.push_back(var->getIdentifier());
@@ -178,13 +181,14 @@ private:
     std::string name(func.getIdentifier());
 
     // Create a scope in the symbol table to hold variable declarations.
-    llvm::ScopedHashTableScope<StringRef, VariableSymbol> var_scope(symbolTable);
+    llvm::ScopedHashTableScope<StringRef, VariableSymbol> var_scope(
+        symbolTable);
 
     std::vector<mlir::Type> input_types;
     std::vector<llvm::StringRef> input_names;
     std::vector<mlir::Type> output_types;
     std::vector<llvm::StringRef> output_names;
-    std::vector<const VariableDeclarationSubsectionAST*> tempvar;
+    std::vector<const VariableDeclarationSubsectionAST *> tempvar;
     // register function result as output variable
     auto retType = getType(*func.getType());
     if (!retType.isa<mlir::NoneType>()) {
@@ -193,8 +197,8 @@ private:
     }
 
     // Parse the declaration subsections
-    const auto & declarations = func.getDeclarations()->getDecls();
-    for (const auto & decl : declarations) {
+    const auto &declarations = func.getDeclarations()->getDecls();
+    for (const auto &decl : declarations) {
       switch (decl->getKind()) {
       case DeclarationSubsectionAST::DeclarationASTKind::Decl_Constant:
         emitError(location) << "TBD constants not implemented";
@@ -203,7 +207,8 @@ private:
         emitError(location) << "TBD jump labels not implemented";
         return nullptr;
       case DeclarationSubsectionAST::DeclarationASTKind::Decl_Variable:
-        const auto & vardecls = llvm::cast<VariableDeclarationSubsectionAST>(*decl);
+        const auto &vardecls =
+            llvm::cast<VariableDeclarationSubsectionAST>(*decl);
         switch (vardecls.getKind()) {
         case VariableDeclarationSubsectionAST::VarInput:
           addVariables(vardecls, input_types, input_names);
@@ -225,7 +230,7 @@ private:
     // Create an MLIR function
 
     auto func_type = builder.getFunctionType(input_types, output_types);
-    auto function =  mlir::FuncOp::create(location, name, func_type);
+    auto function = mlir::FuncOp::create(location, name, func_type);
     if (!function)
       return nullptr;
 
@@ -251,28 +256,31 @@ private:
 
     // prologue: stack space for temporary variables
     for (const auto subsection : tempvar) {
-      for (const auto & decl : subsection->getValues()) {
+      for (const auto &decl : subsection->getValues()) {
         auto type = getType(*decl->getDataType());
         auto memRefType = mlir::MemRefType::get({}, type);
         auto init = decl->getInitializer();
-        for (const auto & var : decl->getVars()) {
+        for (const auto &var : decl->getVars()) {
           auto location = loc(var->loc());
-          auto varStorage = builder.create<TempVariableOp>(location, memRefType, builder.getStringAttr(var->getIdentifier()));
+          auto varStorage = builder.create<TempVariableOp>(
+              location, memRefType,
+              builder.getStringAttr(var->getIdentifier()));
           declare(var->getIdentifier(), type, varStorage, true);
           if (init) {
-            builder.create<StoreOp>(location, varStorage, mlirGen(*init.getValue()));
+            builder.create<StoreOp>(location, varStorage,
+                                    mlirGen(*init.getValue()));
           }
         }
       }
     }
 
     // Declare all the function outputs in the symbol table.
-    for (const auto &name_value :
-         llvm::zip(output_types, output_names)) {
+    for (const auto &name_value : llvm::zip(output_types, output_names)) {
       auto type = std::get<0>(name_value);
       auto name = std::get<1>(name_value);
       auto memRefType = mlir::MemRefType::get({}, type);
-      auto varStorage = builder.create<TempVariableOp>(location, memRefType, builder.getStringAttr(name));
+      auto varStorage = builder.create<TempVariableOp>(
+          location, memRefType, builder.getStringAttr(name));
       declare(name, type, varStorage, true);
     }
 
@@ -282,7 +290,7 @@ private:
       return nullptr;
     }
 
-   // Implicitly return if no return statement was emitted.
+    // Implicitly return if no return statement was emitted.
     ReturnOp returnOp;
     if (!entryBlock.empty())
       returnOp = dyn_cast<ReturnOp>(entryBlock.back());
@@ -314,7 +322,7 @@ private:
 
   /// Codegen a code section, return failure if one statement hit an error.
   mlir::LogicalResult mlirGen(const CodeSectionAST &code) {
-    //ScopedHashTableScope<StringRef, mlir::Value> var_scope(symbolTable);
+    // ScopedHashTableScope<StringRef, mlir::Value> var_scope(symbolTable);
 
     for (auto &instr : code.getInstructions()) {
       // Generic expression dispatch codegen.
@@ -328,7 +336,7 @@ private:
   mlir::LogicalResult mlirGen(const InstructionAST &instr) {
     auto location = loc(instr.loc());
 
-    switch(instr.getKind()) {
+    switch (instr.getKind()) {
     case InstructionAST::Instr_Assignment:
       return mlirGen(llvm::cast<ValueAssignmentAST>(instr));
     case InstructionAST::Instr_Continue:
@@ -355,7 +363,7 @@ private:
   mlir::LogicalResult mlirGen(const ValueAssignmentAST &instr) {
     auto location = loc(instr.loc());
 
-    const auto & expr = llvm::cast<BinaryExpressionAST>(*instr.getExpression());
+    const auto &expr = llvm::cast<BinaryExpressionAST>(*instr.getExpression());
     assert(expr.getOp() == tok_assignment);
 
     mlir::Value lhs = mlirGenLValue(*expr.getLhs());
@@ -366,14 +374,14 @@ private:
       return mlir::failure();
 
     builder.create<StoreOp>(location, lhs, rhs);
-  
+
     return mlir::success();
   }
 
   mlir::Value mlirGenLValue(const ExpressionAST &expr) {
     auto location = loc(expr.loc());
 
-    switch(expr.getKind()) {
+    switch (expr.getKind()) {
     default:
       emitError(location) << "not a lvalue, kind " << (int)expr.getKind();
       return nullptr;
@@ -381,13 +389,13 @@ private:
       return mlirGenLValue(llvm::cast<SimpleVariableAST>(expr));
     case ExpressionAST::Expr_IndexedVariable:
       emitError(loc(expr.loc()))
-      << "IndexedVariable not implemented"; // TODO: TBD
+          << "IndexedVariable not implemented"; // TODO: TBD
       return nullptr;
     }
   }
 
   mlir::Value mlirGen(const ExpressionAST &expr) {
-    switch(expr.getKind()) {
+    switch (expr.getKind()) {
     case ExpressionAST::Expr_IntegerConstant:
       return mlirGen(llvm::cast<IntegerConstantAST>(expr));
     case ExpressionAST::Expr_RealConstant:
@@ -402,7 +410,7 @@ private:
       return mlirGen(llvm::cast<UnaryExpressionAST>(expr));
     default:
       emitError(loc(expr.loc()))
-      << "expression kind not implemented"; // TODO: TBD
+          << "expression kind not implemented"; // TODO: TBD
       return nullptr;
     }
   }
@@ -478,7 +486,8 @@ private:
     // support '+' and '*'.
     switch (expr.getOp()) {
     default:
-      emitError(location, "invalid binary operator '") << (int)expr.getOp() << "'";
+      emitError(location, "invalid binary operator '")
+          << (int)expr.getOp() << "'";
       return nullptr;
     case tok_or:
       return builder.create<OrOp>(location, lhs, rhs);
@@ -490,15 +499,20 @@ private:
     case sclang::tok_cmp_eq:
       return builder.create<EqualOp>(location, builder.getI1Type(), lhs, rhs);
     case sclang::tok_cmp_ne:
-      return builder.create<NotEqualOp>(location, builder.getI1Type(), lhs, rhs);
+      return builder.create<NotEqualOp>(location, builder.getI1Type(), lhs,
+                                        rhs);
     case sclang::tok_cmp_lt:
-      return builder.create<LessThanOp>(location, builder.getI1Type(), lhs, rhs);
+      return builder.create<LessThanOp>(location, builder.getI1Type(), lhs,
+                                        rhs);
     case sclang::tok_cmp_le:
-      return builder.create<LessEqualOp>(location, builder.getI1Type(), lhs, rhs);
+      return builder.create<LessEqualOp>(location, builder.getI1Type(), lhs,
+                                         rhs);
     case sclang::tok_cmp_gt:
-      return builder.create<GreaterThanOp>(location, builder.getI1Type(), lhs, rhs);
+      return builder.create<GreaterThanOp>(location, builder.getI1Type(), lhs,
+                                           rhs);
     case sclang::tok_cmp_ge:
-      return builder.create<GreaterEqualOp>(location, builder.getI1Type(), lhs, rhs);
+      return builder.create<GreaterEqualOp>(location, builder.getI1Type(), lhs,
+                                            rhs);
     case sclang::tok_minus:
       return builder.create<SubOp>(location, lhs, rhs);
     case sclang::tok_plus:
@@ -514,7 +528,8 @@ private:
       return builder.create<ExpOp>(location, lhs, rhs);
     }
 
-    emitError(location, "invalid binary operator '") << (int)expr.getOp() << "'";
+    emitError(location, "invalid binary operator '")
+        << (int)expr.getOp() << "'";
     return nullptr;
   }
 
@@ -532,14 +547,14 @@ private:
     case tok_plus:
       return rhs;
     default:
-      emitError(location, "invalid binary operator '") << (int)expr.getOp() << "'";
+      emitError(location, "invalid binary operator '")
+          << (int)expr.getOp() << "'";
       return nullptr;
     }
   }
 
-
   mlir::Type getType(const ElementaryDataTypeAST &type) {
-    switch(type.getType()) {
+    switch (type.getType()) {
     case ElementaryDataTypeAST::Type_Void:
       return builder.getNoneType();
     case ElementaryDataTypeAST::Type_Bool:
@@ -561,13 +576,14 @@ private:
     // TODO: TBD more types
     default:
       emitError(loc(type.loc()))
-        << "MLIR codegen encountered an unhandled type '"
-        << Twine(type.getType()) << "'";
+          << "MLIR codegen encountered an unhandled type '"
+          << Twine(type.getType()) << "'";
       return nullptr;
     }
   }
 
-  mlir::LogicalResult getConstantInteger(const ExpressionAST &expr, int & value) {
+  mlir::LogicalResult getConstantInteger(const ExpressionAST &expr,
+                                         int &value) {
     switch (expr.getKind()) {
     default:
       emitError(loc(expr.loc())) << "constant integer expected";
@@ -582,7 +598,7 @@ private:
     mlir::Type elementType = getType(*type.getDataType());
     std::vector<ArrayType::DimTy> dimensions;
     dimensions.reserve(type.getDimensions().size());
-    for (const auto & dim : type.getDimensions()) {
+    for (const auto &dim : type.getDimensions()) {
       int min, max;
       if (mlir::failed(getConstantInteger(*dim.get()->getMin(), min)))
         return nullptr;
@@ -599,7 +615,7 @@ private:
     auto components = type.getComponents();
     elements.reserve(components.size());
 
-    for (auto & component : components) {
+    for (auto &component : components) {
       mlir::Type type = getType(*component.get()->getDataType());
       if (!type)
         return nullptr;
@@ -609,7 +625,7 @@ private:
   }
 
   mlir::Type getType(const DataTypeSpecAST &type) {
-    switch(type.getKind()) {
+    switch (type.getKind()) {
     case DataTypeSpecAST::DataType_Elementary:
       return getType(llvm::cast<ElementaryDataTypeAST>(type));
     case DataTypeSpecAST::DataType_Array:
@@ -618,12 +634,11 @@ private:
       return getType(llvm::cast<StructDataTypeSpecAST>(type));
     default:
       emitError(loc(type.loc()))
-        << "MLIR codegen encountered an unhandled type kind '"
-        << Twine(type.getKind()) << "'";
+          << "MLIR codegen encountered an unhandled type kind '"
+          << Twine(type.getKind()) << "'";
       return nullptr;
     }
   }
-
 
   // MARK: C.7 Control Statements
 
@@ -634,7 +649,7 @@ private:
     auto old = builder.saveInsertionPoint();
     bool first = true;
 
-    for (const auto & ifThen : ifThenElse.getThens()) {
+    for (const auto &ifThen : ifThenElse.getThens()) {
       auto location = loc(ifThen->loc());
       auto condition = mlirGen(*ifThen->getCondition());
       if (!condition)

@@ -44,7 +44,7 @@ struct Indent {
 /// the way. The only data member is the current indentation level.
 class ASTDumper {
 public:
-  ASTDumper(llvm::raw_ostream & outs) : outs(outs) {}
+  ASTDumper(llvm::raw_ostream &outs) : outs(outs) {}
   void dump(const ModuleAST *Node);
 
 private:
@@ -118,7 +118,7 @@ private:
       outs << "  ";
   }
   int curIndent = 0;
-  llvm::raw_ostream & outs;
+  llvm::raw_ostream &outs;
 };
 
 } // namespace
@@ -159,10 +159,11 @@ void ASTDumper::dump(const AttributeAST *attr) {
 }
 
 void ASTDumper::dump(llvm::ArrayRef<std::unique_ptr<AttributeAST>> attrs) {
-  if (attrs.empty()) return;
+  if (attrs.empty())
+    return;
   INDENT();
   outs << "Attributes\n";
-  for (auto const & attr : attrs) {
+  for (auto const &attr : attrs) {
     dump(attr.get());
   }
 }
@@ -231,13 +232,14 @@ void ASTDumper::dump(const DeclarationSubsectionAST *subsection) {
 #undef dispatch
   // No match, fallback to a generic message
   INDENT();
-  outs << "<unknown declaration subsection, kind" << subsection->getKind() << ">\n";
+  outs << "<unknown declaration subsection, kind" << subsection->getKind()
+       << ">\n";
 }
 
 void ASTDumper::dump(const ConstantDeclarationSubsectionAST *node) {
   INDENT();
   outs << "ConstantDeclarationSubsection\n";
-  for (auto const & decl : node->getValues()) {
+  for (auto const &decl : node->getValues()) {
     dump(decl.get());
   }
 }
@@ -251,7 +253,7 @@ void ASTDumper::dump(const ConstantDeclarationAST *node) {
 void ASTDumper::dump(const JumpLabelDeclarationSubsectionAST *node) {
   INDENT();
   outs << "JumpLabelDeclarationSubsection\n";
-  for (auto const & decl : node->getValues()) {
+  for (auto const &decl : node->getValues()) {
     dump(decl.get());
   }
 }
@@ -263,7 +265,7 @@ void ASTDumper::dump(const JumpLabelDeclarationAST *node) {
 
 void ASTDumper::dump(const VariableDeclarationSubsectionAST *node) {
   INDENT();
-  switch(node->getKind()) {
+  switch (node->getKind()) {
   case VariableDeclarationSubsectionAST::Var:
     outs << "VariableSubsection\n";
     break;
@@ -304,15 +306,15 @@ void ASTDumper::dump(const VariableIdentifierAST *node) {
 }
 
 void ASTDumper::dump(const DataTypeSpecAST *dataType) {
-  #define dispatch(CLASS)                                                      \
-    if (const CLASS *node = llvm::dyn_cast<CLASS>(dataType))                   \
-      return dump(node);
-    dispatch(ElementaryDataTypeAST);
-    dispatch(StringDataTypeSpecAST);
-    dispatch(ArrayDataTypeSpecAST);
-    dispatch(StructDataTypeSpecAST);
-    dispatch(UserDefinedTypeIdentifierAST);
-  #undef dispatch
+#define dispatch(CLASS)                                                        \
+  if (const CLASS *node = llvm::dyn_cast<CLASS>(dataType))                     \
+    return dump(node);
+  dispatch(ElementaryDataTypeAST);
+  dispatch(StringDataTypeSpecAST);
+  dispatch(ArrayDataTypeSpecAST);
+  dispatch(StructDataTypeSpecAST);
+  dispatch(UserDefinedTypeIdentifierAST);
+#undef dispatch
   // No match, fallback to a generic message
   INDENT();
   outs << "<unknown data type, kind" << dataType->getKind() << ">\n";
@@ -322,49 +324,71 @@ void ASTDumper::dump(const ElementaryDataTypeAST *node) {
   INDENT();
   switch (node->getType()) {
   case sclang::ElementaryDataTypeAST::Type_Void:
-    outs << "ElementaryDataType Void\n"; return;
+    outs << "ElementaryDataType Void\n";
+    return;
   case ElementaryDataTypeAST::Type_Bool:
-    outs << "ElementaryDataType Bool\n"; return;
+    outs << "ElementaryDataType Bool\n";
+    return;
   case ElementaryDataTypeAST::Type_Byte:
-    outs << "ElementaryDataType Byte\n"; return;
+    outs << "ElementaryDataType Byte\n";
+    return;
   case ElementaryDataTypeAST::Type_Word:
-    outs << "ElementaryDataType Word\n"; return;
+    outs << "ElementaryDataType Word\n";
+    return;
   case ElementaryDataTypeAST::Type_DWord:
-    outs << "ElementaryDataType DWord\n"; return;
+    outs << "ElementaryDataType DWord\n";
+    return;
   case ElementaryDataTypeAST::Type_Char:
-    outs << "ElementaryDataType Char\n"; return;
+    outs << "ElementaryDataType Char\n";
+    return;
   case ElementaryDataTypeAST::Type_Int:
-    outs << "ElementaryDataType Int\n"; return;
+    outs << "ElementaryDataType Int\n";
+    return;
   case ElementaryDataTypeAST::Type_DInt:
-    outs << "ElementaryDataType DInt\n"; return;
+    outs << "ElementaryDataType DInt\n";
+    return;
   case ElementaryDataTypeAST::Type_Real:
-    outs << "ElementaryDataType Real\n"; return;
+    outs << "ElementaryDataType Real\n";
+    return;
   case ElementaryDataTypeAST::Type_S5Time:
-    outs << "ElementaryDataType S5Time\n"; return;
+    outs << "ElementaryDataType S5Time\n";
+    return;
   case ElementaryDataTypeAST::Type_Time:
-    outs << "ElementaryDataType Time\n"; return;
+    outs << "ElementaryDataType Time\n";
+    return;
   case ElementaryDataTypeAST::Type_TimeOfDay:
-    outs << "ElementaryDataType TimeOfDay\n"; return;
+    outs << "ElementaryDataType TimeOfDay\n";
+    return;
   case ElementaryDataTypeAST::Type_Date:
-    outs << "ElementaryDataType Date\n"; return;
+    outs << "ElementaryDataType Date\n";
+    return;
   case ElementaryDataTypeAST::Type_DateAndTime:
-    outs << "ElementaryDataType DateAndTime\n"; return;
+    outs << "ElementaryDataType DateAndTime\n";
+    return;
   case ElementaryDataTypeAST::Type_Timer:
-    outs << "ElementaryDataType Timer\n"; return;
+    outs << "ElementaryDataType Timer\n";
+    return;
   case ElementaryDataTypeAST::Type_Counter:
-    outs << "ElementaryDataType Counter\n"; return;
+    outs << "ElementaryDataType Counter\n";
+    return;
   case ElementaryDataTypeAST::Type_Any:
-    outs << "ElementaryDataType Any\n"; return;
+    outs << "ElementaryDataType Any\n";
+    return;
   case ElementaryDataTypeAST::Type_Pointer:
-    outs << "ElementaryDataType Pointer\n"; return;
+    outs << "ElementaryDataType Pointer\n";
+    return;
   case ElementaryDataTypeAST::Type_BlockFC:
-    outs << "ElementaryDataType BlockFC\n"; return;
+    outs << "ElementaryDataType BlockFC\n";
+    return;
   case ElementaryDataTypeAST::Type_BlockFB:
-    outs << "ElementaryDataType BlockFB\n"; return;
+    outs << "ElementaryDataType BlockFB\n";
+    return;
   case ElementaryDataTypeAST::Type_BlockDB:
-    outs << "ElementaryDataType BlockDB\n"; return;
+    outs << "ElementaryDataType BlockDB\n";
+    return;
   case ElementaryDataTypeAST::Type_BlockSDB:
-    outs << "ElementaryDataType BlockSDB\n"; return;
+    outs << "ElementaryDataType BlockSDB\n";
+    return;
   }
   outs << "<unknown ElementaryDataType, type " << node->getType() << ">\n";
 }
@@ -422,25 +446,25 @@ void ASTDumper::dump(const CodeSectionAST *node) {
 }
 
 void ASTDumper::dump(const InstructionAST *code) {
-    #define dispatch(CLASS)                                                    \
-      if (const CLASS *node = llvm::dyn_cast<CLASS>(code))                     \
-        return dump(node);
-      dispatch(JumpLabelAST);
-      dispatch(ValueAssignmentAST);
-      dispatch(SubroutineProcessingAST);
-      dispatch(IfThenElseAST);
-      dispatch(CaseOfAST);
-      dispatch(ForDoAST);
-      dispatch(WhileDoAST);
-      dispatch(RepeatUntilAST);
-      dispatch(ContinueAST);
-      dispatch(ReturnAST);
-      dispatch(ExitAST);
-      dispatch(GotoAST);
-    #undef dispatch
-      // No match, fallback to a generic message
-      INDENT();
-      outs << "<unknown instruction, kind" << code->getKind() << ">\n";
+#define dispatch(CLASS)                                                        \
+  if (const CLASS *node = llvm::dyn_cast<CLASS>(code))                         \
+    return dump(node);
+  dispatch(JumpLabelAST);
+  dispatch(ValueAssignmentAST);
+  dispatch(SubroutineProcessingAST);
+  dispatch(IfThenElseAST);
+  dispatch(CaseOfAST);
+  dispatch(ForDoAST);
+  dispatch(WhileDoAST);
+  dispatch(RepeatUntilAST);
+  dispatch(ContinueAST);
+  dispatch(ReturnAST);
+  dispatch(ExitAST);
+  dispatch(GotoAST);
+#undef dispatch
+  // No match, fallback to a generic message
+  INDENT();
+  outs << "<unknown instruction, kind" << code->getKind() << ">\n";
 }
 
 // MARK: C.5 Value Assignments
@@ -463,8 +487,8 @@ void ASTDumper::dump(const ExpressionAST *expr) {
   dispatch(TimeConstantAST);
   dispatch(SimpleVariableAST);
   dispatch(IndexedVariableAST);
-//    dispatch(AbsoluteVariableAST);
-//    dispatch(VariableInDBAST);
+  //    dispatch(AbsoluteVariableAST);
+  //    dispatch(VariableInDBAST);
   dispatch(FunctionCallAST);
   dispatch(BinaryExpressionAST);
   dispatch(UnaryExpressionAST);
@@ -541,10 +565,9 @@ void ASTDumper::dump(const TimeConstantAST *node) {
   INDENT();
   outs << "TimeConstant ";
   outs << llvm::formatv(
-    "{0,0+4}-{1,0+2}-{2,0+2} {3,0+2}:{4,0+2}:{5,0+2}.{6,0+3}",
-    node->getYear(), node->getMonth(), node->getDay(),
-    node->getHour(), node->getMinute(), node->getSec(), node->getMSec()
-  );
+      "{0,0+4}-{1,0+2}-{2,0+2} {3,0+2}:{4,0+2}:{5,0+2}.{6,0+3}",
+      node->getYear(), node->getMonth(), node->getDay(), node->getHour(),
+      node->getMinute(), node->getSec(), node->getMSec());
   outs << " Type " << node->getType() << "\n";
 }
 
@@ -563,7 +586,6 @@ void ASTDumper::dump(const FunctionCallAST *node) {
   dump("Parameters", node->getParameters());
 }
 
-
 // MARK: C.7 Control Statements
 
 void ASTDumper::dump(const IfThenAST *node) {
@@ -577,7 +599,7 @@ void ASTDumper::dump(const IfThenElseAST *node) {
   INDENT();
   outs << "IfThenElse\n";
 
-  for (auto const & then : node->getThens())
+  for (auto const &then : node->getThens())
     dump(then.get());
 
   auto elseBlock = node->getElseBlock();
@@ -616,7 +638,7 @@ void ASTDumper::dump(const CaseValueRangeAST *node) {
 void ASTDumper::dump(const CaseBlockAST *node) {
   INDENT();
   outs << "CaseBlock\n";
-  for (auto const & value : node->getValues())
+  for (auto const &value : node->getValues())
     dump(value.get());
   dump(node->getCodeBlock());
 }
@@ -683,15 +705,15 @@ void ASTDumper::dump(const GotoAST *node) {
   outs << "Goto " << node->getLabel() << "\n";
 }
 
-
-void ASTDumper::dump(std::string name, llvm::ArrayRef<std::unique_ptr<ExpressionAST>> parameters) {
+void ASTDumper::dump(
+    std::string name,
+    llvm::ArrayRef<std::unique_ptr<ExpressionAST>> parameters) {
   INDENT();
   outs << name << "\n";
-  for (const auto & param : parameters) {
+  for (const auto &param : parameters) {
     dump(param.get());
   }
 }
-
 
 /// Print a module, actually loop over the functions and print them in sequence.
 void ASTDumper::dump(const ModuleAST *Node) {
@@ -704,8 +726,6 @@ void ASTDumper::dump(const ModuleAST *Node) {
 namespace sclang {
 
 // Public API
-void dump(const ModuleAST &module) {
-  ASTDumper(llvm::outs()).dump(&module);
-}
+void dump(const ModuleAST &module) { ASTDumper(llvm::outs()).dump(&module); }
 
 } // namespace sclang

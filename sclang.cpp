@@ -1,4 +1,5 @@
-//===- sclang.cpp - The SCL Compiler ----------------------------------------===//
+//===- sclang.cpp - The SCL Compiler
+//----------------------------------------===//
 //
 // Copyright 2019 The MLIR Authors.
 //
@@ -53,21 +54,22 @@ namespace {
 enum InputType { Scl, MLIR };
 }
 static cl::opt<enum InputType> inputType(
-  "x", cl::init(Scl), cl::desc("Select input file"),
-  cl::values(clEnumValN(Scl, "scl", "load the input file as an SCL source")),
-  cl::values(clEnumValN(MLIR, "mlir", "load the input file as an MLIR file")));
+    "x", cl::init(Scl), cl::desc("Select input file"),
+    cl::values(clEnumValN(Scl, "scl", "load the input file as an SCL source")),
+    cl::values(clEnumValN(MLIR, "mlir",
+                          "load the input file as an MLIR file")));
 
 namespace {
 enum Action { None, DumpAST, DumpMLIR, DumpMLIRStd };
 }
-static cl::opt<enum Action>
-    emitAction("emit", cl::desc("Select the kind of output desired"),
-               cl::values(clEnumValN(DumpAST, "ast", "output the AST dump")),
-               cl::values(clEnumValN(DumpMLIR, "mlir", "output the MLIR dump")),
-               cl::values(clEnumValN(DumpMLIRStd, "mlir-std", "output the MLIR dump after std lowering")));
+static cl::opt<enum Action> emitAction(
+    "emit", cl::desc("Select the kind of output desired"),
+    cl::values(clEnumValN(DumpAST, "ast", "output the AST dump")),
+    cl::values(clEnumValN(DumpMLIR, "mlir", "output the MLIR dump")),
+    cl::values(clEnumValN(DumpMLIRStd, "mlir-std",
+                          "output the MLIR dump after std lowering")));
 
 static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
-
 
 /// Returns a SCL AST resulting from parsing the file or a nullptr on error.
 std::unique_ptr<sclang::ModuleAST> parseInputFile(llvm::StringRef filename) {
@@ -84,7 +86,7 @@ std::unique_ptr<sclang::ModuleAST> parseInputFile(llvm::StringRef filename) {
 }
 
 int loadMLIR(llvm::SourceMgr &sourceMgr, mlir::MLIRContext &context,
-  mlir::OwningModuleRef &module) {
+             mlir::OwningModuleRef &module) {
   // Handle '.scl' input to the compiler.
   if (inputType != InputType::MLIR &&
       !llvm::StringRef(inputFilename).endswith(".mlir")) {

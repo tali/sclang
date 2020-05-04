@@ -81,7 +81,8 @@ struct ArrayTypeStorage : public mlir::TypeStorage {
   /// instance. This is used when constructing a new instance to ensure that we
   /// haven't already uniqued an instance of the given key.
   bool operator==(const KeyTy &key) const {
-    return key.elementType == arrayType.elementType && key.dimensions == arrayType.dimensions;
+    return key.elementType == arrayType.elementType &&
+           key.dimensions == arrayType.dimensions;
   }
 
   /// Define a hash function for the key type. This is used when uniquing
@@ -97,7 +98,8 @@ struct ArrayTypeStorage : public mlir::TypeStorage {
   /// itself.
   /// Note: This method isn't necessary because KeyTy can be directly
   /// constructed with the given parameters.
-  static KeyTy getKey(llvm::ArrayRef<DimTy> dimensions, mlir::Type elementType) {
+  static KeyTy getKey(llvm::ArrayRef<DimTy> dimensions,
+                      mlir::Type elementType) {
     return KeyTy(dimensions, elementType);
   }
 
@@ -106,7 +108,7 @@ struct ArrayTypeStorage : public mlir::TypeStorage {
   /// `KeyTy`. The given allocator must be used for *all* necessary dynamic
   /// allocations used to create the type storage and its internal.
   static ArrayTypeStorage *construct(mlir::TypeStorageAllocator &allocator,
-                                      const KeyTy &key) {
+                                     const KeyTy &key) {
 
     // Copy the dimensions from the provided `KeyTy` into the allocator.
     llvm::ArrayRef<DimTy> dimensions = allocator.copyInto(key.dimensions);
@@ -124,8 +126,10 @@ struct ArrayTypeStorage : public mlir::TypeStorage {
 
 /// Create an instance of a `StructType` with the given element types. There
 /// *must* be at least one element type.
-ArrayType ArrayType::get(llvm::ArrayRef<DimTy> dimensions, mlir::Type elementType) {
-  assert(!dimensions.empty() && "expected an array with at least one dimension");
+ArrayType ArrayType::get(llvm::ArrayRef<DimTy> dimensions,
+                         mlir::Type elementType) {
+  assert(!dimensions.empty() &&
+         "expected an array with at least one dimension");
 
   // Call into a helper 'get' method in 'TypeBase' to get a uniqued instance
   // of this type. The first two parameters are the context to unique in and the
@@ -176,7 +180,8 @@ mlir::Type parseArrayType(mlir::DialectAsmParser &parser) {
   SmallVector<mlir::scl::detail::ArrayTypeStorage::DimTy, 1> dimensions;
   do {
     int32_t low, high;
-    if (parser.parseInteger(low) || parser.parseColon() || parser.parseInteger(high))
+    if (parser.parseInteger(low) || parser.parseColon() ||
+        parser.parseInteger(high))
       return Type();
 
     dimensions.push_back(std::make_pair(low, high));
@@ -192,7 +197,6 @@ mlir::Type parseArrayType(mlir::DialectAsmParser &parser) {
 }
 
 } // namespace
-
 
 // MARK: StructType
 
@@ -220,9 +224,7 @@ struct StructTypeStorage : public mlir::TypeStorage {
   /// instances of the storage, see the `StructType::get` method.
   /// Note: This method isn't necessary as both llvm::ArrayRef and mlir::Type
   /// have hash functions available, so we could just omit this entirely.
-  static llvm::hash_code hashKey(const KeyTy &key) {
-    return hash_value(key);
-  }
+  static llvm::hash_code hashKey(const KeyTy &key) { return hash_value(key); }
 
   /// Define a construction function for the key type from a set of parameters.
   /// These parameters will be provided when constructing the storage instance
@@ -312,7 +314,6 @@ mlir::Type parseStructType(mlir::DialectAsmParser &parser) {
 
 } // namespace
 
-
 // MARK: parse and print
 
 /// Parse an instance of a type registered to the SCL dialect.
@@ -333,7 +334,7 @@ mlir::Type SclDialect::parseType(mlir::DialectAsmParser &parser) const {
 /// Print an instance of a type registered to the SCL dialect.
 void SclDialect::printType(mlir::Type type,
                            mlir::DialectAsmPrinter &printer) const {
-  switch(type.getKind()) {
+  switch (type.getKind()) {
   default:
     llvm_unreachable("Unhandled SCL type");
   case SclTypes::Array:
@@ -344,7 +345,6 @@ void SclDialect::printType(mlir::Type type,
     break;
   }
 }
-
 
 //===----------------------------------------------------------------------===//
 // TableGen'd op method definitions

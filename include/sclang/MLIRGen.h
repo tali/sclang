@@ -36,6 +36,6 @@ class ModuleAST;
 /// Emit IR for the given SCL moduleAST, returns a newly created MLIR module
 /// or nullptr on failure.
 mlir::OwningModuleRef mlirGen(mlir::MLIRContext &context, ModuleAST &moduleAST);
-} // namespace toy
+} // namespace sclang
 
 #endif // SCLANG_MLIRGEN_H_
