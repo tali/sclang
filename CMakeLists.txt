@@ -20,6 +20,7 @@ add_llvm_executable(sclang
   parser/AST.cpp
   parser/Lexer.cpp
   mlir/Dialect.cpp
+  mlir/LowerToLoop.cpp
   mlir/LowerToStd.cpp
   mlir/MLIRGen.cpp
   sclang.cpp

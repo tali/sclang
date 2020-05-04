@@ -89,7 +89,6 @@ LogicalResult matchAndRewrite(scl::ConstantOp op,
   }
 };
 
-
 // MARK: Load / Store
 
 struct LoadOpLowering : public OpRewritePattern<scl::LoadOp> {

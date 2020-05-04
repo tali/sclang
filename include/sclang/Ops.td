@@ -139,7 +139,7 @@ def IfThenElseOp : SCL_Op<"if">, SingleBlockImplicitTerminator<"terminator"> {
   let summary = "if-then-else operation";
   let description = [{
     Example:
-      scl.if (%cond) {
+      scl.if %cond {
         ...
       } else {
         ...
@@ -147,7 +147,7 @@ def IfThenElseOp : SCL_Op<"if">, SingleBlockImplicitTerminator<"terminator"> {
   }];
 
   let arguments = (ins I1:$cond);
-  let regions = (region AnyRegion:$thenBody, AnyRegion:$elseBody);
+  let regions = (region SizedRegion<1>:$thenBody, AnyRegion:$elseBody);
 }
 
 //

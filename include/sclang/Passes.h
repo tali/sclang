@@ -20,9 +20,13 @@ class Pass;
 
 namespace sclang {
 
-/// Create a pass for lowering to operations in the `Affine` and `Std` dialects,
-/// for a subset of the Toy IR (e.g. matmul).
+/// Create a pass for lowering to operations in the `Std` dialect,
+/// for a subset of the SCL IR (e.g. expressions).
 std::unique_ptr<mlir::Pass> createLowerToStdPass();
+
+/// Create a pass for lowering to operations in the `Loop` dialect,
+/// for a subset of the SCL IR (e.g. if-then-else, for-do).
+std::unique_ptr<mlir::Pass> createLowerToLoopPass();
 
 } // end namespace toy
 } // end namespace mlir
