@@ -158,7 +158,7 @@ void SclToStdLoweringPass::runOnFunction() {
   target.addIllegalDialect<scl::SclDialect>();
   // TBD: these are not finished yeet:
   target.addLegalOp<scl::IfThenElseOp>();
-  target.addLegalOp<scl::TerminatorOp>();
+  target.addLegalOp<scl::EndOp>();
 
   OwningRewritePatternList patterns;
   patterns.insert<AddOpLowering, ConstantOpLowering, EqualLowering,

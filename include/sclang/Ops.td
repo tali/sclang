@@ -130,7 +130,7 @@ def StoreOp : SCL_Op<"store", [SameOperandsElementType]> {
 // MARK: control flow
 //
 
-def TerminatorOp : SCL_Op<"terminator", [NoSideEffect, Terminator]> {
+def EndOp : SCL_Op<"end", [NoSideEffect, Terminator]> {
   let assemblyFormat = "attr-dict";
 }
 

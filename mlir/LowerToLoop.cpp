@@ -25,12 +25,12 @@ using namespace mlir;
 
 namespace {
 
-// MARK: TerminatorOpLowering
+// MARK: EndOpLowering
 
-struct TerminatorOpLowering : public OpRewritePattern<scl::TerminatorOp> {
-  using OpRewritePattern<scl::TerminatorOp>::OpRewritePattern;
+struct EndOpLowering : public OpRewritePattern<scl::EndOp> {
+  using OpRewritePattern<scl::EndOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(scl::TerminatorOp op,
+  LogicalResult matchAndRewrite(scl::EndOp op,
                                 PatternRewriter &rewriter) const final {
     rewriter.replaceOpWithNewOp<loop::YieldOp>(op);
     return success();
@@ -83,7 +83,7 @@ void SclToLoopLoweringPass::runOnFunction() {
   target.addIllegalOp<scl::IfThenElseOp>();
 
   OwningRewritePatternList patterns;
-  patterns.insert<IfThenElseOpLowering, TerminatorOpLowering>(&getContext());
+  patterns.insert<IfThenElseOpLowering, EndOpLowering>(&getContext());
 
   if (failed(applyPartialConversion(getFunction(), target, patterns)))
     signalPassFailure();

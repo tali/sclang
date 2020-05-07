@@ -678,17 +678,17 @@ private:
         old = builder.saveInsertionPoint();
         first = false;
       } else {
-        builder.create<TerminatorOp>(location);
+        builder.create<EndOp>(location);
       }
       builder.createBlock(&cond.thenBody());
       mlirGen(*ifThen->getCodeBlock());
-      builder.create<TerminatorOp>(location);
+      builder.create<EndOp>(location);
       builder.createBlock(&cond.elseBody());
     }
     if (ifThenElse.getElseBlock()) {
       mlirGen(*ifThenElse.getElseBlock().getValue());
     }
-    builder.create<TerminatorOp>(loc(ifThenElse.loc()));
+    builder.create<EndOp>(loc(ifThenElse.loc()));
 
     builder.restoreInsertionPoint(old);
 

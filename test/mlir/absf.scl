@@ -11,30 +11,30 @@ end_var;
 begin
 // CHECK: [[C0:%[0-9]+]] = scl.constant 0.000000e+00 : f32
 // CHECK: [[LT:%[0-9]+]] = scl.cmplt %arg0, [[C0]]
-// CHECK: scl.if
+// CHECK: "scl.if"([[LT]])
   if in < 0.0 then
 
 // CHECK: [[NEG:%[0-9]+]] = scl.negate %arg0
 // CHECK: scl.store [[ABS]] : memref<f32> = [[NEG]]
     abs := -in;
 
-// CHECK: scl.terminator
+// CHECK: scl.end
 // CHECK: [[C0:%[0-9]+]] = scl.constant 0.000000e+00 : f32
 // CHECK: [[GT:%[0-9]+]] = scl.cmpgt %arg0, [[C0]]
-// CHECK: scl.if
+// CHECK: "scl.if"([[GT]])
   elsif in > 0.0 then
 
 // CHECK: scl.store [[ABS]] : memref<f32> = %arg0
     abs := in;
 
-// CHECK: scl.terminator
+// CHECK: scl.end
   else
 
 // CHECK: [[C0:%[0-9]+]] = scl.constant 0.000000e+00 : f32
 // CHECK: scl.store [[ABS]] : memref<f32> = [[C0]]
     abs := 0.0;
 
-// CHECK: scl.terminator
+// CHECK: scl.end
   end_if;
 
 // CHECK: scl.return [[ABS]] : memref<f32>

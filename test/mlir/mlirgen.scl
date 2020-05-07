@@ -29,7 +29,7 @@ begin
 // CHECK:       scl.store [[varA]] : memref<i16> = [[mul5]] : i16
 
   else
-// CHECK:       scl.terminator
+// CHECK:       scl.end
 // CHECK:     },  {
 
     b := 2 + 3 * a;
@@ -41,7 +41,7 @@ begin
 // CHECK:       scl.store [[varB]] : memref<i16> = [[add2]] : i16
 
   end_if;
-// CHECK-DAG:   scl.terminator
+// CHECK-DAG:   scl.end
 // CHECK:     }) : (i1) -> ()
 
   return;
