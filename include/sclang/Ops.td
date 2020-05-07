@@ -73,8 +73,7 @@ class UnaryArithmeticOp<string mnemonic, list<OpTrait> traits = []> :
     AssemblyFormat<"attr-dict $rhs `:` type($rhs)">;
 
 class FuncTerminatorOp<string mnemonic, list<OpTrait> traits = []> :
-    SCL_Op<mnemonic, !listconcat(traits, [NoSideEffect, Terminator, HasParent<"FuncOp">])>,
-    AssemblyFormat<"attr-dict">;
+    SCL_Op<mnemonic, !listconcat(traits, [NoSideEffect, Terminator, HasParent<"FuncOp">])>;
 
 //
 // MARK: variable handling
@@ -154,7 +153,7 @@ def IfThenElseOp : SCL_Op<"if">, SingleBlockImplicitTerminator<"terminator"> {
 // MARK: terminator operations
 //
 
-def ContinueOp : SCL_Op<"continue", [NoSideEffect, Terminator]> {
+def ContinueOp : SCL_Op<"continue", [Terminator]> {
   let summary = "continue operation";
   let description = [{
     A CONTINUE statement is used to terminate the execution of the current
@@ -171,14 +170,17 @@ def ReturnOp : FuncTerminatorOp<"return"> {
     currently being processed and to return to the calling block or the
     operating system if the block being exited is an OB.
   }];
+  let arguments = (ins Optional<AnyMemRef>:$value);
+  let assemblyFormat = "attr-dict operands `:` type(operands)";
 }
 
-def ExitOp : FuncTerminatorOp<"exit"> {
+def ExitOp : SCL_Op<"exit", [Terminator]> {
   let summary = "exit operation";
   let description = [{
     An EXIT statement is used to exit a loop (FOR, WHILE or REPEAT loop) at
     any point regardless of whether the break condition is satisfied.
   }];
+  let assemblyFormat = "attr-dict";
 }
 
 //

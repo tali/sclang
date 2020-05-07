@@ -122,6 +122,11 @@ private:
   /// scope is destroyed and the mappings created in this scope are dropped.
   llvm::ScopedHashTable<StringRef, VariableSymbol> symbolTable;
 
+  /// The name of the function or block which is currently being generated.
+  llvm::StringRef functionName;
+  /// Whether this function returns a value.
+  bool functionHasReturnValue;
+
   /// Helper conversion for a SCL AST location to an MLIR location.
   mlir::Location loc(Location loc) {
     return builder.getFileLineColLoc(builder.getIdentifier(*loc.file), loc.line,
@@ -178,6 +183,8 @@ private:
 
   mlir::FuncOp mlirGen(const FunctionAST &func) {
     auto location = loc(func.loc());
+    functionName = func.getIdentifier();
+    functionHasReturnValue = false;
     std::string name(func.getIdentifier());
 
     // Create a scope in the symbol table to hold variable declarations.
@@ -194,6 +201,7 @@ private:
     if (!retType.isa<mlir::NoneType>()) {
       output_types.push_back(retType);
       output_names.push_back(name);
+      functionHasReturnValue = true;
     }
 
     // Parse the declaration subsections
@@ -295,10 +303,19 @@ private:
     if (!entryBlock.empty())
       returnOp = dyn_cast<ReturnOp>(entryBlock.back());
     if (!returnOp) {
-      builder.create<ReturnOp>(location);
+      mlirgenReturn(location);
     }
 
     return function;
+  }
+
+  void mlirgenReturn(mlir::Location location) {
+    if (functionHasReturnValue) {
+      auto returnValue = symbolTable.lookup(functionName).getValue();
+      builder.create<ReturnOp>(location, returnValue);
+    } else {
+      builder.create<ReturnOp>(location, mlir::Value());
+    }
   }
 
   mlir::FuncOp mlirgen(const FunctionBlockAST &fb) {
@@ -345,7 +362,7 @@ private:
     case InstructionAST::Instr_IfThenElse:
       return mlirGen(llvm::cast<IfThenElseAST>(instr));
     case InstructionAST::Instr_Return:
-      builder.create<ReturnOp>(location);
+      mlirgenReturn(location);
       break;
     case InstructionAST::Instr_Exit:
       builder.create<ExitOp>(location);

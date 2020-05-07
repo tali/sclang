@@ -23,9 +23,8 @@
 using namespace mlir;
 
 namespace {
-//===----------------------------------------------------------------------===//
-// ToyToAffine RewritePatterns: Binary operations
-//===----------------------------------------------------------------------===//
+
+// MARK: RewritePatterns: Binary operations
 
 template <typename BinaryOp, typename LoweredBinaryOp>
 struct BinaryOpLowering : public ConversionPattern {
@@ -91,6 +90,18 @@ struct ConstantOpLowering : public OpRewritePattern<scl::ConstantOp> {
 
 // MARK: Load / Store
 
+struct TempVariableOpLowering : public OpRewritePattern<scl::TempVariableOp> {
+  using OpRewritePattern<scl::TempVariableOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(scl::TempVariableOp op,
+                                PatternRewriter &rewriter) const final {
+
+    rewriter.replaceOpWithNewOp<AllocaOp>(op,
+            op.result().getType().dyn_cast<MemRefType>());
+    return success();
+  }
+};
+
 struct LoadOpLowering : public OpRewritePattern<scl::LoadOp> {
   using OpRewritePattern<scl::LoadOp>::OpRewritePattern;
 
@@ -113,6 +124,18 @@ struct StoreOpLowering : public OpRewritePattern<scl::StoreOp> {
   }
 };
 
+  struct ReturnOpLowering : public OpRewritePattern<scl::ReturnOp> {
+    using OpRewritePattern<scl::ReturnOp>::OpRewritePattern;
+
+    LogicalResult matchAndRewrite(scl::ReturnOp op,
+                                  PatternRewriter &rewriter) const final {
+
+      auto retval = rewriter.create<LoadOp>(op.getLoc(), op.value());
+      rewriter.replaceOpWithNewOp<ReturnOp>(op, retval.getResult());
+      return success();
+    }
+  };
+
 } // end anonymous namespace.
 
 // MARK: SclToStdLoweringPass
@@ -134,17 +157,14 @@ void SclToStdLoweringPass::runOnFunction() {
   // We want all of SCL to be lowered
   target.addIllegalDialect<scl::SclDialect>();
   // TBD: these are not finished yeet:
-  target.addLegalOp<scl::TempVariableOp>();
   target.addLegalOp<scl::IfThenElseOp>();
-  target.addLegalOp<scl::ReturnOp>();
   target.addLegalOp<scl::TerminatorOp>();
 
   OwningRewritePatternList patterns;
   patterns.insert<AddOpLowering, ConstantOpLowering, EqualLowering,
                   GreaterThanLowering, LessThanLowering, LoadOpLowering,
-                  MulOpLowering,
-                  
-                  StoreOpLowering, UnaryMinusOpLowering>(&getContext());
+                  MulOpLowering, ReturnOpLowering, StoreOpLowering, TempVariableOpLowering,
+                  UnaryMinusOpLowering>(&getContext());
 
   if (failed(applyPartialConversion(getFunction(), target, patterns)))
     signalPassFailure();

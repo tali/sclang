@@ -1,39 +1,41 @@
 // RUN: sclang --emit=mlir %s | FileCheck %s
 
-function abs : real
 // CHECK:      func @abs(%arg0: f32) -> f32
-// CHECK-NEXT:   [[RET:%[0-9]+]] = scl.tmpvar "abs" : memref<f32>
+// CHECK-NEXT:   [[ABS:%[0-9]+]] = scl.tmpvar "abs" : memref<f32>
+function abs : real
 
 var_input
  in : real;
 end_var;
 
 begin
-  if in < 0.0 then
 // CHECK: [[C0:%[0-9]+]] = scl.constant 0.000000e+00 : f32
 // CHECK: [[LT:%[0-9]+]] = scl.cmplt %arg0, [[C0]]
 // CHECK: scl.if
+  if in < 0.0 then
 
-    abs := -in;
 // CHECK: [[NEG:%[0-9]+]] = scl.negate %arg0
-// CHECK: scl.store [[RET]] : memref<f32> = [[NEG]]
-// CHECK: scl.terminator
+// CHECK: scl.store [[ABS]] : memref<f32> = [[NEG]]
+    abs := -in;
 
-  elsif in > 0.0 then
+// CHECK: scl.terminator
 // CHECK: [[C0:%[0-9]+]] = scl.constant 0.000000e+00 : f32
 // CHECK: [[GT:%[0-9]+]] = scl.cmpgt %arg0, [[C0]]
 // CHECK: scl.if
+  elsif in > 0.0 then
 
+// CHECK: scl.store [[ABS]] : memref<f32> = %arg0
     abs := in;
-// CHECK: scl.store [[RET]] : memref<f32> = %arg0
-// CHECK: scl.terminator
 
+// CHECK: scl.terminator
   else
 
-    abs := 0.0;
 // CHECK: [[C0:%[0-9]+]] = scl.constant 0.000000e+00 : f32
-// CHECK: scl.store [[RET]] : memref<f32> = [[C0]]
-// CHECK: scl.terminator
+// CHECK: scl.store [[ABS]] : memref<f32> = [[C0]]
+    abs := 0.0;
 
+// CHECK: scl.terminator
   end_if;
+
+// CHECK: scl.return [[ABS]] : memref<f32>
 end_function
