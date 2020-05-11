@@ -26,7 +26,7 @@ namespace {
 
 // MARK: RewritePatterns: Binary operations
 
-template <typename BinaryOp, typename LoweredBinaryOp>
+template <typename BinaryOp, typename LoweredFloatOp, typename LoweredIntOp>
 struct BinaryOpLowering : public ConversionPattern {
   BinaryOpLowering(MLIRContext *ctx)
       : ConversionPattern(BinaryOp::getOperationName(), 1, ctx) {}
@@ -34,14 +34,23 @@ struct BinaryOpLowering : public ConversionPattern {
   LogicalResult
   matchAndRewrite(Operation *op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
-    rewriter.replaceOpWithNewOp<LoweredBinaryOp>(op, operands[0], operands[1]);
-    return success();
+    auto elementType0 = operands[0].getType();
+    auto elementType1 = operands[1].getType();
+    if (elementType0.isa<FloatType>() && elementType1.isa<FloatType>()) {
+      rewriter.replaceOpWithNewOp<LoweredFloatOp>(op, operands[0], operands[1]);
+      return success();
+    }
+    if (elementType0.isa<IntegerType>() && elementType1.isa<IntegerType>()) {
+      rewriter.replaceOpWithNewOp<LoweredIntOp>(op, operands[0], operands[1]);
+      return success();
+    }
+    return failure();
   }
 };
-using AddOpLowering = BinaryOpLowering<scl::AddOp, AddFOp>;
-using MulOpLowering = BinaryOpLowering<scl::MulOp, MulFOp>;
+using AddOpLowering = BinaryOpLowering<scl::AddOp, AddFOp, AddIOp>;
+using MulOpLowering = BinaryOpLowering<scl::MulOp, MulFOp, MulIOp>;
 
-template <typename CompareOp, mlir::CmpFPredicate predicate>
+template <typename CompareOp, mlir::CmpFPredicate predF, mlir::CmpIPredicate predI>
 struct CompareOpLowering : public ConversionPattern {
   CompareOpLowering(MLIRContext *ctx)
       : ConversionPattern(CompareOp::getOperationName(), 1, ctx) {}
@@ -49,30 +58,47 @@ struct CompareOpLowering : public ConversionPattern {
   LogicalResult
   matchAndRewrite(Operation *op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
-    rewriter.replaceOpWithNewOp<CmpFOp>(op, predicate, operands[0],
-                                        operands[1]);
-    return success();
+    auto elementType0 = operands[0].getType();
+    auto elementType1 = operands[1].getType();
+    if (elementType0.isa<FloatType>() && elementType1.isa<FloatType>()) {
+      rewriter.replaceOpWithNewOp<CmpFOp>(op, predF, operands[0], operands[1]);
+      return success();
+    }
+    if (elementType0.isa<IntegerType>() && elementType1.isa<IntegerType>()) {
+      rewriter.replaceOpWithNewOp<CmpIOp>(op, predI, operands[0], operands[1]);
+      return success();
+    }
+    return failure();
   }
 };
 using LessThanLowering =
-    CompareOpLowering<scl::LessThanOp, mlir::CmpFPredicate::ULT>;
+    CompareOpLowering<scl::LessThanOp, mlir::CmpFPredicate::ULT, mlir::CmpIPredicate::slt>;
 using GreaterThanLowering =
-    CompareOpLowering<scl::GreaterThanOp, mlir::CmpFPredicate::UGT>;
-using EqualLowering = CompareOpLowering<scl::EqualOp, mlir::CmpFPredicate::UEQ>;
+    CompareOpLowering<scl::GreaterThanOp, mlir::CmpFPredicate::UGT, mlir::CmpIPredicate::sgt>;
+using EqualLowering = CompareOpLowering<scl::EqualOp, mlir::CmpFPredicate::UEQ, mlir::CmpIPredicate::eq>;
 
-template <typename BinaryOp, typename LoweredBinaryOp>
-struct UnaryOpLowering : public ConversionPattern {
-  UnaryOpLowering(MLIRContext *ctx)
-      : ConversionPattern(BinaryOp::getOperationName(), 1, ctx) {}
+struct UnaryMinusOpLowering : public ConversionPattern {
+  UnaryMinusOpLowering(MLIRContext *ctx)
+      : ConversionPattern(scl::UnaryMinusOp::getOperationName(), 1, ctx) {}
 
   LogicalResult
   matchAndRewrite(Operation *op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
-    rewriter.replaceOpWithNewOp<LoweredBinaryOp>(op, operands[0]);
-    return success();
+    auto elementType = operands[0].getType();
+    if (elementType.isa<FloatType>()) {
+      rewriter.replaceOpWithNewOp<NegFOp>(op, operands[0]);
+      return success();
+    }
+    if (elementType.isa<IntegerType>()) {
+      auto loc = op->getLoc();
+      auto intType = elementType.dyn_cast<IntegerType>();
+      auto zero = rewriter.create<ConstantIntOp>(loc, 0, intType.getWidth());
+      rewriter.replaceOpWithNewOp<SubIOp>(op, zero, operands[0]);
+      return success();
+    }
+    return failure();
   }
 };
-using UnaryMinusOpLowering = UnaryOpLowering<scl::UnaryMinusOp, NegFOp>;
 
 // MARK: ConstantOpLowering
 
