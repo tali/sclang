@@ -24,33 +24,46 @@ using namespace mlir;
 
 namespace {
 
-// MARK: RewritePatterns: Binary operations
+/// Return `true` if all elements are of the given type.
+template <typename U> bool all_of_type(ArrayRef<Value> range) {
+  return all_of(range, [](Value elem) { return elem.getType().isa<U>(); });
+}
 
-template <typename BinaryOp, typename LoweredFloatOp, typename LoweredIntOp>
-struct BinaryOpLowering : public ConversionPattern {
-  BinaryOpLowering(MLIRContext *ctx)
-      : ConversionPattern(BinaryOp::getOperationName(), 1, ctx) {}
+// MARK: RewritePatterns: numeric operations
+
+/// Lower to either a floating point or an integer operation, depending on the
+/// type.
+template <typename SclOp, typename LoweredFloatOp, typename LoweredIntegerOp>
+struct NumericOpLowering : public ConversionPattern {
+  NumericOpLowering(MLIRContext *ctx)
+      : ConversionPattern(SclOp::getOperationName(), 1, ctx) {}
 
   LogicalResult
   matchAndRewrite(Operation *op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
-    auto elementType0 = operands[0].getType();
-    auto elementType1 = operands[1].getType();
-    if (elementType0.isa<FloatType>() && elementType1.isa<FloatType>()) {
-      rewriter.replaceOpWithNewOp<LoweredFloatOp>(op, operands[0], operands[1]);
+    llvm::SmallVector<mlir::NamedAttribute, 0> attrs;
+    if (all_of_type<FloatType>(operands)) {
+      rewriter.replaceOpWithNewOp<LoweredFloatOp>(op, operands, attrs);
       return success();
     }
-    if (elementType0.isa<IntegerType>() && elementType1.isa<IntegerType>()) {
-      rewriter.replaceOpWithNewOp<LoweredIntOp>(op, operands[0], operands[1]);
+    if (all_of_type<IntegerType>(operands)) {
+      rewriter.replaceOpWithNewOp<LoweredIntegerOp>(op, operands, attrs);
       return success();
     }
     return failure();
   }
 };
-using AddOpLowering = BinaryOpLowering<scl::AddOp, AddFOp, AddIOp>;
-using MulOpLowering = BinaryOpLowering<scl::MulOp, MulFOp, MulIOp>;
+using AddOpLowering = NumericOpLowering<scl::AddOp, AddFOp, AddIOp>;
+using SubOpLowering = NumericOpLowering<scl::SubOp, SubFOp, SubIOp>;
+using MulOpLowering = NumericOpLowering<scl::MulOp, MulFOp, MulIOp>;
+using DivOpLowering = NumericOpLowering<scl::DivOp, DivFOp, SignedDivIOp>;
+using ModOpLowering = NumericOpLowering<scl::ModOp, RemFOp, SignedRemIOp>;
 
-template <typename CompareOp, mlir::CmpFPredicate predF, mlir::CmpIPredicate predI>
+// MARK: RewritePatterns: compare operations
+
+/// Lower to either a floating point or an integer comparision, depending on the
+/// type.
+template <typename CompareOp, CmpFPredicate predF, CmpIPredicate predI>
 struct CompareOpLowering : public ConversionPattern {
   CompareOpLowering(MLIRContext *ctx)
       : ConversionPattern(CompareOp::getOperationName(), 1, ctx) {}
@@ -58,24 +71,31 @@ struct CompareOpLowering : public ConversionPattern {
   LogicalResult
   matchAndRewrite(Operation *op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
-    auto elementType0 = operands[0].getType();
-    auto elementType1 = operands[1].getType();
-    if (elementType0.isa<FloatType>() && elementType1.isa<FloatType>()) {
+    if (all_of_type<FloatType>(operands)) {
       rewriter.replaceOpWithNewOp<CmpFOp>(op, predF, operands[0], operands[1]);
       return success();
     }
-    if (elementType0.isa<IntegerType>() && elementType1.isa<IntegerType>()) {
+    if (all_of_type<IntegerType>(operands)) {
       rewriter.replaceOpWithNewOp<CmpIOp>(op, predI, operands[0], operands[1]);
       return success();
     }
     return failure();
   }
 };
+using EqualLowering =
+    CompareOpLowering<scl::EqualOp, CmpFPredicate::UEQ, CmpIPredicate::eq>;
+using NotEqualLowering =
+    CompareOpLowering<scl::NotEqualOp, CmpFPredicate::UNE, CmpIPredicate::ne>;
 using LessThanLowering =
-    CompareOpLowering<scl::LessThanOp, mlir::CmpFPredicate::ULT, mlir::CmpIPredicate::slt>;
+    CompareOpLowering<scl::LessThanOp, CmpFPredicate::ULT, CmpIPredicate::slt>;
+using LessEqualLowering =
+    CompareOpLowering<scl::LessEqualOp, CmpFPredicate::ULE, CmpIPredicate::sle>;
 using GreaterThanLowering =
-    CompareOpLowering<scl::GreaterThanOp, mlir::CmpFPredicate::UGT, mlir::CmpIPredicate::sgt>;
-using EqualLowering = CompareOpLowering<scl::EqualOp, mlir::CmpFPredicate::UEQ, mlir::CmpIPredicate::eq>;
+    CompareOpLowering<scl::GreaterThanOp, CmpFPredicate::UGT,
+                      CmpIPredicate::sgt>;
+using GreaterEqualLowering =
+    CompareOpLowering<scl::GreaterEqualOp, CmpFPredicate::UGE,
+                      CmpIPredicate::sge>;
 
 struct UnaryMinusOpLowering : public ConversionPattern {
   UnaryMinusOpLowering(MLIRContext *ctx)
@@ -97,6 +117,41 @@ struct UnaryMinusOpLowering : public ConversionPattern {
       return success();
     }
     return failure();
+  }
+};
+
+// MARK: RewritePatterns: logical conversion
+
+/// Lower to either a floating point or an integer operation, depending on the
+/// type.
+template <typename SclOp, typename LoweredOp>
+struct LogicalOpLowering : public ConversionPattern {
+  LogicalOpLowering(MLIRContext *ctx)
+      : ConversionPattern(SclOp::getOperationName(), 1, ctx) {}
+
+  LogicalResult
+  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const final {
+    llvm::SmallVector<mlir::NamedAttribute, 0> attrs;
+    rewriter.replaceOpWithNewOp<LoweredOp>(op, operands, attrs);
+    return success();
+  }
+};
+using AndOpLowering = LogicalOpLowering<scl::AndOp, AndOp>;
+using OrOpLowering = LogicalOpLowering<scl::OrOp, OrOp>;
+using XOrOpLowering = LogicalOpLowering<scl::XOrOp, XOrOp>;
+
+struct UnaryNotOpLowering : public OpConversionPattern<scl::UnaryNotOp> {
+  using OpConversionPattern<scl::UnaryNotOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scl::UnaryNotOp op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const final {
+    auto loc = op.getLoc();
+    auto falseVal = rewriter.create<ConstantIntOp>(loc, 0, 1);
+    auto trueVal = rewriter.create<ConstantIntOp>(loc, 1, 1);
+    rewriter.replaceOpWithNewOp<SelectOp>(op, op.rhs(), falseVal, trueVal);
+    return success();
   }
 };
 
@@ -122,8 +177,8 @@ struct TempVariableOpLowering : public OpRewritePattern<scl::TempVariableOp> {
   LogicalResult matchAndRewrite(scl::TempVariableOp op,
                                 PatternRewriter &rewriter) const final {
 
-    rewriter.replaceOpWithNewOp<AllocaOp>(op,
-            op.result().getType().dyn_cast<MemRefType>());
+    rewriter.replaceOpWithNewOp<AllocaOp>(
+        op, op.result().getType().dyn_cast<MemRefType>());
     return success();
   }
 };
@@ -150,17 +205,17 @@ struct StoreOpLowering : public OpRewritePattern<scl::StoreOp> {
   }
 };
 
-  struct ReturnOpLowering : public OpRewritePattern<scl::ReturnOp> {
-    using OpRewritePattern<scl::ReturnOp>::OpRewritePattern;
+struct ReturnOpLowering : public OpRewritePattern<scl::ReturnOp> {
+  using OpRewritePattern<scl::ReturnOp>::OpRewritePattern;
 
-    LogicalResult matchAndRewrite(scl::ReturnOp op,
-                                  PatternRewriter &rewriter) const final {
+  LogicalResult matchAndRewrite(scl::ReturnOp op,
+                                PatternRewriter &rewriter) const final {
 
-      auto retval = rewriter.create<LoadOp>(op.getLoc(), op.value());
-      rewriter.replaceOpWithNewOp<ReturnOp>(op, retval.getResult());
-      return success();
-    }
-  };
+    auto retval = rewriter.create<LoadOp>(op.getLoc(), op.value());
+    rewriter.replaceOpWithNewOp<ReturnOp>(op, retval.getResult());
+    return success();
+  }
+};
 
 } // end anonymous namespace.
 
@@ -180,17 +235,20 @@ void SclToStdLoweringPass::runOnFunction() {
   ConversionTarget target(getContext());
   target.addLegalDialect<StandardOpsDialect>();
 
-  // We want all of SCL to be lowered
+  // We want to lower all of SCL except for control flow:
   target.addIllegalDialect<scl::SclDialect>();
-  // TBD: these are not finished yeet:
   target.addLegalOp<scl::IfThenElseOp>();
   target.addLegalOp<scl::EndOp>();
 
   OwningRewritePatternList patterns;
-  patterns.insert<AddOpLowering, ConstantOpLowering, EqualLowering,
-                  GreaterThanLowering, LessThanLowering, LoadOpLowering,
-                  MulOpLowering, ReturnOpLowering, StoreOpLowering, TempVariableOpLowering,
-                  UnaryMinusOpLowering>(&getContext());
+  patterns.insert<AddOpLowering, AndOpLowering, ConstantOpLowering,
+                  DivOpLowering, EqualLowering, GreaterEqualLowering,
+                  GreaterThanLowering, LessEqualLowering, LessThanLowering,
+                  LoadOpLowering, ModOpLowering, MulOpLowering,
+                  NotEqualLowering, OrOpLowering, ReturnOpLowering,
+                  SubOpLowering, StoreOpLowering, TempVariableOpLowering,
+                  UnaryMinusOpLowering, UnaryNotOpLowering, XOrOpLowering>(
+      &getContext());
 
   if (failed(applyPartialConversion(getFunction(), target, patterns)))
     signalPassFailure();
