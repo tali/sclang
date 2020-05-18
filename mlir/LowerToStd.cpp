@@ -211,8 +211,12 @@ struct ReturnOpLowering : public OpRewritePattern<scl::ReturnOp> {
   LogicalResult matchAndRewrite(scl::ReturnOp op,
                                 PatternRewriter &rewriter) const final {
 
-    auto retval = rewriter.create<LoadOp>(op.getLoc(), op.value());
-    rewriter.replaceOpWithNewOp<ReturnOp>(op, retval.getResult());
+    if (op.value()) {
+      auto retval = rewriter.create<LoadOp>(op.getLoc(), op.value());
+      rewriter.replaceOpWithNewOp<ReturnOp>(op, retval.getResult());
+    } else {
+      rewriter.replaceOpWithNewOp<ReturnOp>(op);
+    }
     return success();
   }
 };
