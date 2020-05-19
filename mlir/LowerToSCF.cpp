@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file implements a partial lowering of Toy operations to a combination of
+// This file implements a partial lowering of SCF operations to a combination of
 // affine loops and standard operations. This lowering expects that all calls
 // have been inlined, and all shapes have been resolved.
 //
@@ -15,7 +15,7 @@
 #include "sclang/Dialect.h"
 #include "sclang/Passes.h"
 
-#include "mlir/Dialect/LoopOps/LoopOps.h"
+#include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -32,7 +32,7 @@ struct EndOpLowering : public OpRewritePattern<scl::EndOp> {
 
   LogicalResult matchAndRewrite(scl::EndOp op,
                                 PatternRewriter &rewriter) const final {
-    rewriter.replaceOpWithNewOp<loop::YieldOp>(op);
+    rewriter.replaceOpWithNewOp<scf::YieldOp>(op);
     return success();
   }
 };
@@ -45,7 +45,7 @@ struct IfThenElseOpLowering : public OpRewritePattern<scl::IfThenElseOp> {
   LogicalResult matchAndRewrite(scl::IfThenElseOp op,
                                 PatternRewriter &rewriter) const final {
 
-    auto loweredOp = rewriter.create<loop::IfOp>(op.getLoc(), op.cond(),
+    auto loweredOp = rewriter.create<scf::IfOp>(op.getLoc(), op.cond(),
                                                  /*withElseRegion=*/true);
     // inline the block from our then body into the lowered region,
     // then remove the implicitly created one
@@ -63,21 +63,21 @@ struct IfThenElseOpLowering : public OpRewritePattern<scl::IfThenElseOp> {
 
 } // end anonymous namespace.
 
-// MARK: SclToLoopLoweringPass
+// MARK: SclToSCFLoweringPass
 
 /// This is a partial lowering to affine loops of the toy operations that are
 /// computationally intensive (like matmul for example...) while keeping the
 /// rest of the code in the Toy dialect.
 namespace {
-struct SclToLoopLoweringPass
-    : public PassWrapper<SclToLoopLoweringPass, FunctionPass> {
+struct SclToSCFLoweringPass
+    : public PassWrapper<SclToSCFLoweringPass, FunctionPass> {
   void runOnFunction() final;
 };
 } // end anonymous namespace.
 
-void SclToLoopLoweringPass::runOnFunction() {
+void SclToSCFLoweringPass::runOnFunction() {
   ConversionTarget target(getContext());
-  target.addLegalDialect<loop::LoopOpsDialect>();
+  target.addLegalDialect<scf::SCFDialect>();
 
   // We want only some parts of SCL to be lowered
   target.addIllegalOp<scl::IfThenElseOp>();
@@ -89,8 +89,8 @@ void SclToLoopLoweringPass::runOnFunction() {
     signalPassFailure();
 }
 
-/// Create a pass for lowering operations in the `Loop` dialect,
+/// Create a pass for lowering operations in the `SCF` dialect,
 /// for a subset of the SCL IR (e.g. if-then-else, for-do).
-std::unique_ptr<Pass> mlir::sclang::createLowerToLoopPass() {
-  return std::make_unique<SclToLoopLoweringPass>();
+std::unique_ptr<Pass> mlir::sclang::createLowerToSCFPass() {
+  return std::make_unique<SclToSCFLoweringPass>();
 }

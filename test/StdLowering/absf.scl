@@ -12,7 +12,7 @@ begin
 // CHECK: [[C0:%[a-z0-9]+]] = constant 0.000000e+00 : f32
 // CHECK: [[ABS:%[0-9]+]] = alloca() : memref<f32>
 // CHECK: [[LT:%[0-9]+]] = cmpf "ult", %arg0, [[C0]]
-// CHECK: loop.if [[LT]] {
+// CHECK: scf.if [[LT]] {
   if in < 0.0 then
 
 // CHECK:   [[NEG:%[0-9]+]] = negf %arg0 : f32
@@ -21,7 +21,7 @@ begin
 
 // CHECK: } else {
 // CHECK:   [[GT:%[0-9]+]] = cmpf "ugt", %arg0, [[C0]]
-// CHECK:   loop.if [[GT]] {
+// CHECK:   scf.if [[GT]] {
   elsif in > 0.0 then
 
 // CHECK:     store %arg0, [[ABS]][] : memref<f32>

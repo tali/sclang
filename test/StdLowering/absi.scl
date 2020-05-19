@@ -12,7 +12,7 @@ begin
 // CHECK: [[C0:%[_a-z0-9]+]] = constant 0 : i16
 // CHECK: [[ABS:%[0-9]+]] = alloca() : memref<i16>
 // CHECK: [[LT:%[0-9]+]] = cmpi "slt", %arg0, [[C0]]
-// CHECK: loop.if [[LT]] {
+// CHECK: scf.if [[LT]] {
   if in < 0 then
 
 // CHECK:   [[NEG:%[0-9]+]] = subi [[C0]], %arg0 : i16
@@ -21,7 +21,7 @@ begin
 
 // CHECK: } else {
 // CHECK:   [[GT:%[0-9]+]] = cmpi "sgt", %arg0, [[C0]]
-// CHECK:   loop.if [[GT]] {
+// CHECK:   scf.if [[GT]] {
   elsif in > 0 then
 
 // CHECK:     store %arg0, [[ABS]][] : memref<i16>
