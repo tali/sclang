@@ -28,6 +28,10 @@ std::unique_ptr<mlir::Pass> createLowerToStdPass();
 /// for a subset of the SCL IR (e.g. if-then-else, for-do).
 std::unique_ptr<mlir::Pass> createLowerToLoopPass();
 
+/// Create a pass for lowering operations the remaining `Toy` operations, as
+/// well as `Affine` and `Std`, to the LLVM dialect for codegen.
+std::unique_ptr<mlir::Pass> createLowerToLLVMPass();
+
 } // namespace sclang
 } // end namespace mlir
 

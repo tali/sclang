@@ -1,6 +1,13 @@
 # Build SCLANG within the LLVM source tree
 # use `sclang` within LLVM_EXTERNAL_PROJECTS
 
+set(LLVM_LINK_COMPONENTS
+  Core
+  Support
+  nativecodegen
+  OrcJIT
+  )
+
 set(SCLANG_MAIN_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(SCLANG_MAIN_INCLUDE_DIR ${SCLAG_MAIN_SRC_DIR}/include)
 set(SCLANG_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/include)
@@ -20,6 +27,7 @@ add_llvm_executable(sclang
   parser/AST.cpp
   parser/Lexer.cpp
   mlir/Dialect.cpp
+  mlir/LowerToLLVM.cpp
   mlir/LowerToLoop.cpp
   mlir/LowerToStd.cpp
   mlir/MLIRGen.cpp
@@ -33,13 +41,21 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR}/include/)
 include_directories(${MLIR_INCLUDE_DIR})
 include_directories(${MLIR_MAIN_SRC_DIR})
 get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
+get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 target_link_libraries(sclang
   PRIVATE
     ${dialect_libs}
+    ${conversion_libs}
     MLIRAnalysis
+    MLIRCallInterfaces
+    MLIRExecutionEngine
     MLIRIR
+    MLIRLLVMIR
     MLIRParser
+    MLIRPass
     MLIRSideEffects
+    MLIRSupport
+    MLIRTargetLLVMIR
     MLIRTransforms
 )
 

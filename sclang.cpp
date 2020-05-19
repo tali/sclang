@@ -26,6 +26,8 @@
 #include "sclang/Passes.h"
 #include <memory>
 
+#include "mlir/ExecutionEngine/ExecutionEngine.h"
+#include "mlir/ExecutionEngine/OptUtils.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Module.h"
 #include "mlir/IR/Verifier.h"
@@ -33,13 +35,16 @@
 #include "mlir/Parser.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Target/LLVMIR.h"
 #include "mlir/Transforms/Passes.h"
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace sclang;
@@ -60,14 +65,22 @@ static cl::opt<enum InputType> inputType(
                           "load the input file as an MLIR file")));
 
 namespace {
-enum Action { None, DumpAST, DumpMLIR, DumpMLIRStd };
+enum Action {
+  None, DumpAST, DumpMLIR, DumpMLIRStd, DumpMLIRLLVM,
+  DumpLLVMIR, RunJIT
+};
 }
 static cl::opt<enum Action> emitAction(
     "emit", cl::desc("Select the kind of output desired"),
     cl::values(clEnumValN(DumpAST, "ast", "output the AST dump")),
     cl::values(clEnumValN(DumpMLIR, "mlir", "output the MLIR dump")),
     cl::values(clEnumValN(DumpMLIRStd, "mlir-std",
-                          "output the MLIR dump after std lowering")));
+                          "output the MLIR dump after std lowering")),
+    cl::values(clEnumValN(DumpMLIRLLVM, "mlir-llvm",
+                         "output the MLIR dump after llvm lowering")),
+    cl::values(clEnumValN(DumpLLVMIR, "llvm",
+                          "output the LLVM IR dump")),
+    cl::values(clEnumValN(RunJIT, "jit", "run the code")));
 
 static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
 
@@ -85,7 +98,7 @@ std::unique_ptr<sclang::ModuleAST> parseInputFile(llvm::StringRef filename) {
   return parser.ParseModule();
 }
 
-int loadMLIR(llvm::SourceMgr &sourceMgr, mlir::MLIRContext &context,
+int loadMLIR(mlir::MLIRContext &context,
              mlir::OwningModuleRef &module) {
   // Handle '.scl' input to the compiler.
   if (inputType != InputType::MLIR &&
@@ -106,6 +119,7 @@ int loadMLIR(llvm::SourceMgr &sourceMgr, mlir::MLIRContext &context,
   }
 
   // Parse the input mlir.
+  llvm::SourceMgr sourceMgr;
   sourceMgr.AddNewSourceBuffer(std::move(*fileOrErr), llvm::SMLoc());
   module = mlir::parseSourceFile(sourceMgr, &context);
   if (!module) {
@@ -115,15 +129,9 @@ int loadMLIR(llvm::SourceMgr &sourceMgr, mlir::MLIRContext &context,
   return 0;
 }
 
-int dumpMLIR() {
-  // Register our Dialect with MLIR.
-  mlir::registerDialect<mlir::scl::SclDialect>();
-
-  mlir::MLIRContext context;
-  mlir::OwningModuleRef module;
-  llvm::SourceMgr sourceMgr;
-  mlir::SourceMgrDiagnosticHandler sourceMgrHandler(sourceMgr, &context);
-  if (int error = loadMLIR(sourceMgr, context, module))
+int loadAndProcessMLIR(mlir::MLIRContext &context,
+                       mlir::OwningModuleRef &module) {
+  if (int error = loadMLIR(context, module))
     return error;
 
   mlir::PassManager pm(&context);
@@ -132,6 +140,7 @@ int dumpMLIR() {
 
   // Check to see what granularity of MLIR we are compiling to.
   bool isLoweringToStd = emitAction >= Action::DumpMLIRStd;
+  bool isLoweringToLLVM = emitAction >= Action::DumpMLIRLLVM;
 
   if (isLoweringToStd) {
     // Partially lower the SCL dialect with a few cleanups afterwards.
@@ -149,10 +158,13 @@ int dumpMLIR() {
     }
   }
 
+  if (isLoweringToLLVM) {
+    // Finish lowering the toy IR to the LLVM dialect.
+    pm.addPass(mlir::sclang::createLowerToLLVMPass());
+  }
+
   if (mlir::failed(pm.run(*module)))
     return 4;
-
-  module->print(llvm::outs());
   return 0;
 }
 
@@ -170,20 +182,89 @@ int dumpAST() {
   return 0;
 }
 
+int dumpLLVMIR(mlir::ModuleOp module) {
+  auto llvmModule = mlir::translateModuleToLLVMIR(module);
+  if (!llvmModule) {
+    llvm::errs() << "Failed to emit LLVM IR\n";
+    return -1;
+  }
+
+  // Initialize LLVM targets.
+  llvm::InitializeNativeTarget();
+  llvm::InitializeNativeTargetAsmPrinter();
+  mlir::ExecutionEngine::setupTargetTriple(llvmModule.get());
+
+  /// Optionally run an optimization pipeline over the llvm module.
+  auto optPipeline = mlir::makeOptimizingTransformer(
+      /*optLevel=*/enableOpt ? 3 : 0, /*sizeLevel=*/0,
+      /*targetMachine=*/nullptr);
+  if (auto err = optPipeline(llvmModule.get())) {
+    llvm::errs() << "Failed to optimize LLVM IR " << err << "\n";
+    return -1;
+  }
+  llvm::errs() << *llvmModule << "\n";
+  return 0;
+}
+
+int runJit(mlir::ModuleOp module) {
+  // Initialize LLVM targets.
+  llvm::InitializeNativeTarget();
+  llvm::InitializeNativeTargetAsmPrinter();
+
+  // An optimization pipeline to use within the execution engine.
+  auto optPipeline = mlir::makeOptimizingTransformer(
+      /*optLevel=*/enableOpt ? 3 : 0, /*sizeLevel=*/0,
+      /*targetMachine=*/nullptr);
+
+  // Create an MLIR execution engine. The execution engine eagerly JIT-compiles
+  // the module.
+  auto maybeEngine = mlir::ExecutionEngine::create(module, optPipeline);
+  assert(maybeEngine && "failed to construct an execution engine");
+  auto &engine = maybeEngine.get();
+
+  // Invoke the JIT-compiled function.
+  auto invocationResult = engine->invoke("OB1");
+  if (invocationResult) {
+    llvm::errs() << "JIT invocation failed\n";
+    return -1;
+  }
+
+  return 0;
+}
+
 int main(int argc, char **argv) {
   mlir::registerAllDialects();
   mlir::registerPassManagerCLOptions();
   cl::ParseCommandLineOptions(argc, argv, "SCL compiler\n");
 
-  switch (emitAction) {
-  case Action::DumpAST:
+  if (emitAction == Action::DumpAST)
     return dumpAST();
-  case Action::DumpMLIR:
-  case Action::DumpMLIRStd:
-    return dumpMLIR();
-  default:
-    llvm::errs() << "No action specified (parsing only?), use -emit=<action>\n";
+
+  // If we aren't dumping the AST, then we are compiling with/to MLIR.
+
+  // Register our Dialect with MLIR.
+  mlir::registerDialect<mlir::scl::SclDialect>();
+
+  mlir::MLIRContext context;
+  mlir::OwningModuleRef module;
+  if (int error = loadAndProcessMLIR(context, module))
+    return error;
+
+  // If we aren't exporting to non-mlir, then we are done.
+  bool isOutputingMLIR = emitAction <= Action::DumpMLIRLLVM;
+  if (isOutputingMLIR) {
+    module->print(llvm::outs());
+    return 0;
   }
 
-  return 0;
+  // Check to see if we are compiling to LLVM IR.
+  if (emitAction == Action::DumpLLVMIR)
+    return dumpLLVMIR(*module);
+
+  // Otherwise, we must be running the jit.
+  if (emitAction == Action::RunJIT)
+    return runJit(*module);
+
+  llvm::errs() << "No action specified (parsing only?), use -emit=<action>\n";
+  return -1;
 }
