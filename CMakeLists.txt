@@ -53,7 +53,7 @@ target_link_libraries(sclang
     MLIRLLVMIR
     MLIRParser
     MLIRPass
-    MLIRSideEffects
+    MLIRSideEffectInterfaces
     MLIRSupport
     MLIRTargetLLVMIR
     MLIRTransforms
