@@ -1,0 +1,17 @@
+// RUN: sclang-gen --emit=ast %s | FileCheck %s
+
+function_block block_attributes
+// CHECK: FunctionBlock block_attributes
+
+TITLE='Block Attributes'
+VERSION : '2.1'
+KNOW_HOW_PROTECT
+AUTHOR : AUT_1
+// CHECK: Attributes
+// CHECK:  Attribute title : Block Attributes
+// CHECK:  Attribute version : 2.1
+// CHECK:  Attribute know_how_protect : 1
+// CHECK:  Attribute author : AUT_1
+
+begin
+end_function_block

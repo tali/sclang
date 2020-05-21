@@ -1,0 +1,42 @@
+// RUN: sclang-gen --emit=mlir-std %s | FileCheck %s
+
+// CHECK:      func @abs(%arg0: f32) -> f32
+function abs : real
+
+var_input
+ in : real;
+end_var;
+
+begin
+
+// CHECK: [[C0:%[a-z0-9]+]] = constant 0.000000e+00 : f32
+// CHECK: [[ABS:%[0-9]+]] = alloca() : memref<f32>
+// CHECK: [[LT:%[0-9]+]] = cmpf "ult", %arg0, [[C0]]
+// CHECK: scf.if [[LT]] {
+  if in < 0.0 then
+
+// CHECK:   [[NEG:%[0-9]+]] = negf %arg0 : f32
+// CHECK:   store [[NEG]], [[ABS]][] : memref<f32>
+    abs := -in;
+
+// CHECK: } else {
+// CHECK:   [[GT:%[0-9]+]] = cmpf "ugt", %arg0, [[C0]]
+// CHECK:   scf.if [[GT]] {
+  elsif in > 0.0 then
+
+// CHECK:     store %arg0, [[ABS]][] : memref<f32>
+    abs := in;
+
+// CHECK:   } else {
+  else
+
+// CHECK: store [[C0]], [[ABS]][] : memref<f32>
+    abs := 0.0;
+
+// CHECK:   }
+// CHECK: }
+  end_if;
+
+// CHECK: [[RET:%[0-9]+]] = load [[ABS]][] : memref<f32>
+// CHECK: return [[RET]]
+end_function

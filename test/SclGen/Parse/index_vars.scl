@@ -1,0 +1,37 @@
+// RUN: sclang-gen --emit=ast %s | FileCheck %s
+
+function_block time_literals
+
+var_output
+  a : array[1..2] of int := 2(0);
+// CHECK: VariableDeclaration
+// CHECK-NEXT: VariableIdentifier a
+// CHECK-NEXT: ArrayDataTypeSpec
+// CHECK-NEXT:   ArrayDimension
+// CHECK-NEXT:     IntegerConstant 1
+// CHECK-NEXT:     IntegerConstant 2
+// CHECK-NEXT:   ElementaryDataType Int
+// CHECK-NEXT:   RepeatedConstant 2
+// CHECK-NEXT:     IntegerConstant 0
+end_var
+
+begin
+  a[1] := 100;
+// CHECK: Assignment
+// CHECK-NEXT: BinaryExpression :=
+// CHECK-NEXT: IndexedVariable
+// CHECK-NEXT:   SimpleVariable a
+// CHECK-NEXT:   Indices
+// CHECK-NEXT:     IntegerConstant 1
+// CHECK-NEXT: Constant 100
+
+  a[2] := 200;
+// CHECK: Assignment
+// CHECK-NEXT: BinaryExpression :=
+// CHECK-NEXT: IndexedVariable
+// CHECK-NEXT:   SimpleVariable a
+// CHECK-NEXT:   Indices
+// CHECK-NEXT:     IntegerConstant 2
+// CHECK-NEXT: IntegerConstant 200
+
+end_function_block

@@ -1,0 +1,70 @@
+// RUN: sclang-gen --emit=ast %s | FileCheck %s
+
+function_block time_literals
+
+const
+// CHECK: ConstantDeclarationSubsection
+
+  D1 := D#1970-01-01;
+// CHECK-NEXT: ConstantDeclaration D1
+// CHECK-NEXT: TimeConstant 1970-01-01 00:00:00.000 Type DATE
+
+  D2 := DATE#2010-01-02;
+// CHECK-NEXT: ConstantDeclaration D2
+// CHECK-NEXT: TimeConstant 2010-01-02 00:00:00.000 Type DATE
+
+
+  T1 := T#1s;
+// CHECK-NEXT: ConstantDeclaration T1
+// CHECK-NEXT: TimeConstant 0000-00-00 00:00:01.000 Type TIME
+
+  T2 := TIME#1m;
+// CHECK-NEXT: ConstantDeclaration T2
+// CHECK-NEXT: TimeConstant 0000-00-00 00:01:00.000 Type TIME
+
+  T3 := TIME#1h;
+// CHECK-NEXT: ConstantDeclaration T3
+// CHECK-NEXT: TimeConstant 0000-00-00 01:00:00.000 Type TIME
+
+  T4 := TIME#1d;
+// CHECK-NEXT: ConstantDeclaration T4
+// CHECK-NEXT: TimeConstant 0000-00-01 00:00:00.000 Type TIME
+
+  T5 := TIME#1h2m3s;
+// CHECK-NEXT: ConstantDeclaration T5
+// CHECK-NEXT: TimeConstant 0000-00-00 01:02:03.000 Type TIME
+
+  T6 := TIME#1h_2m_3s;
+// CHECK-NEXT: ConstantDeclaration T6
+// CHECK-NEXT: TimeConstant 0000-00-00 01:02:03.000 Type TIME
+
+
+  TOD1 := TOD#1:2:3;
+// CHECK-NEXT: ConstantDeclaration TOD1
+// CHECK-NEXT: TimeConstant 0000-00-00 01:02:03.000 Type TIME_OF_DAY
+
+  TOD2 := TIME_OF_DAY#11:55:00;
+// CHECK-NEXT: ConstantDeclaration TOD2
+// CHECK-NEXT: TimeConstant 0000-00-00 11:55:00.000 Type TIME_OF_DAY
+
+  TOD3 := TIME_OF_DAY#00:00:00;
+// CHECK-NEXT: ConstantDeclaration TOD3
+// CHECK-NEXT: TimeConstant 0000-00-00 00:00:00.000 Type TIME_OF_DAY
+
+  TOD4 := TIME_OF_DAY#23:59:59.999;
+// CHECK-NEXT: ConstantDeclaration TOD4
+// CHECK-NEXT: TimeConstant 0000-00-00 23:59:59.999 Type TIME_OF_DAY
+
+
+  DT1 := DT#1970-01-01-00:00:00;
+// CHECK-NEXT: ConstantDeclaration DT1
+// CHECK-NEXT: TimeConstant 1970-01-01 00:00:00.000 Type DATE_AND_TIME
+
+  DT2 := DATE_AND_TIME#1999-12-31-23:59:59;
+// CHECK-NEXT: ConstantDeclaration DT2
+// CHECK-NEXT: TimeConstant 1999-12-31 23:59:59.000 Type DATE_AND_TIME
+
+end_const
+
+begin
+end_function_block

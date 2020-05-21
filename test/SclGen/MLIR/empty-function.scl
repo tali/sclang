@@ -1,0 +1,9 @@
+// RUN: sclang-gen --emit=mlir %s 2>&1 | FileCheck %s
+
+function empty_function : void
+// CHECK:      func @empty_function()
+// CHECK-NEXT: scl.return
+
+begin
+  ;
+end_function

@@ -1,0 +1,52 @@
+// RUN: sclang-gen --emit=ast %s | FileCheck %s
+
+function abs : int
+// CHECK: Function abs
+
+var_input
+ in : INT;
+end_var;
+
+begin
+// CHECK: CodeSection
+
+  if in < 0 then
+// CHECK-NEXT: IfThenElse
+// CHECK-NEXT:   IfThen
+// CHECK-NEXT:     BinaryExpression <
+// CHECK-NEXT:       SimpleVariable in
+// CHECK-NEXT:       IntegerConstant 0
+// CHECK-NEXT:     CodeSection
+
+    abs := -in;
+// CHECK-NEXT: ValueAssignment
+// CHECK-NEXT:   BinaryExpression :=
+// CHECK-NEXT:     SimpleVariable abs
+// CHECK-NEXT:     UnaryExpression -
+// CHECK-NEXT:       SimpleVariable in
+
+  elsif in > 0 then
+// CHECK-NEXT: IfThen
+// CHECK-NEXT:   BinaryExpression >
+// CHECK-NEXT:     SimpleVariable in
+// CHECK-NEXT:     IntegerConstant 0
+// CHECK-NEXT:   CodeSection
+
+    abs := in;
+// CHECK-NEXT: ValueAssignment
+// CHECK-NEXT:   BinaryExpression :=
+// CHECK-NEXT:     SimpleVariable abs
+// CHECK-NEXT:     SimpleVariable in
+
+  else
+// CHECK-NEXT: Else
+// CHECK-NEXT:   CodeSection
+
+    abs := 0;
+// CHECK-NEXT: ValueAssignment
+// CHECK-NEXT:   BinaryExpression :=
+// CHECK-NEXT:     SimpleVariable abs
+// CHECK-NEXT:     IntegerConstant 0
+  end_if;
+
+end_function

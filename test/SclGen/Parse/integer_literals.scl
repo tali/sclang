@@ -1,0 +1,119 @@
+// RUN: sclang-gen --emit=ast %s | FileCheck %s
+
+function_block integer_literals
+
+const
+// CHECK: ConstantDeclarationSubsection
+
+  I0 := 0;
+// CHECK-NEXT: ConstantDeclaration I0
+// CHECK-NEXT: IntegerConstant 0
+
+  I1 := INT#0;
+// CHECK-NEXT: ConstantDeclaration I1
+// CHECK-NEXT: IntegerConstant 0 Type INT
+
+  I2 := L#0;
+// CHECK-NEXT: ConstantDeclaration I2
+// CHECK-NEXT: IntegerConstant 0 Type DINT
+
+  I3 := DINT#0;
+// CHECK-NEXT: ConstantDeclaration I3
+// CHECK-NEXT: IntegerConstant 0 Type DINT
+
+  I4 := B#0;
+// CHECK-NEXT: ConstantDeclaration I4
+// CHECK-NEXT: IntegerConstant 0 Type BYTE
+
+  I5 := BYTE#0;
+// CHECK-NEXT: ConstantDeclaration I5
+// CHECK-NEXT: IntegerConstant 0 Type BYTE
+
+  I6 := W#0;
+// CHECK-NEXT: ConstantDeclaration I6
+// CHECK-NEXT: IntegerConstant 0 Type WORD
+
+  I7 := WORD#0;
+// CHECK-NEXT: ConstantDeclaration I7
+// CHECK-NEXT: IntegerConstant 0 Type WORD
+
+  I8 := DW#0;
+// CHECK-NEXT: ConstantDeclaration I8
+// CHECK-NEXT: IntegerConstant 0 Type DWORD
+
+  I9 := DWORD#0;
+// CHECK-NEXT: ConstantDeclaration I9
+// CHECK-NEXT: IntegerConstant 0 Type DWORD
+
+  I10 := 1_0;
+// CHECK-NEXT: ConstantDeclaration I10
+// CHECK-NEXT: IntegerConstant 10
+
+  I11 := 2#10;
+// CHECK-NEXT: ConstantDeclaration I11
+// CHECK-NEXT: IntegerConstant 2
+
+  I12 := 2#1_0;
+// CHECK-NEXT: ConstantDeclaration I12
+// CHECK-NEXT: IntegerConstant 2
+
+  I13 := 8#10;
+// CHECK-NEXT: ConstantDeclaration I13
+// CHECK-NEXT: IntegerConstant 8
+
+  I14 := 8#1_0;
+// CHECK-NEXT: ConstantDeclaration I14
+// CHECK-NEXT: IntegerConstant 8
+
+  I15 := 16#1_0;
+// CHECK-NEXT: ConstantDeclaration I15
+// CHECK-NEXT: IntegerConstant 16
+
+  I16 := 16#1_0;
+// CHECK-NEXT: ConstantDeclaration I16
+// CHECK-NEXT: IntegerConstant 16
+
+  I21 := INT#2#10;
+// CHECK-NEXT: ConstantDeclaration I21
+// CHECK-NEXT: IntegerConstant 2 Type INT
+
+  I22 := DINT#2#1_0;
+// CHECK-NEXT: ConstantDeclaration I22
+// CHECK-NEXT: IntegerConstant 2 Type DINT
+
+  I23 := BYTE#8#10;
+// CHECK-NEXT: ConstantDeclaration I23
+// CHECK-NEXT: IntegerConstant 8 Type BYTE
+
+  I24 := BYTE#8#1_0;
+// CHECK-NEXT: ConstantDeclaration I24
+// CHECK-NEXT: IntegerConstant 8 Type BYTE
+
+  I25 := WORD#16#1_0;
+// CHECK-NEXT: ConstantDeclaration I25
+// CHECK-NEXT: IntegerConstant 16 Type WORD
+
+  I26 := DWORD#16#1_0;
+// CHECK-NEXT: ConstantDeclaration I26
+// CHECK-NEXT: IntegerConstant 16 Type DWORD
+
+  I27 := BYTE#16#C0;
+// CHECK-NEXT: ConstantDeclaration I27
+// CHECK-NEXT: IntegerConstant 192 Type BYTE
+
+  I28 := DW#16#FFFF_FFFF;
+// CHECK-NEXT: ConstantDeclaration I28
+// CHECK-NEXT: IntegerConstant -1 Type DWORD
+
+  B0 := FALSE;
+// CHECK-NEXT: ConstantDeclaration B0
+// CHECK-NEXT: IntegerConstant 0 Type BOOL
+
+  B1 := TRUE;
+// CHECK-NEXT: ConstantDeclaration B1
+// CHECK-NEXT: IntegerConstant 1 Type BOOL
+
+end_const
+
+begin
+end_function_block

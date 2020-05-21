@@ -1,0 +1,17 @@
+// RUN: sclang-gen --emit=ast %s | FileCheck %s
+
+function_block jump_labels
+
+label
+// CHECK: JumpLabelDeclarationSubsection
+
+  first;
+// CHECK-NEXT: JumpLabelDeclaration first
+
+  second;
+// CHECK-NEXT: JumpLabelDeclaration second
+
+end_label
+
+begin
+end_function_block
