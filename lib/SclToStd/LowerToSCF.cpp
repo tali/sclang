@@ -50,11 +50,11 @@ struct IfThenElseOpLowering : public OpRewritePattern<scl::IfThenElseOp> {
     // inline the block from our then body into the lowered region,
     // then remove the implicitly created one
     rewriter.inlineRegionBefore(op.thenBody(), &loweredOp.thenRegion().back());
-    loweredOp.thenRegion().back().erase();
+    rewriter.eraseBlock(&loweredOp.thenRegion().back());
 
     // same for the else part
     rewriter.inlineRegionBefore(op.elseBody(), &loweredOp.elseRegion().back());
-    loweredOp.elseRegion().back().erase();
+    rewriter.eraseBlock(&loweredOp.elseRegion().back());
 
     rewriter.replaceOp(op, loweredOp.getResults());
     return success();
