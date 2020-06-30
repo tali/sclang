@@ -371,8 +371,8 @@ func @xor(%arg0: i1, %arg1: i1) -> i1 {
 // MARK: scl.not
 
 // CHECK-LABEL: @not
-// CHECK:       [[FALSE:%[a-z_0-9]+]] = constant 0 : i1
-// CHECK:       [[TRUE:%[a-z_0-9]+]] = constant 1 : i1
+// CHECK-DAG:       [[FALSE:%[a-z_0-9]+]] = constant false
+// CHECK-DAG:       [[TRUE:%[a-z_0-9]+]] = constant true
 // CHECK:       select %arg0, [[FALSE]], [[TRUE]] : i1
 func @not(%arg0: i1) -> i1 {
   %res = scl.not %arg0 : i1
