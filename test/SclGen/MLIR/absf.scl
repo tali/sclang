@@ -1,7 +1,7 @@
 // RUN: sclang-gen --emit=mlir %s | FileCheck %s
 
-// CHECK:      func @abs(%arg0: f32) -> f32
-// CHECK-NEXT:   [[ABS:%[0-9]+]] = scl.tmpvar "abs" : memref<f32>
+// CHECK:      scl.function @abs(%arg0: !scl.real) -> !scl.real
+// CHECK-NEXT:   [[ABS:%[0-9]+]] = scl.tmpvar "abs" : !scl.address<!scl.real>
 function abs : real
 
 var_input
@@ -9,33 +9,33 @@ var_input
 end_var;
 
 begin
-// CHECK: [[C0:%[0-9]+]] = scl.constant 0.000000e+00 : f32
+// CHECK: [[C0:%[0-9]+]] = scl.constant 0.000000e+00 : f32 -> !scl.real
 // CHECK: [[LT:%[0-9]+]] = scl.cmplt %arg0, [[C0]]
 // CHECK: "scl.if"([[LT]])
   if in < 0.0 then
 
 // CHECK: [[NEG:%[0-9]+]] = scl.negate %arg0
-// CHECK: scl.store [[ABS]] : memref<f32> = [[NEG]]
+// CHECK: scl.store [[ABS]] : !scl.address<!scl.real> = [[NEG]]
     abs := -in;
 
 // CHECK: scl.end
-// CHECK: [[C0:%[0-9]+]] = scl.constant 0.000000e+00 : f32
+// CHECK: [[C0:%[0-9]+]] = scl.constant 0.000000e+00 : f32 -> !scl.real
 // CHECK: [[GT:%[0-9]+]] = scl.cmpgt %arg0, [[C0]]
 // CHECK: "scl.if"([[GT]])
   elsif in > 0.0 then
 
-// CHECK: scl.store [[ABS]] : memref<f32> = %arg0
+// CHECK: scl.store [[ABS]] : !scl.address<!scl.real> = %arg0
     abs := in;
 
 // CHECK: scl.end
   else
 
-// CHECK: [[C0:%[0-9]+]] = scl.constant 0.000000e+00 : f32
-// CHECK: scl.store [[ABS]] : memref<f32> = [[C0]]
+// CHECK: [[C0:%[0-9]+]] = scl.constant 0.000000e+00 : f32 -> !scl.real
+// CHECK: scl.store [[ABS]] : !scl.address<!scl.real> = [[C0]]
     abs := 0.0;
 
 // CHECK: scl.end
   end_if;
 
-// CHECK: scl.return [[ABS]] : memref<f32>
+// CHECK: scl.return [[ABS]] : !scl.address<!scl.real>
 end_function

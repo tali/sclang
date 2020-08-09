@@ -23,6 +23,8 @@
 #include "sclang/SclDialect/Dialect.h"
 
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/Function.h"
+#include "mlir/IR/FunctionImplementation.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/StandardTypes.h"
 
@@ -30,7 +32,7 @@ using namespace mlir;
 using namespace mlir::scl;
 
 //===----------------------------------------------------------------------===//
-// SclDialect
+// MARK: SclDialect
 //===----------------------------------------------------------------------===//
 
 /// Dialect creation, the instance will be owned by the context. This is the
@@ -41,13 +43,186 @@ SclDialect::SclDialect(mlir::MLIRContext *ctx)
 #define GET_OP_LIST
 #include "sclang/SclDialect/Ops.cpp.inc"
       >();
+  addTypes<AddressType>();
   addTypes<ArrayType>();
   addTypes<StructType>();
+  addTypes<IntegerType>();
+  addTypes<LogicalType>();
+  addTypes<RealType>();
 }
+
+//===----------------------------------------------------------------------===//
+// MARK: FunctionOp
+//===----------------------------------------------------------------------===//
+
+static ParseResult parseFunctionOp(OpAsmParser &parser, OperationState &state) {
+  auto buildFuncType = [](Builder &builder, ArrayRef<Type> argTypes,
+                          ArrayRef<Type> results, impl::VariadicFlag,
+                          std::string &) {
+    return builder.getFunctionType(argTypes, results);
+  };
+
+  return mlir::impl::parseFunctionLikeOp(parser, state, /*allowVariadic=*/false,
+                                   buildFuncType);
+}
+
+static void print(FunctionOp fnOp, OpAsmPrinter &printer) {
+  FunctionType fnType = fnOp.getType();
+  mlir::impl::printFunctionLikeOp(printer, fnOp, fnType.getInputs(), /*isVariadic=*/false,
+                            fnType.getResults());
+}
+
+LogicalResult FunctionOp::verifyType() {
+  auto type = getTypeAttr().getValue();
+  if (!type.isa<FunctionType>())
+    return emitOpError("requires '" + getTypeAttrName() +
+                       "' attribute of function type");
+  if (getType().getNumResults() > 1)
+    return emitOpError("cannot have more than one result");
+  return success();
+}
+
+LogicalResult FunctionOp::verifyBody() {
+#if 0 // TBD
+  FunctionType fnType = getType();
+  auto walkResult = walk([fnType](Operation *op) -> WalkResult {
+    if (auto retOp = dyn_cast<ReturnOp>(op)) {
+      if (fnType.getNumResults() != 0)
+        return retOp.emitOpError("cannot be used in functions returning value");
+    } else if (auto retOp = dyn_cast<ReturnValueOp>(op)) {
+      if (fnType.getNumResults() != 1)
+        return retOp.emitOpError(
+                   "returns 1 value but enclosing function requires ")
+               << fnType.getNumResults() << " results";
+
+      auto retOperandType = retOp.value().getType();
+      auto fnResultType = fnType.getResult(0);
+      if (retOperandType != fnResultType)
+        return retOp.emitOpError(" return value's type (")
+               << retOperandType << ") mismatch with function's result type ("
+               << fnResultType << ")";
+    }
+    return WalkResult::advance();
+  });
+
+  // TODO: verify other bits like linkage type.
+
+  return failure(walkResult.wasInterrupted());
+#endif
+  return success();
+}
+
+void FunctionOp::build(OpBuilder &builder, OperationState &state,
+                          StringRef name, FunctionType type,
+                          ArrayRef<NamedAttribute> attrs) {
+  state.addAttribute(SymbolTable::getSymbolAttrName(),
+                     builder.getStringAttr(name));
+  state.addAttribute(getTypeAttrName(), TypeAttr::get(type));
+  state.attributes.append(attrs.begin(), attrs.end());
+  state.addRegion();
+}
+
+// CallableOpInterface
+Region *FunctionOp::getCallableRegion() {
+  return isExternal() ? nullptr : &body();
+}
+
+// CallableOpInterface
+ArrayRef<Type> FunctionOp::getCallableResults() {
+  return getType().getResults();
+}
+
 
 //===----------------------------------------------------------------------===//
 // Scl Types
 //===----------------------------------------------------------------------===//
+
+// MARK: AddressType
+
+namespace mlir {
+namespace scl {
+namespace detail {
+
+/// This class represents the internal storage of the SCL `AddressType`.
+struct AddressTypeStorage : public mlir::TypeStorage {
+  /// The `KeyTy` is a required type that provides an interface for the storage
+  /// instance. This type will be used when uniquing an instance of the type
+  /// storage. For our struct type, we will unique each instance structurally on
+  /// the elements that it contains.
+  using KeyTy = Type;
+
+  /// A constructor for the type storage instance.
+  AddressTypeStorage(Type elementType) : elementType(elementType) {}
+
+  /// Define the comparison function for the key type with the current storage
+  /// instance. This is used when constructing a new instance to ensure that we
+  /// haven't already uniqued an instance of the given key.
+  bool operator==(const KeyTy &key) const {
+    return key == elementType;
+  }
+
+  /// Define a construction method for creating a new instance of this storage.
+  /// This method takes an instance of a storage allocator, and an instance of a
+  /// `KeyTy`. The given allocator must be used for *all* necessary dynamic
+  /// allocations used to create the type storage and its internal.
+  static AddressTypeStorage *construct(mlir::TypeStorageAllocator &allocator,
+                                       const KeyTy &key) {
+
+    // Allocate the storage instance and construct it.
+    return new (allocator.allocate<AddressTypeStorage>())
+      AddressTypeStorage(key);
+  }
+
+  /// The following field contains the element types of the struct.
+  Type elementType;
+};
+} // end namespace detail
+} // end namespace scl
+} // end namespace mlir
+
+/// Create an instance of a `AddressType` with the given element type.
+AddressType AddressType::get(mlir::Type elementType) {
+  // Call into a helper 'get' method in 'TypeBase' to get a uniqued instance
+  // of this type. The first two parameters are the context to unique in and the
+  // kind of the type. The parameters after the type kind are forwarded to the
+  // storage instance.
+  mlir::MLIRContext *ctx = elementType.getContext();
+  return Base::get(ctx, getId(), elementType);
+}
+
+/// Returns the element types of this struct type.
+mlir::Type AddressType::getElementType() {
+  // 'getImpl' returns a pointer to the internal storage instance.
+  return getImpl()->elementType;
+}
+
+namespace {
+
+void print(AddressType type, mlir::DialectAsmPrinter &printer) {
+  // Print the struct type according to the parser format.
+  printer << "address<" << type.getElementType() << '>';
+}
+
+/// Parse an array type instance.
+mlir::Type parseAddressType(mlir::DialectAsmParser &parser) {
+  // Parse a array type in the following form:
+  //   array-type ::= `address` `<` type `>`
+
+  // Parse: `array` `<`
+  if (parser.parseKeyword("address") || parser.parseLess())
+    return Type();
+
+  // Parse: type `,`
+  mlir::Type elementType;
+  if (parser.parseType(elementType) || parser.parseGreater())
+    return Type();
+
+  return AddressType::get(elementType);
+}
+
+} // namespace
+
+
 // MARK: ArrayType
 
 namespace mlir {
@@ -137,7 +312,7 @@ ArrayType ArrayType::get(llvm::ArrayRef<DimTy> dimensions,
   // kind of the type. The parameters after the type kind are forwarded to the
   // storage instance.
   mlir::MLIRContext *ctx = elementType.getContext();
-  return Base::get(ctx, SclTypes::Array, dimensions, elementType);
+  return Base::get(ctx, getId(), dimensions, elementType);
 }
 
 /// Returns the element types of this struct type.
@@ -157,7 +332,7 @@ namespace {
 void print(ArrayType type, mlir::DialectAsmPrinter &printer) {
   // Print the struct type according to the parser format.
   printer << "array<" << type.getElementType();
-  for (const auto dim : type.getDimensions()) {
+  for (const auto & dim : type.getDimensions()) {
     printer << ", " << dim.first << ":" << dim.second;
   }
   printer << '>';
@@ -267,7 +442,7 @@ StructType StructType::get(llvm::ArrayRef<mlir::Type> elementTypes) {
   // kind of the type. The parameters after the type kind are forwarded to the
   // storage instance.
   mlir::MLIRContext *ctx = elementTypes.front().getContext();
-  return Base::get(ctx, SclTypes::Struct, elementTypes);
+  return Base::get(ctx, getId(), elementTypes);
 }
 
 /// Returns the element types of this struct type.
@@ -315,6 +490,80 @@ mlir::Type parseStructType(mlir::DialectAsmParser &parser) {
 
 } // namespace
 
+// MARK: integer and logical types
+
+namespace mlir {
+namespace scl {
+namespace detail {
+
+/// This class represents the internal storage of the SCL `ArrayType`.
+struct BitWidthStorage : public mlir::TypeStorage {
+  /// The `KeyTy` is a required type that provides an interface for the storage
+  /// instance. This type will be used when uniquing an instance of the type
+  /// storage. For our struct type, we will unique each instance structurally on
+  /// the elements that it contains.
+  using KeyTy = int;
+
+  /// A constructor for the type storage instance.
+  BitWidthStorage(KeyTy width)
+      : width(width) {}
+
+  /// Define the comparison function for the key type with the current storage
+  /// instance. This is used when constructing a new instance to ensure that we
+  /// haven't already uniqued an instance of the given key.
+  bool operator==(const KeyTy &key) const {
+    return key == width;
+  }
+
+  /// Define a construction method for creating a new instance of this storage.
+  /// This method takes an instance of a storage allocator, and an instance of a
+  /// `KeyTy`. The given allocator must be used for *all* necessary dynamic
+  /// allocations used to create the type storage and its internal.
+  static BitWidthStorage *construct(mlir::TypeStorageAllocator &allocator,
+                                     const KeyTy &key) {
+
+    // Copy the the provided `KeyTy` into the allocator.
+    return new (allocator.allocate<BitWidthStorage>()) BitWidthStorage(key);
+  }
+
+  /// The bit-width of the type.
+  KeyTy width;
+};
+} // end namespace detail
+
+IntegerType IntegerType::get(mlir::MLIRContext *ctx, int width) {
+  // Call into a helper 'get' method in 'TypeBase' to get a uniqued instance
+  // of this type. The first two parameters are the context to unique in and the
+  // kind of the type. The parameters after the type kind are forwarded to the
+  // storage instance.
+  return Base::get(ctx, getId(), width);
+}
+
+int IntegerType::getWidth() {
+  return getImpl()->width;
+}
+
+LogicalType LogicalType::get(mlir::MLIRContext *ctx, int width) {
+  // Call into a helper 'get' method in 'TypeBase' to get a uniqued instance
+  // of this type. The first two parameters are the context to unique in and the
+  // kind of the type. The parameters after the type kind are forwarded to the
+  // storage instance.
+  return Base::get(ctx, getId(), width);
+}
+
+int LogicalType::getWidth() {
+  return getImpl()->width;
+}
+
+
+RealType RealType::get(mlir::MLIRContext *ctx) {
+  return Base::get(ctx, getId());
+}
+
+} // end namespace scl
+} // end namespace mlir
+
+
 // MARK: parse and print
 
 /// Parse an instance of a type registered to the SCL dialect.
@@ -323,10 +572,31 @@ mlir::Type SclDialect::parseType(mlir::DialectAsmParser &parser) const {
   if (parser.parseKeyword(&keyword))
     return Type();
 
+  if (keyword == "address")
+    return parseAddressType(parser);
   if (keyword == "array")
     return parseArrayType(parser);
   if (keyword == "struct")
     return parseStructType(parser);
+
+  if (keyword == "char")
+    return IntegerType::get(getContext(), 8);
+  if (keyword == "int")
+    return IntegerType::get(getContext(), 16);
+  if (keyword == "dint")
+    return IntegerType::get(getContext(), 32);
+
+  if (keyword == "bool")
+    return LogicalType::get(getContext(), 1);
+  if (keyword == "byte")
+    return LogicalType::get(getContext(), 8);
+  if (keyword == "word")
+    return LogicalType::get(getContext(), 16);
+  if (keyword == "dword")
+    return LogicalType::get(getContext(), 32);
+
+  if (keyword == "real")
+    return RealType::get(getContext());
 
   parser.emitError(parser.getNameLoc(), "unknown SCL type: ") << keyword;
   return Type();
@@ -338,13 +608,56 @@ void SclDialect::printType(mlir::Type type,
   switch (type.getKind()) {
   default:
     llvm_unreachable("Unhandled SCL type");
-  case SclTypes::Array:
+
+  case AddressType::getId():
+    print(type.cast<AddressType>(), printer);
+    break;
+  case ArrayType::getId():
     print(type.cast<ArrayType>(), printer);
     break;
-  case SclTypes::Struct:
+  case StructType::getId():
     print(type.cast<StructType>(), printer);
     break;
-  }
+
+  case IntegerType::getId():
+    switch (type.cast<IntegerType>().getWidth()) {
+    default:
+      assert(false);
+    case 8:
+      printer << "char";
+      break;
+    case 16:
+      printer << "int";
+      break;
+    case 32:
+      printer << "dint";
+      break;
+    }
+    break;
+
+  case LogicalType::getId():
+    switch (type.cast<LogicalType>().getWidth()) {
+    default:
+      assert(false);
+    case 1:
+      printer << "bool";
+      break;
+    case 8:
+      printer << "byte";
+      break;
+    case 16:
+      printer << "word";
+      break;
+    case 32:
+      printer << "dword";
+      break;
+    }
+    break;
+
+  case RealType::getId():
+    printer << "real";
+    break;
+ }
 }
 
 //===----------------------------------------------------------------------===//

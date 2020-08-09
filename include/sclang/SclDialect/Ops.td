@@ -23,7 +23,14 @@
 #define SCL_OPS
 
 include "mlir/IR/OpBase.td"
+include "mlir/IR/SymbolInterfaces.td"
+include "mlir/Interfaces/CallInterfaces.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
+
+class AssemblyFormat<string format> {
+  string assemblyFormat = format;
+}
+
 
 // Provide a definition of the 'scl' dialect in the ODS framework so that we
 // can define our operations.
@@ -32,21 +39,21 @@ def SCL_Dialect : Dialect {
   let cppNamespace = "scl";
 }
 
-def Scl_StructType : Type<CPred<"scl::isa<::StructType>()">, "SCL STRUCT">;
+def Scl_AddressType : Type<CPred<"$_self.isa<AddressType>()">, "AddressType">;
+def Scl_ArrayType : Type<CPred<"$_self.isa<ArrayType>()">, "ArrayType">;
+def Scl_StructType : Type<CPred<"$_self.isa<::StructType>()">, "StructType">;
+def Scl_IntegerType : Type<CPred<"$_self.isa<::IntegerType>()">, "IntegerType">;
+def Scl_LogicalType : Type<CPred<"$_self.isa<::LogicalType>()">, "LogicalType">;
+def Scl_RealType : Type<CPred<"$_self.isa<::RealType>()">, "RealType">;
+
+def Scl_Bool :
+  Type<CPred<"$_self.isa<::LogicalType>() && $_self.cast<::LogicalType>().getWidth() == 1">, "bool">,
+  BuildableType<"LogicalType::get($_builder.getContext(), 1)">;
+
 
 def Scl_Type : AnyTypeOf<[Scl_StructType]>;
+def Scl_NumericType : AnyTypeOf<[Scl_IntegerType, Scl_RealType]>;
 
-def scl_CharacterType : Type<CPred<"$_self.isa<scl::CharacterType>()">,
-    "SCL character type">;
-def scl_IntegerType : Type<CPred<"$_self.isa<scl::IntType>()">,
-    "SCL integer type">;
-def scl_RealType : Type<CPred<"$_self.isa<scl::RealType>()">,
-    "SCL real type">;
-
-
-class AssemblyFormat<string format> {
-  string assemblyFormat = format;
-}
 
 // Base class for toy dialect operations. This operation inherits from the base
 // `Op` class in OpBase.td, and provides:
@@ -64,16 +71,91 @@ class ArithmeticOp<string mnemonic, list<OpTrait> traits = []> :
 class CompareOp<string mnemonic, list<OpTrait> traits = []> :
     SCL_Op<mnemonic, !listconcat(traits, [SameTypeOperands])>,
     Arguments<(ins AnyType:$lhs, AnyType:$rhs)>,
-    Results<(outs I1:$result)>,
-    AssemblyFormat<"attr-dict $lhs `,` $rhs `:` type($rhs)">;
+    Results<(outs Scl_Bool:$result)>,
+    AssemblyFormat<"attr-dict $lhs `,` $rhs `:` type($rhs)"> {
+      let builders = [OpBuilder<"OpBuilder &builder, OperationState &result, Value lhs, Value rhs", [{
+        auto resType = LogicalType::get(builder.getContext(), 1);
+        build(builder, result, resType, lhs, rhs);
+      }]>];
+    }
 class UnaryArithmeticOp<string mnemonic, list<OpTrait> traits = []> :
     SCL_Op<mnemonic, !listconcat(traits, [SameOperandsAndResultType])>,
     Arguments<(ins AnyType:$rhs)>,
     Results<(outs AnyType:$result)>,
     AssemblyFormat<"attr-dict $rhs `:` type($rhs)">;
 
+//
+// MARK: functions / function blocks
+//
+
+// Check that an op can only be used within the scope of a module-like op.
+def InModuleScope : PredOpTrait<
+  "op must appear in a module-like op's block",
+//TBD  CPred<"isDirectInModuleLikeOp($_op.getParentOp())">>;
+CPred<"true">>;
+
+class TopLevelOp<string mnemonic, list<OpTrait> traits = []> :
+  SCL_Op<mnemonic, !listconcat(traits, [InModuleScope])>;
+
+def FunctionOp : TopLevelOp<"function", [
+    AutomaticAllocationScope, DeclareOpInterfaceMethods<CallableOpInterface>,
+    FunctionLike, IsolatedFromAbove, Symbol
+  ]> {
+  let summary = "Declare or define a function";
+
+  let description = [{
+    This op declares or defines an SCL function using one region, which
+    contains one or more blocks.
+
+    This op itself takes no operands and generates no results. Its region
+    can take zero or more arguments and return zero or one values.
+  }];
+
+  let arguments = (ins
+    TypeAttr:$type,
+    StrAttr:$sym_name
+  );
+
+  let results = (outs);
+
+  let regions = (region AnyRegion:$body);
+
+  let parser = [{ return ::parseFunctionOp(parser, result); }];
+  let printer = [{ return ::print(*this, p); }];
+  let verifier = [{ return success(); }];
+
+  let builders = [OpBuilder<[{
+    OpBuilder &, OperationState &state,
+    StringRef name, FunctionType type,
+    ArrayRef<NamedAttribute> attrs = {}
+  }]>];
+
+  let extraClassDeclaration = [{
+  private:
+    // This trait needs access to the hooks defined below.
+    friend class OpTrait::FunctionLike<FunctionOp>;
+
+    /// Returns the number of arguments. Hook for OpTrait::FunctionLike.
+    unsigned getNumFuncArguments() { return getType().getNumInputs(); }
+
+    /// Returns the number of results. Hook for OpTrait::FunctionLike.
+    unsigned getNumFuncResults() { return getType().getNumResults(); }
+
+    /// Hook for OpTrait::FunctionLike, called after verifying that the 'type'
+    /// attribute is present and checks if it holds a function type. Ensures
+    /// getType, getNumFuncArguments, and getNumFuncResults can be called safely
+    LogicalResult verifyType();
+
+    /// Hook for OpTrait::FunctionLike, called after verifying the function
+    /// type and the presence of the (potentially empty) function body.
+    /// Ensures SPIR-V specific semantics.
+    LogicalResult verifyBody();
+  }];
+}
+
+
 class FuncTerminatorOp<string mnemonic, list<OpTrait> traits = []> :
-    SCL_Op<mnemonic, !listconcat(traits, [NoSideEffect, Terminator, HasParent<"FuncOp">])>;
+    SCL_Op<mnemonic, !listconcat(traits, [NoSideEffect, Terminator, HasParent<"FunctionOp">])>;
 
 //
 // MARK: variable handling
@@ -83,45 +165,51 @@ def TempVariableOp : SCL_Op<"tmpvar"> {
   let summary = "allocate stack memory for a temporary variable";
   let description = [{ TBD }];
   let arguments = (ins StrAttr:$name);
-  let results = (outs AnyMemRef:$result);
+  let results = (outs Scl_AddressType:$result);
   let assemblyFormat = "$name attr-dict `:` type($result)";
 }
 
 def ConstantOp : SCL_Op<"constant", [
-    NoSideEffect,
-    TypesMatchWith<"result type matches constant", "value", "result", "$_self">
+    NoSideEffect
+//    TypesMatchWith<"result type matches constant", "value", "result", "$_self">
   ]> {
   let summary = "literal constant";
   let arguments = (ins AnyAttr:$value);
   let results = (outs AnyType:$result);
-  let assemblyFormat = "attr-dict $value";
+  let assemblyFormat = "attr-dict $value `->` type($result)";
 }
 
-def LoadOp : SCL_Op<"load", [SameOperandsAndResultElementType]> {
+def CastOp : SCL_Op<"cast", [NoSideEffect]> {
+  let arguments = (ins AnyType:$value);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "attr-dict $value `:` type($value) `->` type($result)";
+}
+
+def LoadOp : SCL_Op<"load", [/*SameOperandsAndResultElementType*/]> {
   let summary = "load a value from memory";
   let description = [{
     The "load" operation reads a value from a data block.
   }];
 
-  let arguments = (ins AnyMemRef:$address);
+  let arguments = (ins Scl_AddressType:$address);
   let results = (outs AnyType:$result);
   let assemblyFormat = "$address `:` type($address) attr-dict `:` type($result)";
 
   let builders = [
     OpBuilder<"OpBuilder &b, OperationState &state, Value memref", [{
-      auto elementType = memref.getType().cast<MemRefType>().getElementType();
+      auto elementType = memref.getType().cast<AddressType>().getElementType();
       build(b, state, elementType, memref);
     }]>
   ];
 }
 
-def StoreOp : SCL_Op<"store", [SameOperandsElementType]> {
+def StoreOp : SCL_Op<"store", [/*SameOperandsElementType]*/]> {
   let summary = "store a value to memory";
   let description = [{
     The "store" operation writes a value to a data block.
   }];
 
-  let arguments = (ins AnyMemRef:$lhs, AnyType:$rhs);
+  let arguments = (ins Scl_AddressType:$lhs, AnyType:$rhs);
   let assemblyFormat = "attr-dict $lhs `:` type($lhs) `=` $rhs `:` type($rhs)";
 }
 
@@ -145,7 +233,7 @@ def IfThenElseOp : SCL_Op<"if">, SingleBlockImplicitTerminator<"terminator"> {
       }
   }];
 
-  let arguments = (ins I1:$cond);
+  let arguments = (ins Scl_Bool:$cond);
   let regions = (region SizedRegion<1>:$thenBody, AnyRegion:$elseBody);
 }
 
@@ -170,7 +258,7 @@ def ReturnOp : FuncTerminatorOp<"return"> {
     currently being processed and to return to the calling block or the
     operating system if the block being exited is an OB.
   }];
-  let arguments = (ins Optional<AnyMemRef>:$value);
+  let arguments = (ins Optional<Scl_AddressType>:$value);
   let assemblyFormat = "attr-dict operands `:` type(operands)";
 }
 

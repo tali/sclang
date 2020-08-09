@@ -90,6 +90,7 @@ public:
     theModule = mlir::ModuleOp::create(builder.getUnknownLoc());
 
     for (const auto &unit : moduleAST) {
+      builder.clearInsertionPoint();
       auto func = mlirGen(*unit.get());
       if (!func)
         return nullptr;
@@ -146,7 +147,7 @@ private:
 
   // MARK: C.1 Subunits of SCL Source Files
 
-  mlir::FuncOp mlirGen(const UnitAST &unit) {
+  mlir::Operation * mlirGen(const UnitAST &unit) {
     switch (unit.getKind()) {
     case sclang::UnitAST::Unit_Function:
       return mlirGen(cast<FunctionAST>(unit));
@@ -181,7 +182,7 @@ private:
     return nullptr;
   }
 
-  mlir::FuncOp mlirGen(const FunctionAST &func) {
+  FunctionOp mlirGen(const FunctionAST &func) {
     auto location = loc(func.loc());
     functionName = func.getIdentifier();
     functionHasReturnValue = false;
@@ -238,7 +239,7 @@ private:
     // Create an MLIR function
 
     auto func_type = builder.getFunctionType(input_types, output_types);
-    auto function = mlir::FuncOp::create(location, name, func_type);
+    auto function = builder.create<FunctionOp>(location, name, func_type);
     if (!function)
       return nullptr;
 
@@ -253,7 +254,7 @@ private:
     builder.setInsertionPointToStart(&entryBlock);
 
     // Declare all the function arguments in the symbol table.
-    for (const auto &name_value :
+    for (const auto name_value :
          llvm::zip(input_types, input_names, entryBlock.getArguments())) {
       auto type = std::get<0>(name_value);
       auto name = std::get<1>(name_value);
@@ -266,7 +267,7 @@ private:
     for (const auto subsection : tempvar) {
       for (const auto &decl : subsection->getValues()) {
         auto type = getType(*decl->getDataType());
-        auto memRefType = mlir::MemRefType::get({}, type);
+        auto memRefType = AddressType::get(type);
         auto init = decl->getInitializer();
         for (const auto &var : decl->getVars()) {
           auto location = loc(var->loc());
@@ -283,10 +284,10 @@ private:
     }
 
     // Declare all the function outputs in the symbol table.
-    for (const auto &name_value : llvm::zip(output_types, output_names)) {
+    for (const auto name_value : llvm::zip(output_types, output_names)) {
       auto type = std::get<0>(name_value);
       auto name = std::get<1>(name_value);
-      auto memRefType = mlir::MemRefType::get({}, type);
+      auto memRefType = AddressType::get(type);
       auto varStorage = builder.create<TempVariableOp>(
           location, memRefType, builder.getStringAttr(name));
       declare(name, type, varStorage, true);
@@ -434,14 +435,14 @@ private:
 
   mlir::Value mlirGen(const IntegerConstantAST &expr) {
     auto location = loc(expr.loc());
-    auto type = builder.getIntegerType(16);
+    auto type = builder.getIntegerType(16); // getType(expr.getType()); TBD
     auto value = builder.getIntegerAttr(type, expr.getValue());
     return builder.create<ConstantOp>(location, type, value);
   }
 
   mlir::Value mlirGen(const RealConstantAST &expr) {
     auto location = loc(expr.loc());
-    auto type = builder.getF32Type();
+    auto type = getType(tok_real);
     auto value = builder.getF32FloatAttr(expr.getValue());
     return builder.create<ConstantOp>(location, type, value);
   }
@@ -514,22 +515,17 @@ private:
     case sclang::tok_and:
       return builder.create<AndOp>(location, lhs, rhs);
     case sclang::tok_cmp_eq:
-      return builder.create<EqualOp>(location, builder.getI1Type(), lhs, rhs);
+      return builder.create<EqualOp>(location, lhs, rhs);
     case sclang::tok_cmp_ne:
-      return builder.create<NotEqualOp>(location, builder.getI1Type(), lhs,
-                                        rhs);
+      return builder.create<NotEqualOp>(location, lhs, rhs);
     case sclang::tok_cmp_lt:
-      return builder.create<LessThanOp>(location, builder.getI1Type(), lhs,
-                                        rhs);
+      return builder.create<LessThanOp>(location, lhs, rhs);
     case sclang::tok_cmp_le:
-      return builder.create<LessEqualOp>(location, builder.getI1Type(), lhs,
-                                         rhs);
+      return builder.create<LessEqualOp>(location, lhs, rhs);
     case sclang::tok_cmp_gt:
-      return builder.create<GreaterThanOp>(location, builder.getI1Type(), lhs,
-                                           rhs);
+      return builder.create<GreaterThanOp>(location, lhs, rhs);
     case sclang::tok_cmp_ge:
-      return builder.create<GreaterEqualOp>(location, builder.getI1Type(), lhs,
-                                            rhs);
+      return builder.create<GreaterEqualOp>(location, lhs, rhs);
     case sclang::tok_minus:
       return builder.create<SubOp>(location, lhs, rhs);
     case sclang::tok_plus:
@@ -570,25 +566,55 @@ private:
     }
   }
 
+  mlir::Type getType(Token token) {
+    switch (token) {
+    default:
+      assert(false);
+    case tok_bool:
+      return LogicalType::get(builder.getContext(), 1);
+    case tok_byte:
+      return LogicalType::get(builder.getContext(), 8);
+    case tok_word:
+      return LogicalType::get(builder.getContext(), 16);
+    case tok_dword:
+      return LogicalType::get(builder.getContext(), 32);
+    case tok_char:
+      return IntegerType::get(builder.getContext(), 8);
+    case tok_int:
+      return IntegerType::get(builder.getContext(), 16);
+    case tok_dint:
+      return IntegerType::get(builder.getContext(), 32);
+    case tok_real:
+      return RealType::get(builder.getContext());
+    }
+ }
   mlir::Type getType(const ElementaryDataTypeAST &type) {
     switch (type.getType()) {
     case ElementaryDataTypeAST::Type_Void:
       return builder.getNoneType();
     case ElementaryDataTypeAST::Type_Bool:
+      //return LogicalType::get(builder.getContext(), 1);
       return builder.getI1Type();
     case ElementaryDataTypeAST::Type_Byte:
+      //return LogicalType::get(builder.getContext(), 8);
       return builder.getIntegerType(8);
     case ElementaryDataTypeAST::Type_Word:
+      //return LogicalType::get(builder.getContext(), 16);
       return builder.getIntegerType(16);
     case ElementaryDataTypeAST::Type_DWord:
+      //return LogicalType::get(builder.getContext(), 32);
       return builder.getIntegerType(32);
     case ElementaryDataTypeAST::Type_Char:
+      //return IntegerType::get(builder.getContext(), 8);
       return builder.getIntegerType(8);
     case ElementaryDataTypeAST::Type_Int:
+      //return IntegerType::get(builder.getContext(), 16);
       return builder.getIntegerType(16);
     case ElementaryDataTypeAST::Type_DInt:
+      //return IntegerType::get(builder.getContext(), 32);
       return builder.getIntegerType(32);
     case ElementaryDataTypeAST::Type_Real:
+      return getType(tok_real);
       return builder.getF32Type();
     // TODO: TBD more types
     default:
