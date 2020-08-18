@@ -338,6 +338,9 @@ struct ReturnOpLowering : public OpConversionPattern<scl::ReturnOp> {
 namespace {
 struct SclToStdLoweringPass
     : public PassWrapper<SclToStdLoweringPass, OperationPass<scl::FunctionOp>> {
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<StandardOpsDialect>();
+  }
   void runOnOperation() final;
 };
 } // end anonymous namespace.

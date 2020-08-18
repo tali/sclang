@@ -71,6 +71,9 @@ struct IfThenElseOpLowering : public OpRewritePattern<scl::IfThenElseOp> {
 namespace {
 struct SclToSCFLoweringPass
     : public PassWrapper<SclToSCFLoweringPass, FunctionPass> {
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<scf::SCFDialect>();
+  }
   void runOnFunction() final;
 };
 } // end anonymous namespace.

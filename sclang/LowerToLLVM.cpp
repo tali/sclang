@@ -34,6 +34,9 @@ using namespace mlir;
 namespace {
 struct SclToLLVMLoweringPass
     : public PassWrapper<SclToLLVMLoweringPass, OperationPass<ModuleOp>> {
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<LLVM::LLVMDialect>();
+  }
   void runOnOperation() final;
 };
 } // end anonymous namespace
