@@ -51,34 +51,10 @@ public:
   void printType(mlir::Type type, mlir::DialectAsmPrinter &printer) const;
 };
 
-/// Create a local enumeration with all of the types that are defined by Scl.
-enum TypeKind {
-  // TODO: register own space in mlir/include/mlir/IR/DialectSymbolRegistry.def
-  SCL_TYPE = mlir::Type::FIRST_PRIVATE_EXPERIMENTAL_0_TYPE,
-  SCL_ADDRESS,
-  SCL_ARRAY,
-  SCL_STRUCT,
-  SCL_INTEGER,
-  SCL_LOGICAL,
-  SCL_REAL,
-};
-
-
-/// Boilerplate mixin template
-template <typename A, unsigned Id>
-struct IntrinsicTypeMixin {
-  /// This static method is used to support type inquiry through isa, cast,
-  /// and dyn_cast.
-  static constexpr bool kindof(unsigned kind) { return kind == getId(); }
-  static constexpr unsigned getId() { return Id; }
-};
-
-
 /// This class defines the SCL addres type.
 class AddressType
   : public mlir::Type::TypeBase<AddressType, mlir::Type,
-                                detail::AddressTypeStorage>,
-    public IntrinsicTypeMixin<AddressType, SCL_ADDRESS> {
+                                detail::AddressTypeStorage> {
 public:
   /// Inherit some necessary constructors from 'TypeBase'.
   using Base::Base;
@@ -94,8 +70,7 @@ public:
 /// This class defines the SCL array type.
 class ArrayType
   : public mlir::Type::TypeBase<ArrayType, mlir::Type,
-                                detail::ArrayTypeStorage>,
-    public IntrinsicTypeMixin<ArrayType, SCL_ARRAY> {
+                                detail::ArrayTypeStorage> {
 public:
   /// Inherit some necessary constructors from 'TypeBase'.
   using Base::Base;
@@ -118,8 +93,7 @@ public:
 /// (StructTypeStorage).
 class StructType
   : public mlir::Type::TypeBase<StructType, mlir::Type,
-                                detail::StructTypeStorage>,
-    public IntrinsicTypeMixin<StructType, SCL_STRUCT> {
+                                detail::StructTypeStorage> {
 public:
   /// Inherit some necessary constructors from 'TypeBase'.
   using Base::Base;
@@ -138,8 +112,7 @@ public:
 
 class IntegerType
   : public mlir::Type::TypeBase<IntegerType, mlir::Type,
-                                detail::BitWidthStorage>,
-    public IntrinsicTypeMixin<IntegerType, SCL_INTEGER> {
+                                detail::BitWidthStorage> {
 public:
   using Base::Base;
 
@@ -151,8 +124,7 @@ public:
 
 class LogicalType
   : public mlir::Type::TypeBase<LogicalType, mlir::Type,
-                                detail::BitWidthStorage>,
-    public IntrinsicTypeMixin<LogicalType, SCL_LOGICAL> {
+                                detail::BitWidthStorage> {
 public:
   using Base::Base;
 
@@ -163,12 +135,9 @@ public:
 };
 
 class RealType
-  : public mlir::Type::TypeBase<RealType, mlir::Type, mlir::TypeStorage>,
-    public IntrinsicTypeMixin<RealType, SCL_REAL> {
+  : public mlir::Type::TypeBase<RealType, mlir::Type, mlir::TypeStorage> {
 public:
   using Base::Base;
-
-  static RealType get(mlir::MLIRContext *ctx);
 };
 
 

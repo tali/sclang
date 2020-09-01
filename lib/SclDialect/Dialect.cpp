@@ -22,6 +22,8 @@
 
 #include "sclang/SclDialect/Dialect.h"
 
+#include "llvm/ADT/TypeSwitch.h"
+
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Function.h"
 #include "mlir/IR/FunctionImplementation.h"
@@ -182,12 +184,8 @@ struct AddressTypeStorage : public mlir::TypeStorage {
 
 /// Create an instance of a `AddressType` with the given element type.
 AddressType AddressType::get(mlir::Type elementType) {
-  // Call into a helper 'get' method in 'TypeBase' to get a uniqued instance
-  // of this type. The first two parameters are the context to unique in and the
-  // kind of the type. The parameters after the type kind are forwarded to the
-  // storage instance.
   mlir::MLIRContext *ctx = elementType.getContext();
-  return Base::get(ctx, getId(), elementType);
+  return Base::get(ctx, elementType);
 }
 
 /// Returns the element types of this struct type.
@@ -269,16 +267,6 @@ struct ArrayTypeStorage : public mlir::TypeStorage {
     return hash_value(key.elementType);
   }
 
-  /// Define a construction function for the key type from a set of parameters.
-  /// These parameters will be provided when constructing the storage instance
-  /// itself.
-  /// Note: This method isn't necessary because KeyTy can be directly
-  /// constructed with the given parameters.
-  static KeyTy getKey(llvm::ArrayRef<DimTy> dimensions,
-                      mlir::Type elementType) {
-    return KeyTy(dimensions, elementType);
-  }
-
   /// Define a construction method for creating a new instance of this storage.
   /// This method takes an instance of a storage allocator, and an instance of a
   /// `KeyTy`. The given allocator must be used for *all* necessary dynamic
@@ -307,12 +295,8 @@ ArrayType ArrayType::get(llvm::ArrayRef<DimTy> dimensions,
   assert(!dimensions.empty() &&
          "expected an array with at least one dimension");
 
-  // Call into a helper 'get' method in 'TypeBase' to get a uniqued instance
-  // of this type. The first two parameters are the context to unique in and the
-  // kind of the type. The parameters after the type kind are forwarded to the
-  // storage instance.
   mlir::MLIRContext *ctx = elementType.getContext();
-  return Base::get(ctx, getId(), dimensions, elementType);
+  return Base::get(ctx, dimensions, elementType);
 }
 
 /// Returns the element types of this struct type.
@@ -402,15 +386,6 @@ struct StructTypeStorage : public mlir::TypeStorage {
   /// have hash functions available, so we could just omit this entirely.
   static llvm::hash_code hashKey(const KeyTy &key) { return hash_value(key); }
 
-  /// Define a construction function for the key type from a set of parameters.
-  /// These parameters will be provided when constructing the storage instance
-  /// itself.
-  /// Note: This method isn't necessary because KeyTy can be directly
-  /// constructed with the given parameters.
-  static KeyTy getKey(llvm::ArrayRef<mlir::Type> elementTypes) {
-    return KeyTy(elementTypes);
-  }
-
   /// Define a construction method for creating a new instance of this storage.
   /// This method takes an instance of a storage allocator, and an instance of a
   /// `KeyTy`. The given allocator must be used for *all* necessary dynamic
@@ -437,12 +412,8 @@ struct StructTypeStorage : public mlir::TypeStorage {
 StructType StructType::get(llvm::ArrayRef<mlir::Type> elementTypes) {
   assert(!elementTypes.empty() && "expected at least 1 element type");
 
-  // Call into a helper 'get' method in 'TypeBase' to get a uniqued instance
-  // of this type. The first two parameters are the context to unique in and the
-  // kind of the type. The parameters after the type kind are forwarded to the
-  // storage instance.
   mlir::MLIRContext *ctx = elementTypes.front().getContext();
-  return Base::get(ctx, getId(), elementTypes);
+  return Base::get(ctx, elementTypes);
 }
 
 /// Returns the element types of this struct type.
@@ -496,7 +467,7 @@ namespace mlir {
 namespace scl {
 namespace detail {
 
-/// This class represents the internal storage of the SCL `ArrayType`.
+/// This class represents the internal storage of the SCL `IntegerType` and `LogicalType`.
 struct BitWidthStorage : public mlir::TypeStorage {
   /// The `KeyTy` is a required type that provides an interface for the storage
   /// instance. This type will be used when uniquing an instance of the type
@@ -533,10 +504,9 @@ struct BitWidthStorage : public mlir::TypeStorage {
 
 IntegerType IntegerType::get(mlir::MLIRContext *ctx, int width) {
   // Call into a helper 'get' method in 'TypeBase' to get a uniqued instance
-  // of this type. The first two parameters are the context to unique in and the
-  // kind of the type. The parameters after the type kind are forwarded to the
-  // storage instance.
-  return Base::get(ctx, getId(), width);
+  // of this type. The first parameter is the context to unique in.
+  // The other parameters are forwarded to the storage instance.
+  return Base::get(ctx, width);
 }
 
 int IntegerType::getWidth() {
@@ -545,19 +515,13 @@ int IntegerType::getWidth() {
 
 LogicalType LogicalType::get(mlir::MLIRContext *ctx, int width) {
   // Call into a helper 'get' method in 'TypeBase' to get a uniqued instance
-  // of this type. The first two parameters are the context to unique in and the
-  // kind of the type. The parameters after the type kind are forwarded to the
-  // storage instance.
-  return Base::get(ctx, getId(), width);
+  // of this type. The first parameter is the context to unique in.
+  // The other parameters are forwarded to the storage instance.
+  return Base::get(ctx, width);
 }
 
 int LogicalType::getWidth() {
   return getImpl()->width;
-}
-
-
-RealType RealType::get(mlir::MLIRContext *ctx) {
-  return Base::get(ctx, getId());
 }
 
 } // end namespace scl
@@ -605,24 +569,20 @@ mlir::Type SclDialect::parseType(mlir::DialectAsmParser &parser) const {
 /// Print an instance of a type registered to the SCL dialect.
 void SclDialect::printType(mlir::Type type,
                            mlir::DialectAsmPrinter &printer) const {
-  switch (type.getKind()) {
-  default:
-    llvm_unreachable("Unhandled SCL type");
-
-  case AddressType::getId():
-    print(type.cast<AddressType>(), printer);
-    break;
-  case ArrayType::getId():
-    print(type.cast<ArrayType>(), printer);
-    break;
-  case StructType::getId():
-    print(type.cast<StructType>(), printer);
-    break;
-
-  case IntegerType::getId():
-    switch (type.cast<IntegerType>().getWidth()) {
+  TypeSwitch<Type>(type)
+  .Case<AddressType>([&](AddressType type) {
+    print(type, printer);
+  })
+  .Case<ArrayType>([&](ArrayType type) {
+    print(type, printer);
+  })
+  .Case<StructType>([&](StructType type) {
+    print(type, printer);
+  })
+  .Case<IntegerType>([&](IntegerType type) {
+    switch (type.getWidth()) {
     default:
-      assert(false);
+      llvm_unreachable("Unhandled IntegerType bit width");
     case 8:
       printer << "char";
       break;
@@ -633,12 +593,10 @@ void SclDialect::printType(mlir::Type type,
       printer << "dint";
       break;
     }
-    break;
-
-  case LogicalType::getId():
-    switch (type.cast<LogicalType>().getWidth()) {
+  })
+  .Case<LogicalType>([&](LogicalType type) {
+    switch (type.getWidth()) {
     default:
-      assert(false);
     case 1:
       printer << "bool";
       break;
@@ -652,12 +610,11 @@ void SclDialect::printType(mlir::Type type,
       printer << "dword";
       break;
     }
-    break;
-
-  case RealType::getId():
+  })
+  .Case<RealType>([&](RealType) {
     printer << "real";
-    break;
- }
+  })
+  .Default([&](Type) { llvm_unreachable("Unhandled SCL type"); });
 }
 
 //===----------------------------------------------------------------------===//
