@@ -1,4 +1,4 @@
-//====- LowerToStd.cpp - Partial lowering from SCL to Std --===//
+//====- LowerToStd.cpp - Partial lowering from SCL to Std + SCF          --===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -15,6 +15,7 @@
 #include "sclang/SclDialect/Dialect.h"
 #include "sclang/SclToStd/Passes.h"
 
+#include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -260,6 +261,18 @@ struct StoreOpLowering : public OpConversionPattern<scl::StoreOp> {
   }
 };
 
+// MARK: EndOpLowering
+
+struct EndOpLowering : public OpConversionPattern<scl::EndOp> {
+  using OpConversionPattern<scl::EndOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(scl::EndOp op, ArrayRef<Value> operands,
+                                ConversionPatternRewriter &rewriter) const final {
+    rewriter.replaceOpWithNewOp<scf::YieldOp>(op);
+    return success();
+  }
+};
+
 // MARK: FunctionOpLowering
 
 struct FunctionOpLowering : public OpConversionPattern<scl::FunctionOp> {
@@ -308,6 +321,30 @@ struct FunctionOpLowering : public OpConversionPattern<scl::FunctionOp> {
   }
 };
 
+// MARK: IfThenElseOpLowering
+
+struct IfThenElseOpLowering : public OpConversionPattern<scl::IfThenElseOp> {
+  using OpConversionPattern<scl::IfThenElseOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(scl::IfThenElseOp op, ArrayRef<Value> operands,
+                                ConversionPatternRewriter &rewriter) const final {
+
+    auto loweredOp = rewriter.create<scf::IfOp>(op.getLoc(), op.cond(),
+                                                 /*withElseRegion=*/true);
+    // inline the block from our then body into the lowered region,
+    // then remove the implicitly created one
+    rewriter.inlineRegionBefore(op.thenBody(), &loweredOp.thenRegion().back());
+    rewriter.eraseBlock(&loweredOp.thenRegion().back());
+
+    // same for the else part
+    rewriter.inlineRegionBefore(op.elseBody(), &loweredOp.elseRegion().back());
+    rewriter.eraseBlock(&loweredOp.elseRegion().back());
+
+    rewriter.replaceOp(op, loweredOp.getResults());
+    return success();
+  }
+};
+
 // MARK: ReturnOpLowering
 
 struct ReturnOpLowering : public OpConversionPattern<scl::ReturnOp> {
@@ -339,6 +376,7 @@ namespace {
 struct SclToStdLoweringPass
     : public PassWrapper<SclToStdLoweringPass, OperationPass<scl::FunctionOp>> {
   void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<scf::SCFDialect>();
     registry.insert<StandardOpsDialect>();
   }
   void runOnOperation() final;
@@ -347,27 +385,42 @@ struct SclToStdLoweringPass
 
 void SclToStdLoweringPass::runOnOperation() {
   ConversionTarget target(getContext());
+  target.addLegalDialect<scf::SCFDialect>();
   target.addLegalDialect<StandardOpsDialect>();
   target.addLegalOp<FuncOp>();
 
   // We want to lower all of SCL except for control flow:
   target.addIllegalDialect<scl::SclDialect>();
-  target.addLegalOp<scl::IfThenElseOp>();
-  target.addLegalOp<scl::EndOp>();
 
   SclTypeConverter converter{};
 
   OwningRewritePatternList patterns;
-  patterns.insert<AddOpLowering, AndOpLowering, ConstantOpLowering,
-                  DivOpLowering, EqualLowering,
-  FunctionOpLowering,
+  patterns.insert<
+    AddOpLowering,
+    AndOpLowering,
+    ConstantOpLowering,
+    DivOpLowering,
+    EndOpLowering,
+    EqualLowering,
+    FunctionOpLowering,
     GreaterEqualLowering,
-                  GreaterThanLowering, LessEqualLowering, LessThanLowering,
-                  LoadOpLowering, ModOpLowering, MulOpLowering,
-                  NotEqualLowering, OrOpLowering, ReturnOpLowering,
-                  SubOpLowering, StoreOpLowering, TempVariableOpLowering,
-                  UnaryMinusOpLowering, UnaryNotOpLowering, XOrOpLowering>
-  (converter, &getContext());
+    GreaterThanLowering,
+    IfThenElseOpLowering,
+    LessEqualLowering,
+    LessThanLowering,
+    LoadOpLowering,
+    ModOpLowering,
+    MulOpLowering,
+    NotEqualLowering,
+    OrOpLowering,
+    ReturnOpLowering,
+    SubOpLowering,
+    StoreOpLowering,
+    TempVariableOpLowering,
+    UnaryMinusOpLowering,
+    UnaryNotOpLowering,
+    XOrOpLowering
+  >(converter, &getContext());
 
   if (failed(applyPartialConversion(getOperation(), target, patterns)))
     signalPassFailure();

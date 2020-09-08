@@ -133,7 +133,6 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
   if (isLoweringToStd) {
     // Partially lower the SCL dialect with a few cleanups afterwards.
     pm.addPass(mlir::sclang::createLowerToStdPass());
-    pm.addPass(mlir::sclang::createLowerToSCFPass());
 
     mlir::OpPassManager &optPM = pm.nest<mlir::FuncOp>();
     optPM.addPass(mlir::createCanonicalizerPass());
