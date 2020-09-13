@@ -62,6 +62,25 @@ mlir::Operation *SclDialect::materializeConstant(mlir::OpBuilder &builder,
 }
 
 //===----------------------------------------------------------------------===//
+// MARK: ConstantOp
+//===----------------------------------------------------------------------===//
+
+/// Implementations of this hook can only perform the following changes to the
+/// operation:
+///
+///  1. They can leave the operation alone and without changing the IR, and
+///     return nullptr.
+///  2. They can mutate the operation in place, without changing anything else
+///     in the IR. In this case, return the operation itself.
+///  3. They can return an existing value or attribute that can be used instead
+///     of the operation. The caller will remove the operation and use that
+///     result instead.
+///
+OpFoldResult ConstantOp::fold(ArrayRef<Attribute> operands) {
+  return value();
+}
+
+//===----------------------------------------------------------------------===//
 // MARK: FunctionOp
 //===----------------------------------------------------------------------===//
 
@@ -214,13 +233,11 @@ mlir::Type parseAddressType(mlir::DialectAsmParser &parser) {
   // Parse a array type in the following form:
   //   array-type ::= `address` `<` type `>`
 
-  // Parse: `array` `<`
-  if (parser.parseKeyword("address") || parser.parseLess())
-    return Type();
-
-  // Parse: type `,`
+  // Parse: type `>`
   mlir::Type elementType;
-  if (parser.parseType(elementType) || parser.parseGreater())
+  if (parser.parseLess() ||
+      parser.parseType(elementType) ||
+      parser.parseGreater())
     return Type();
 
   return AddressType::get(elementType);
@@ -335,8 +352,8 @@ mlir::Type parseArrayType(mlir::DialectAsmParser &parser) {
   // Parse a array type in the following form:
   //   array-type ::= `array` `<` type, `,`, range (`,` range)* `>`
 
-  // Parse: `array` `<`
-  if (parser.parseKeyword("array") || parser.parseLess())
+  // Parse: `<`
+  if (parser.parseLess())
     return Type();
 
   // Parse: type `,`
@@ -444,8 +461,8 @@ mlir::Type parseStructType(mlir::DialectAsmParser &parser) {
   // Parse a struct type in the following form:
   //   struct-type ::= `struct` `<` type (`,` type)* `>`
 
-  // Parse: `struct` `<`
-  if (parser.parseKeyword("struct") || parser.parseLess())
+  // Parse: `<`
+  if (parser.parseLess())
     return Type();
 
   // Parse the element types of the struct.

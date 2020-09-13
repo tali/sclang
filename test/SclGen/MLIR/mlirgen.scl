@@ -1,48 +1,48 @@
 // RUN: sclang-gen --emit=mlir %s | FileCheck %s
 function abc : int
-// CHECK: scl.function @abc() -> i16 {
+// CHECK: scl.function @abc() -> !scl.int {
 
 var
  a : INT := -1;
-// CHECK-DAG: [[varA:%[0-9]+]] = scl.tmpvar "a" : !scl.address<i16>
-// CHECK-DAG: [[constA:%[0-9]+]] = scl.constant -1 : i16
-// CHECK:     scl.store [[varA]] : !scl.address<i16> = [[constA]] : i16
+// CHECK-DAG: [[varA:%[0-9]+]] = scl.tmpvar "a" : !scl.address<!scl.int>
+// CHECK-DAG: [[constA:%[0-9]+]] = scl.constant -1 : i16 -> !scl.int
+// CHECK:     scl.store [[varA]] : !scl.address<!scl.int> = [[constA]] : !scl.int
 
  b : INT := -2;
-// CHECK-DAG: [[varB:%[0-9]+]] = scl.tmpvar "b" : !scl.address<i16>
-// CHECK-DAG: [[constB:%[0-9]+]] = scl.constant -2 : i16
-// CHECK:     scl.store [[varB]] : !scl.address<i16> = [[constB]] : i16
+// CHECK-DAG: [[varB:%[0-9]+]] = scl.tmpvar "b" : !scl.address<!scl.int>
+// CHECK-DAG: [[constB:%[0-9]+]] = scl.constant -2 : i16 -> !scl.int
+// CHECK:     scl.store [[varB]] : !scl.address<!scl.int> = [[constB]] : !scl.int
 
 end_var;
 
 begin
   if a < b then
-// CHECK-DAG: [[lhs:%[0-9]+]] = scl.load %0 : !scl.address<i16> : i16
-// CHECK-DAG: [[rhs:%[0-9]+]] = scl.load %2 : !scl.address<i16> : i16
-// CHECK-DAG: [[cmp:%[0-9]+]] = scl.cmplt [[lhs]], [[rhs]] : i16
+// CHECK-DAG: [[lhs:%[0-9]+]] = scl.load %0 : !scl.address<!scl.int> : !scl.int
+// CHECK-DAG: [[rhs:%[0-9]+]] = scl.load %2 : !scl.address<!scl.int> : !scl.int
+// CHECK-DAG: [[cmp:%[0-9]+]] = scl.cmplt [[lhs]], [[rhs]] : !scl.int
 // CHECK:     "scl.if"([[cmp]]) ( {
 
     a := b * 5;
-// CHECK-DAG:   [[valueB:%[+-9]+]] = scl.load [[varB]] : !scl.address<i16> : i16
-// CHECK-DAG:   [[const5:%[0-9]+]] = scl.constant 5 : i16
-// CHECK-DAG:   [[mul5:%[0-9]+]] = scl.mul [[valueB]], [[const5]] : i16
-// CHECK:       scl.store [[varA]] : !scl.address<i16> = [[mul5]] : i16
+// CHECK-DAG:   [[valueB:%[+-9]+]] = scl.load [[varB]] : !scl.address<!scl.int> : !scl.int
+// CHECK-DAG:   [[const5:%[0-9]+]] = scl.constant 5 : i16 -> !scl.int
+// CHECK-DAG:   [[mul5:%[0-9]+]] = scl.mul [[valueB]], [[const5]] : !scl.int
+// CHECK:       scl.store [[varA]] : !scl.address<!scl.int> = [[mul5]] : !scl.int
 
   else
 // CHECK:       scl.end
 // CHECK:     },  {
 
     b := 2 + 3 * a;
-// CHECK-DAG:   [[const2:%[0-9]+]] = scl.constant 2 : i16
-// CHECK-DAG:   [[const3:%[0-9]+]] = scl.constant 3 : i16
-// CHECK-DAG:   [[valueA:%[0-9]+]] = scl.load [[varA]] : !scl.address<i16> : i16
-// CHECK-DAG:   [[mul3:%[0-9]+]] = scl.mul [[const3]], [[valueA]] : i16
-// CHECK-DAG:   [[add2:%[0-9]+]] = scl.add [[const2]], [[mul3]] : i16
-// CHECK:       scl.store [[varB]] : !scl.address<i16> = [[add2]] : i16
+// CHECK-DAG:   [[const2:%[0-9]+]] = scl.constant 2 : i16 -> !scl.int
+// CHECK-DAG:   [[const3:%[0-9]+]] = scl.constant 3 : i16 -> !scl.int
+// CHECK-DAG:   [[valueA:%[0-9]+]] = scl.load [[varA]] : !scl.address<!scl.int> : !scl.int
+// CHECK-DAG:   [[mul3:%[0-9]+]] = scl.mul [[const3]], [[valueA]] : !scl.int
+// CHECK-DAG:   [[add2:%[0-9]+]] = scl.add [[const2]], [[mul3]] : !scl.int
+// CHECK:       scl.store [[varB]] : !scl.address<!scl.int> = [[add2]] : !scl.int
 
   end_if;
 // CHECK-DAG:   scl.end
-// CHECK:     }) : (i1) -> ()
+// CHECK:     }) : (!scl.bool) -> ()
 
   return;
 // CHECK:     scl.return

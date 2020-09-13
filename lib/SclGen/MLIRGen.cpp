@@ -435,8 +435,9 @@ private:
 
   mlir::Value mlirGen(const IntegerConstantAST &expr) {
     auto location = loc(expr.loc());
-    auto type = builder.getIntegerType(16); // getType(expr.getType()); TBD
-    auto value = builder.getIntegerAttr(type, expr.getValue());
+    auto type = getType(tok_int); //TBD use expr.getType()
+    auto attrType = builder.getIntegerType(16);
+    auto value = builder.getIntegerAttr(attrType, expr.getValue());
     return builder.create<ConstantOp>(location, type, value);
   }
 
@@ -593,29 +594,21 @@ private:
     case ElementaryDataTypeAST::Type_Void:
       return builder.getNoneType();
     case ElementaryDataTypeAST::Type_Bool:
-      //return LogicalType::get(builder.getContext(), 1);
-      return builder.getI1Type();
+      return LogicalType::get(builder.getContext(), 1);
     case ElementaryDataTypeAST::Type_Byte:
-      //return LogicalType::get(builder.getContext(), 8);
-      return builder.getIntegerType(8);
+      return LogicalType::get(builder.getContext(), 8);
     case ElementaryDataTypeAST::Type_Word:
-      //return LogicalType::get(builder.getContext(), 16);
-      return builder.getIntegerType(16);
+      return LogicalType::get(builder.getContext(), 16);
     case ElementaryDataTypeAST::Type_DWord:
-      //return LogicalType::get(builder.getContext(), 32);
-      return builder.getIntegerType(32);
+      return LogicalType::get(builder.getContext(), 32);
     case ElementaryDataTypeAST::Type_Char:
-      //return IntegerType::get(builder.getContext(), 8);
-      return builder.getIntegerType(8);
+      return IntegerType::get(builder.getContext(), 8);
     case ElementaryDataTypeAST::Type_Int:
-      //return IntegerType::get(builder.getContext(), 16);
-      return builder.getIntegerType(16);
+      return IntegerType::get(builder.getContext(), 16);
     case ElementaryDataTypeAST::Type_DInt:
-      //return IntegerType::get(builder.getContext(), 32);
-      return builder.getIntegerType(32);
+      return IntegerType::get(builder.getContext(), 32);
     case ElementaryDataTypeAST::Type_Real:
       return getType(tok_real);
-      return builder.getF32Type();
     // TODO: TBD more types
     default:
       emitError(loc(type.loc()))

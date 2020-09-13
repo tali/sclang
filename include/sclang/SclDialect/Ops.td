@@ -39,12 +39,12 @@ def SCL_Dialect : Dialect {
   let cppNamespace = "scl";
 }
 
-def Scl_AddressType : Type<CPred<"$_self.isa<AddressType>()">, "AddressType">;
-def Scl_ArrayType : Type<CPred<"$_self.isa<ArrayType>()">, "ArrayType">;
-def Scl_StructType : Type<CPred<"$_self.isa<::StructType>()">, "StructType">;
-def Scl_IntegerType : Type<CPred<"$_self.isa<::IntegerType>()">, "IntegerType">;
-def Scl_LogicalType : Type<CPred<"$_self.isa<::LogicalType>()">, "LogicalType">;
-def Scl_RealType : Type<CPred<"$_self.isa<::RealType>()">, "RealType">;
+def Scl_AddressType : Type<CPred<"$_self.isa<scl::AddressType>()">, "AddressType">;
+def Scl_ArrayType : Type<CPred<"$_self.isa<scl::ArrayType>()">, "ArrayType">;
+def Scl_StructType : Type<CPred<"$_self.isa<scl::StructType>()">, "StructType">;
+def Scl_IntegerType : Type<CPred<"$_self.isa<scl::IntegerType>()">, "IntegerType">;
+def Scl_LogicalType : Type<CPred<"$_self.isa<scl::LogicalType>()">, "LogicalType">;
+def Scl_RealType : Type<CPred<"$_self.isa<scl::RealType>()">, "RealType">;
 
 def Scl_Bool :
   Type<CPred<"$_self.isa<::LogicalType>() && $_self.cast<::LogicalType>().getWidth() == 1">, "bool">,
@@ -169,20 +169,33 @@ def TempVariableOp : SCL_Op<"tmpvar"> {
   let assemblyFormat = "$name attr-dict `:` type($result)";
 }
 
-def ConstantOp : SCL_Op<"constant", [
-    NoSideEffect
-//    TypesMatchWith<"result type matches constant", "value", "result", "$_self">
-  ]> {
+def BitCastOp : SCL_Op<"bit.cast", [NoSideEffect]> {
+  let summary = "Type cast between different representations of the same bits";
+  let arguments = (ins AnyType:$value);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "attr-dict $value `:` type($value) `to` type($result)";
+}
+
+def DialectCastOp : SCL_Op<"mlir.cast", [NoSideEffect]> {
+  let summary = "Type cast between SCL and Standard dialect";
+  let arguments = (ins AnyType:$value);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "attr-dict $value `:` type($value) `to` type($result)";
+}
+
+def IntegerCastOp : SCL_Op<"int.cast", [NoSideEffect]> {
+  let summary = "Type cast between integers with different bitwidths";
+  let arguments = (ins Scl_IntegerType:$value);
+  let results = (outs Scl_IntegerType:$result);
+  let assemblyFormat = "attr-dict $value `:` type($value) `to` type($result)";
+}
+
+def ConstantOp : SCL_Op<"constant", [ConstantLike, NoSideEffect]> {
   let summary = "literal constant";
   let arguments = (ins AnyAttr:$value);
   let results = (outs AnyType:$result);
   let assemblyFormat = "attr-dict $value `->` type($result)";
-}
-
-def CastOp : SCL_Op<"cast", [NoSideEffect]> {
-  let arguments = (ins AnyType:$value);
-  let results = (outs AnyType:$result);
-  let assemblyFormat = "attr-dict $value `:` type($value) `->` type($result)";
+  let hasFolder = 1;
 }
 
 def LoadOp : SCL_Op<"load", [/*SameOperandsAndResultElementType*/]> {

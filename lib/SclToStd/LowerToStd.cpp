@@ -41,7 +41,7 @@ public:
       return mlir::MemRefType::get({}, convertType(type.getElementType()));
     });
     addConversion([&](scl::IntegerType type){
-      return IntegerType::get(type.getWidth(), IntegerType::Signed, type.getContext());
+      return IntegerType::get(type.getWidth(), type.getContext());
     });
     addConversion([&](scl::LogicalType type){
       return IntegerType::get(type.getWidth(), type.getContext());
@@ -60,22 +60,40 @@ public:
                                  ValueRange inputs,
                                  Location loc) -> Optional<Value> {
       if (inputs.size() != 1)
-        return llvm::None;
+        return None;
       // FIXME: These should check CastOp can actually be constructed
       // from the input and result.
-      return builder.create<scl::CastOp>(loc, resultType, inputs[0])
+      return builder.create<scl::DialectCastOp>(loc, resultType, inputs[0])
           .getResult();
     });
     addTargetMaterialization([&](OpBuilder &builder, Type resultType,
                                  ValueRange inputs,
                                  Location loc) -> Optional<Value> {
       if (inputs.size() != 1)
-        return llvm::None;
+        return None;
       // FIXME: These should check CastOp can actually be constructed
       // from the input and result.
-      return builder.create<scl::CastOp>(loc, resultType, inputs[0])
+      return builder.create<scl::DialectCastOp>(loc, resultType, inputs[0])
           .getResult();
     });
+  }
+};
+
+
+struct DialectCastOpLowering
+    : public OpConversionPattern<scl::DialectCastOp> {
+  using OpConversionPattern<scl::DialectCastOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scl::DialectCastOp op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const final {
+    Value value = op.value();
+
+    if (value.getType() != typeConverter->convertType(op.getType())) {
+      return failure();
+    }
+    rewriter.replaceOp(op, value);
+    return success();
   }
 };
 
@@ -374,7 +392,7 @@ struct ReturnOpLowering : public OpConversionPattern<scl::ReturnOp> {
 /// rest of the code in the Toy dialect.
 namespace {
 struct SclToStdLoweringPass
-    : public PassWrapper<SclToStdLoweringPass, OperationPass<scl::FunctionOp>> {
+    : public PassWrapper<SclToStdLoweringPass, OperationPass<ModuleOp>> {
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<scf::SCFDialect>();
     registry.insert<StandardOpsDialect>();
@@ -399,6 +417,7 @@ void SclToStdLoweringPass::runOnOperation() {
     AddOpLowering,
     AndOpLowering,
     ConstantOpLowering,
+    DialectCastOpLowering,
     DivOpLowering,
     EndOpLowering,
     EqualLowering,
