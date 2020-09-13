@@ -47,8 +47,12 @@ public:
   /// several utilities for casting between dialects.
   static llvm::StringRef getDialectNamespace() { return "scl"; }
 
-  mlir::Type parseType(mlir::DialectAsmParser &parser) const;
-  void printType(mlir::Type type, mlir::DialectAsmPrinter &printer) const;
+  /// A hook used to materialize constant values with the given type.
+  Operation *materializeConstant(OpBuilder &builder, Attribute value, Type type,
+                                 Location loc) override;
+
+  mlir::Type parseType(mlir::DialectAsmParser &parser) const override;
+  void printType(mlir::Type type, mlir::DialectAsmPrinter &printer) const override;
 };
 
 /// This class defines the SCL addres type.
