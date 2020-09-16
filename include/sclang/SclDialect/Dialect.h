@@ -144,13 +144,13 @@ public:
   using Base::Base;
 };
 
+} // end namespace scl
+} // end namespace mlir
+
 
 /// Include the auto-generated header file containing the declarations of the
 /// toy operations.
 #define GET_OP_CLASSES
 #include "sclang/SclDialect/Ops.h.inc"
-
-} // end namespace scl
-} // end namespace mlir
 
 #endif // SCLANG_DIALECT_H_

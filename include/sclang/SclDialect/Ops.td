@@ -36,7 +36,7 @@ class AssemblyFormat<string format> {
 // can define our operations.
 def SCL_Dialect : Dialect {
   let name = "scl";
-  let cppNamespace = "scl";
+  let cppNamespace = "::mlir::scl";
 }
 
 def Scl_AddressType : Type<CPred<"$_self.isa<scl::AddressType>()">, "AddressType">;
