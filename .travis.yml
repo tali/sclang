@@ -4,7 +4,7 @@ os:
   - linux
 
 # Use Ubuntu 18.04 LTS (Bionic) as the Linux testing environment.
-dist: bionic
+dist: focal
 
 branches:
   only:
