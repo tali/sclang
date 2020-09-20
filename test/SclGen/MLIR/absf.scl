@@ -11,7 +11,7 @@ end_var;
 begin
 // CHECK: [[C0:%[0-9]+]] = scl.constant 0.000000e+00 : f32 -> !scl.real
 // CHECK: [[LT:%[0-9]+]] = scl.cmplt %arg0, [[C0]]
-// CHECK: "scl.if"([[LT]])
+// CHECK: scl.if [[LT]]
   if in < 0.0 then
 
 // CHECK: [[NEG:%[0-9]+]] = scl.negate %arg0
@@ -21,7 +21,7 @@ begin
 // CHECK: scl.end
 // CHECK: [[C0:%[0-9]+]] = scl.constant 0.000000e+00 : f32 -> !scl.real
 // CHECK: [[GT:%[0-9]+]] = scl.cmpgt %arg0, [[C0]]
-// CHECK: "scl.if"([[GT]])
+// CHECK: scl.if [[GT]]
   elsif in > 0.0 then
 
 // CHECK: scl.store [[ABS]] : !scl.address<!scl.real> = %arg0

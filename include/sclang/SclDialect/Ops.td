@@ -248,6 +248,7 @@ def IfThenElseOp : SCL_Op<"if">, SingleBlockImplicitTerminator<"terminator"> {
 
   let arguments = (ins Scl_Bool:$cond);
   let regions = (region SizedRegion<1>:$thenBody, AnyRegion:$elseBody);
+  let assemblyFormat = "attr-dict $cond `:` type($cond) $thenBody `else` $elseBody";
 }
 
 //

@@ -20,7 +20,7 @@ begin
 // CHECK-DAG: [[lhs:%[0-9]+]] = scl.load %0 : !scl.address<!scl.int> : !scl.int
 // CHECK-DAG: [[rhs:%[0-9]+]] = scl.load %2 : !scl.address<!scl.int> : !scl.int
 // CHECK-DAG: [[cmp:%[0-9]+]] = scl.cmplt [[lhs]], [[rhs]] : !scl.int
-// CHECK:     "scl.if"([[cmp]]) ( {
+// CHECK:     scl.if [[cmp]] : !scl.bool  {
 
     a := b * 5;
 // CHECK-DAG:   [[valueB:%[+-9]+]] = scl.load [[varB]] : !scl.address<!scl.int> : !scl.int
@@ -30,7 +30,7 @@ begin
 
   else
 // CHECK:       scl.end
-// CHECK:     },  {
+// CHECK:     } else  {
 
     b := 2 + 3 * a;
 // CHECK-DAG:   [[const2:%[0-9]+]] = scl.constant 2 : i16 -> !scl.int
@@ -42,7 +42,7 @@ begin
 
   end_if;
 // CHECK-DAG:   scl.end
-// CHECK:     }) : (!scl.bool) -> ()
+// CHECK:     }
 
   return;
 // CHECK:     scl.return
