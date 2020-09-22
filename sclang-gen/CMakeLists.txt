@@ -8,7 +8,7 @@ add_llvm_executable(sclang-gen
   SclangOpsIncGen
   SclDialect
   SclGen
-  SclToStd
+  SclTransforms
 )
 set_target_properties(sclang-gen PROPERTIES FOLDER "Sclang")
 
@@ -23,7 +23,7 @@ target_link_libraries(sclang-gen
     ${dialect_libs}
     SclDialect
     SclGen
-    SclToStd
+    SclTransforms
     MLIRAnalysis
     MLIRIR
     MLIRParser

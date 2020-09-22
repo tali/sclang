@@ -23,7 +23,7 @@
 #include "sclang/SclDialect/Dialect.h"
 #include "sclang/SclGen/MLIRGen.h"
 #include "sclang/SclGen/Parser.h"
-#include "sclang/SclToStd/Passes.h"
+#include "sclang/SclTransforms/Passes.h"
 #include <memory>
 
 #include "mlir/ExecutionEngine/ExecutionEngine.h"

@@ -13,7 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "sclang/SclDialect/Dialect.h"
-#include "sclang/SclToStd/Passes.h"
+#include "sclang/SclTransforms/Passes.h"
 
 #include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
 #include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
