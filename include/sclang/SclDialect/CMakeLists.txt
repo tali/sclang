@@ -1,4 +1,4 @@
-set(LLVM_TARGET_DEFINITIONS Ops.td)
-mlir_tablegen(Ops.h.inc -gen-op-decls)
-mlir_tablegen(Ops.cpp.inc -gen-op-defs)
-add_public_tablegen_target(SclangOpsIncGen)
+set(LLVM_TARGET_DEFINITIONS SclOps.td)
+mlir_tablegen(SclOps.h.inc -gen-op-decls)
+mlir_tablegen(SclOps.cpp.inc -gen-op-defs)
+add_public_tablegen_target(SclOpsIncGen)

@@ -5,7 +5,7 @@ add_llvm_executable(sclang-gen
   sclang-gen.cpp
 
   DEPENDS
-  SclangOpsIncGen
+  SclOpsIncGen
   SclDialect
   SclGen
   SclTransforms
