@@ -83,7 +83,6 @@ LogicalResult FunctionOp::verifyType() {
 }
 
 LogicalResult FunctionOp::verifyBody() {
-#if 0 // TBD
   FunctionType fnType = getType();
   auto walkResult = walk([fnType](Operation *op) -> WalkResult {
     if (auto retOp = dyn_cast<ReturnOp>(op)) {
@@ -95,21 +94,17 @@ LogicalResult FunctionOp::verifyBody() {
                    "returns 1 value but enclosing function requires ")
                << fnType.getNumResults() << " results";
 
-      auto retOperandType = retOp.value().getType();
+      auto returnType = retOp.getReturnType();
       auto fnResultType = fnType.getResult(0);
-      if (retOperandType != fnResultType)
+      if (returnType != fnResultType)
         return retOp.emitOpError(" return value's type (")
-               << retOperandType << ") mismatch with function's result type ("
+               << returnType << ") mismatch with function's result type ("
                << fnResultType << ")";
     }
     return WalkResult::advance();
   });
 
-  // TODO: verify other bits like linkage type.
-
   return failure(walkResult.wasInterrupted());
-#endif
-  return success();
 }
 
 void FunctionOp::build(OpBuilder &builder, OperationState &state,

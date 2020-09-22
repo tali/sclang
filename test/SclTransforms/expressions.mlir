@@ -8,7 +8,7 @@ scl.function @add_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.char {
   %res = scl.add %arg0, %arg1 : !scl.char
   %return = scl.tmpvar "return" : !scl.address<!scl.char>
   scl.store %return : !scl.address<!scl.char> = %res : !scl.char
-  scl.return %return : !scl.address<!scl.char>
+  scl.return.value %return : !scl.address<!scl.char>
 }
 
 // CHECK-LABEL: func @add_i16
@@ -17,7 +17,7 @@ scl.function @add_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.int {
   %res = scl.add %arg0, %arg1 : !scl.int
   %return = scl.tmpvar "return" : !scl.address<!scl.int>
   scl.store %return : !scl.address<!scl.int> = %res : !scl.int
-  scl.return %return : !scl.address<!scl.int>
+  scl.return.value %return : !scl.address<!scl.int>
 }
 
 // CHECK-LABEL: func @add_i32
@@ -26,7 +26,7 @@ scl.function @add_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.dint {
   %res = scl.add %arg0, %arg1 : !scl.dint
   %return = scl.tmpvar "return" : !scl.address<!scl.dint>
   scl.store %return : !scl.address<!scl.dint> = %res : !scl.dint
-  scl.return %return : !scl.address<!scl.dint>
+  scl.return.value %return : !scl.address<!scl.dint>
 }
 
 // CHECK-LABEL: func @add_f32
@@ -35,7 +35,7 @@ scl.function @add_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.real {
   %res = scl.add %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.real>
   scl.store %return : !scl.address<!scl.real> = %res : !scl.real
-  scl.return %return : !scl.address<!scl.real>
+  scl.return.value %return : !scl.address<!scl.real>
 }
 
 
@@ -47,7 +47,7 @@ scl.function @sub_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.char {
   %res = scl.sub %arg0, %arg1 : !scl.char
   %return = scl.tmpvar "return" : !scl.address<!scl.char>
   scl.store %return : !scl.address<!scl.char> = %res : !scl.char
-  scl.return %return : !scl.address<!scl.char>
+  scl.return.value %return : !scl.address<!scl.char>
 }
 
 // CHECK-LABEL: func @sub_i16
@@ -56,7 +56,7 @@ scl.function @sub_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.int {
   %res = scl.sub %arg0, %arg1 : !scl.int
   %return = scl.tmpvar "return" : !scl.address<!scl.int>
   scl.store %return : !scl.address<!scl.int> = %res : !scl.int
-  scl.return %return : !scl.address<!scl.int>
+  scl.return.value %return : !scl.address<!scl.int>
 }
 
 // CHECK-LABEL: func @sub_i32
@@ -65,7 +65,7 @@ scl.function @sub_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.dint {
   %res = scl.sub %arg0, %arg1 : !scl.dint
   %return = scl.tmpvar "return" : !scl.address<!scl.dint>
   scl.store %return : !scl.address<!scl.dint> = %res : !scl.dint
-  scl.return %return : !scl.address<!scl.dint>
+  scl.return.value %return : !scl.address<!scl.dint>
 }
 
 // CHECK-LABEL: func @sub_f32
@@ -74,7 +74,7 @@ scl.function @sub_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.real {
   %res = scl.sub %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.real>
   scl.store %return : !scl.address<!scl.real> = %res : !scl.real
-  scl.return %return : !scl.address<!scl.real>
+  scl.return.value %return : !scl.address<!scl.real>
 }
 
 
@@ -86,7 +86,7 @@ scl.function @mul_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.char {
   %res = scl.mul %arg0, %arg1 : !scl.char
   %return = scl.tmpvar "return" : !scl.address<!scl.char>
   scl.store %return : !scl.address<!scl.char> = %res : !scl.char
-  scl.return %return : !scl.address<!scl.char>
+  scl.return.value %return : !scl.address<!scl.char>
 }
 
 // CHECK-LABEL: func @mul_i16
@@ -95,7 +95,7 @@ scl.function @mul_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.int {
   %res = scl.mul %arg0, %arg1 : !scl.int
   %return = scl.tmpvar "return" : !scl.address<!scl.int>
   scl.store %return : !scl.address<!scl.int> = %res : !scl.int
-  scl.return %return : !scl.address<!scl.int>
+  scl.return.value %return : !scl.address<!scl.int>
 }
 
 // CHECK-LABEL: func @mul_i32
@@ -104,7 +104,7 @@ scl.function @mul_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.dint {
   %res = scl.mul %arg0, %arg1 : !scl.dint
   %return = scl.tmpvar "return" : !scl.address<!scl.dint>
   scl.store %return : !scl.address<!scl.dint> = %res : !scl.dint
-  scl.return %return : !scl.address<!scl.dint>
+  scl.return.value %return : !scl.address<!scl.dint>
 }
 
 // CHECK-LABEL: func @mul_f32
@@ -113,7 +113,7 @@ scl.function @mul_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.real {
   %res = scl.mul %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.real>
   scl.store %return : !scl.address<!scl.real> = %res : !scl.real
-  scl.return %return : !scl.address<!scl.real>
+  scl.return.value %return : !scl.address<!scl.real>
 }
 
 
@@ -125,7 +125,7 @@ scl.function @div_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.char {
   %res = scl.div %arg0, %arg1 : !scl.char
   %return = scl.tmpvar "return" : !scl.address<!scl.char>
   scl.store %return : !scl.address<!scl.char> = %res : !scl.char
-  scl.return %return : !scl.address<!scl.char>
+  scl.return.value %return : !scl.address<!scl.char>
 }
 
 // CHECK-LABEL: func @div_i16
@@ -134,7 +134,7 @@ scl.function @div_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.int {
   %res = scl.div %arg0, %arg1 : !scl.int
   %return = scl.tmpvar "return" : !scl.address<!scl.int>
   scl.store %return : !scl.address<!scl.int> = %res : !scl.int
-  scl.return %return : !scl.address<!scl.int>
+  scl.return.value %return : !scl.address<!scl.int>
 }
 
 // CHECK-LABEL: func @div_i32
@@ -143,7 +143,7 @@ scl.function @div_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.dint {
   %res = scl.div %arg0, %arg1 : !scl.dint
   %return = scl.tmpvar "return" : !scl.address<!scl.dint>
   scl.store %return : !scl.address<!scl.dint> = %res : !scl.dint
-  scl.return %return : !scl.address<!scl.dint>
+  scl.return.value %return : !scl.address<!scl.dint>
 }
 
 // CHECK-LABEL: func @div_f32
@@ -152,7 +152,7 @@ scl.function @div_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.real {
   %res = scl.div %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.real>
   scl.store %return : !scl.address<!scl.real> = %res : !scl.real
-  scl.return %return : !scl.address<!scl.real>
+  scl.return.value %return : !scl.address<!scl.real>
 }
 
 
@@ -164,7 +164,7 @@ scl.function @mod_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.char {
   %res = scl.mod %arg0, %arg1 : !scl.char
   %return = scl.tmpvar "return" : !scl.address<!scl.char>
   scl.store %return : !scl.address<!scl.char> = %res : !scl.char
-  scl.return %return : !scl.address<!scl.char>
+  scl.return.value %return : !scl.address<!scl.char>
 }
 
 // CHECK-LABEL: func @mod_i16
@@ -173,7 +173,7 @@ scl.function @mod_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.int {
   %res = scl.mod %arg0, %arg1 : !scl.int
   %return = scl.tmpvar "return" : !scl.address<!scl.int>
   scl.store %return : !scl.address<!scl.int> = %res : !scl.int
-  scl.return %return : !scl.address<!scl.int>
+  scl.return.value %return : !scl.address<!scl.int>
 }
 
 // CHECK-LABEL: func @mod_i32
@@ -182,7 +182,7 @@ scl.function @mod_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.dint {
   %res = scl.mod %arg0, %arg1 : !scl.dint
   %return = scl.tmpvar "return" : !scl.address<!scl.dint>
   scl.store %return : !scl.address<!scl.dint> = %res : !scl.dint
-  scl.return %return : !scl.address<!scl.dint>
+  scl.return.value %return : !scl.address<!scl.dint>
 }
 
 // CHECK-LABEL: func @mod_f32
@@ -191,7 +191,7 @@ scl.function @mod_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.real {
   %res = scl.mod %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.real>
   scl.store %return : !scl.address<!scl.real> = %res : !scl.real
-  scl.return %return : !scl.address<!scl.real>
+  scl.return.value %return : !scl.address<!scl.real>
 }
 
 
@@ -203,7 +203,7 @@ scl.function @cmpeq_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.bool {
   %res = scl.cmpeq %arg0, %arg1 : !scl.char
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // CHECK-LABEL: func @cmpeq_i16
@@ -212,7 +212,7 @@ scl.function @cmpeq_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.bool {
   %res = scl.cmpeq %arg0, %arg1 : !scl.int
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // CHECK-LABEL: func @cmpeq_i32
@@ -221,7 +221,7 @@ scl.function @cmpeq_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
   %res = scl.cmpeq %arg0, %arg1 : !scl.dint
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // CHECK-LABEL: func @cmpeq_f32
@@ -230,7 +230,7 @@ scl.function @cmpeq_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
   %res = scl.cmpeq %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 
@@ -242,7 +242,7 @@ scl.function @cmpne_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.bool {
   %res = scl.cmpne %arg0, %arg1 : !scl.char
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // CHECK-LABEL: func @cmpne_i16
@@ -251,7 +251,7 @@ scl.function @cmpne_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.bool {
   %res = scl.cmpne %arg0, %arg1 : !scl.int
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // CHECK-LABEL: func @cmpne_i32
@@ -260,7 +260,7 @@ scl.function @cmpne_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
   %res = scl.cmpne %arg0, %arg1 : !scl.dint
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // CHECK-LABEL: func @cmpne_f32
@@ -269,7 +269,7 @@ scl.function @cmpne_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
   %res = scl.cmpne %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 
@@ -281,7 +281,7 @@ scl.function @cmpge_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.bool {
   %res = scl.cmpge %arg0, %arg1 : !scl.char
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // CHECK-LABEL: func @cmpge_i16
@@ -290,7 +290,7 @@ scl.function @cmpge_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.bool {
   %res = scl.cmpge %arg0, %arg1 : !scl.int
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // CHECK-LABEL: func @cmpge_i32
@@ -299,7 +299,7 @@ scl.function @cmpge_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
   %res = scl.cmpge %arg0, %arg1 : !scl.dint
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // CHECK-LABEL: func @cmpge_f32
@@ -308,7 +308,7 @@ scl.function @cmpge_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
   %res = scl.cmpge %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 
@@ -320,7 +320,7 @@ scl.function @cmpgt_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.bool {
   %res = scl.cmpgt %arg0, %arg1 : !scl.char
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // CHECK-LABEL: func @cmpgt_i16
@@ -329,7 +329,7 @@ scl.function @cmpgt_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.bool {
   %res = scl.cmpgt %arg0, %arg1 : !scl.int
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // CHECK-LABEL: func @cmpgt_i32
@@ -338,7 +338,7 @@ scl.function @cmpgt_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
   %res = scl.cmpgt %arg0, %arg1 : !scl.dint
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // CHECK-LABEL: func @cmpgt_f32
@@ -347,7 +347,7 @@ scl.function @cmpgt_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
   %res = scl.cmpgt %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 
@@ -359,7 +359,7 @@ scl.function @cmple_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.bool {
   %res = scl.cmple %arg0, %arg1 : !scl.char
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // CHECK-LABEL: func @cmple_i16
@@ -368,7 +368,7 @@ scl.function @cmple_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.bool {
   %res = scl.cmple %arg0, %arg1 : !scl.int
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // CHECK-LABEL: func @cmple_i32
@@ -377,7 +377,7 @@ scl.function @cmple_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
   %res = scl.cmple %arg0, %arg1 : !scl.dint
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // CHECK-LABEL: func @cmple_f32
@@ -386,7 +386,7 @@ scl.function @cmple_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
   %res = scl.cmple %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 
@@ -398,7 +398,7 @@ scl.function @cmplt_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.bool {
   %res = scl.cmplt %arg0, %arg1 : !scl.char
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // CHECK-LABEL: func @cmplt_i16
@@ -407,7 +407,7 @@ scl.function @cmplt_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.bool {
   %res = scl.cmplt %arg0, %arg1 : !scl.int
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // CHECK-LABEL: func @cmplt_i32
@@ -416,7 +416,7 @@ scl.function @cmplt_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
   %res = scl.cmplt %arg0, %arg1 : !scl.dint
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // CHECK-LABEL: func @cmplt_f32
@@ -425,7 +425,7 @@ scl.function @cmplt_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
   %res = scl.cmplt %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 
@@ -437,7 +437,7 @@ scl.function @and(%arg0: !scl.bool, %arg1: !scl.bool) -> !scl.bool {
   %res = scl.and %arg0, %arg1 : !scl.bool
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // MARK: scl.or
@@ -448,7 +448,7 @@ scl.function @or(%arg0: !scl.bool, %arg1: !scl.bool) -> !scl.bool {
   %res = scl.or %arg0, %arg1 : !scl.bool
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // MARK: scl.xor
@@ -459,7 +459,7 @@ scl.function @xor(%arg0: !scl.bool, %arg1: !scl.bool) -> !scl.bool {
   %res = scl.xor %arg0, %arg1 : !scl.bool
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 
 // MARK: scl.not
@@ -472,6 +472,6 @@ scl.function @not(%arg0: !scl.bool) -> !scl.bool {
   %res = scl.not %arg0 : !scl.bool
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
   scl.store %return : !scl.address<!scl.bool> = %res : !scl.bool
-  scl.return %return : !scl.address<!scl.bool>
+  scl.return.value %return : !scl.address<!scl.bool>
 }
 

@@ -371,13 +371,24 @@ struct ReturnOpLowering : public OpConversionPattern<scl::ReturnOp> {
   LogicalResult
   matchAndRewrite(scl::ReturnOp op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
-    scl::ReturnOp::Adaptor transformed(operands);
-    if (op.value()) {
-      auto retval = rewriter.create<LoadOp>(op.getLoc(), transformed.value());
-      rewriter.replaceOpWithNewOp<ReturnOp>(op, retval.getResult());
-    } else {
-      rewriter.replaceOpWithNewOp<ReturnOp>(op);
-    }
+    rewriter.replaceOpWithNewOp<ReturnOp>(op);
+    return success();
+  }
+};
+
+// MARK: ReturnValueOpLowering
+
+struct ReturnValueOpLowering : public OpConversionPattern<scl::ReturnValueOp> {
+  using OpConversionPattern<scl::ReturnValueOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scl::ReturnValueOp op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const final {
+    scl::ReturnValueOp::Adaptor transformed(operands);
+
+    auto retval = rewriter.create<LoadOp>(op.getLoc(), transformed.value());
+
+    rewriter.replaceOpWithNewOp<ReturnOp>(op, retval.getResult());
     return success();
   }
 };
@@ -433,6 +444,7 @@ void SclToStdLoweringPass::runOnOperation() {
     NotEqualLowering,
     OrOpLowering,
     ReturnOpLowering,
+    ReturnValueOpLowering,
     SubOpLowering,
     StoreOpLowering,
     TempVariableOpLowering,

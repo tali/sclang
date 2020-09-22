@@ -80,7 +80,6 @@ def FunctionOp : TopLevelOp<"function", [
 
     /// Hook for OpTrait::FunctionLike, called after verifying the function
     /// type and the presence of the (potentially empty) function body.
-    /// Ensures SPIR-V specific semantics.
     LogicalResult verifyBody();
   }];
 }
@@ -195,14 +194,29 @@ def ContinueOp : SCL_Op<"continue", [Terminator]> {
 }
 
 def ReturnOp : FuncTerminatorOp<"return"> {
-  let summary = "return operation";
+  let summary = "return from a function/function_block";
   let description = [{
     A RETURN statement causes the program to exit the block (OB, FB or FC)
     currently being processed and to return to the calling block or the
     operating system if the block being exited is an OB.
   }];
-  let arguments = (ins Optional<Scl_AddressType>:$value);
+  let assemblyFormat = "attr-dict";
+}
+
+def ReturnValueOp : FuncTerminatorOp<"return.value"> {
+  let summary = "return a value from a function";
+  let description = [{
+    The function is exited and the value from the given Address is
+    loaded to obtain the function return value.
+  }];
+  let arguments = (ins Scl_AddressType:$value);
   let assemblyFormat = "attr-dict operands `:` type(operands)";
+
+  let extraClassDeclaration = [{
+    Type getReturnType() {
+      return value().getType().dyn_cast<AddressType>().getElementType();
+    }
+  }];
 }
 
 def ExitOp : SCL_Op<"exit", [Terminator]> {

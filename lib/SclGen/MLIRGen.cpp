@@ -300,10 +300,9 @@ private:
     }
 
     // Implicitly return if no return statement was emitted.
-    ReturnOp returnOp;
-    if (!entryBlock.empty())
-      returnOp = dyn_cast<ReturnOp>(entryBlock.back());
-    if (!returnOp) {
+    if (entryBlock.empty() || (
+        !isa<ReturnOp>(entryBlock.back()) &&
+        !isa<ReturnValueOp>(entryBlock.back()))) {
       mlirgenReturn(location);
     }
 
@@ -313,9 +312,9 @@ private:
   void mlirgenReturn(mlir::Location location) {
     if (functionHasReturnValue) {
       auto returnValue = symbolTable.lookup(functionName).getValue();
-      builder.create<ReturnOp>(location, returnValue);
+      builder.create<ReturnValueOp>(location, returnValue);
     } else {
-      builder.create<ReturnOp>(location, mlir::Value());
+      builder.create<ReturnOp>(location);
     }
   }
 

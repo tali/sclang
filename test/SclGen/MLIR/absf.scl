@@ -37,5 +37,5 @@ begin
 // CHECK: scl.end
   end_if;
 
-// CHECK: scl.return [[ABS]] : !scl.address<!scl.real>
+// CHECK: scl.return.value [[ABS]] : !scl.address<!scl.real>
 end_function
