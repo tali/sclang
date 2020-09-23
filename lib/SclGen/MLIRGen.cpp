@@ -35,6 +35,7 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopedHashTable.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <map>
@@ -44,14 +45,13 @@
 using namespace mlir::scl;
 using namespace sclang;
 
-using llvm::ArrayRef;
-using llvm::cast;
-using llvm::dyn_cast;
 using llvm::isa;
 using llvm::makeArrayRef;
+using llvm::ArrayRef;
 using llvm::ScopedHashTableScope;
 using llvm::SmallVector;
 using llvm::StringRef;
+using llvm::TypeSwitch;
 using llvm::Twine;
 
 namespace {
@@ -84,14 +84,14 @@ public:
 
   /// Public API: convert the AST for a Toy module (source file) to an MLIR
   /// Module operation.
-  mlir::ModuleOp mlirGen(const ModuleAST &moduleAST) {
+  mlir::ModuleOp mlirGen(const ModuleAST *moduleAST) {
     // We create an empty MLIR module and codegen functions one at a time and
     // add them to the module.
     theModule = mlir::ModuleOp::create(builder.getUnknownLoc());
 
-    for (const auto &unit : moduleAST) {
+    for (const auto &unit : *moduleAST) {
       builder.clearInsertionPoint();
-      auto func = mlirGen(*unit.get());
+      auto func = mlirGen(unit.get());
       if (!func)
         return nullptr;
       theModule.push_back(func);
@@ -147,16 +147,17 @@ private:
 
   // MARK: C.1 Subunits of SCL Source Files
 
-  mlir::Operation * mlirGen(const UnitAST &unit) {
-    switch (unit.getKind()) {
-    case sclang::UnitAST::Unit_Function:
-      return mlirGen(cast<FunctionAST>(unit));
-    default:
-      emitError(loc(unit.loc()))
+  mlir::Operation * mlirGen(const UnitAST *unit) {
+    return TypeSwitch<const UnitAST*, mlir::Operation*>(unit)
+    .Case<FunctionAST>([&](auto function){
+      return mlirGen(function);
+    })
+    .Default([&](auto unit) {
+      emitError(loc(unit->loc()))
           << "MLIR codegen encountered an unhandled expr kind '"
-          << Twine(unit.getKind()) << "'";
+          << Twine(unit->getKind()) << "'";
       return nullptr;
-    }
+    });
   }
 
   /// Append all the types and names of a variable declaration to an array
@@ -167,7 +168,7 @@ private:
     types.reserve(types.size() + types.size());
     names.reserve(names.size() + names.size());
     for (const auto &decl : values) {
-      auto type = getType(*decl->getDataType());
+      auto type = getType(decl->getDataType());
       // TODO: initializer
       for (const auto &var : decl->getVars()) {
         // TODO: attributes
@@ -177,16 +178,16 @@ private:
     }
   }
 
-  mlir::FuncOp mlirGen(const OrganizationBlockAST &ob) {
-    emitError(loc(ob.loc())) << "TBD not implemented";
+  mlir::FuncOp mlirGen(const OrganizationBlockAST *ob) {
+    emitError(loc(ob->loc())) << "TBD not implemented";
     return nullptr;
   }
 
-  FunctionOp mlirGen(const FunctionAST &func) {
-    auto location = loc(func.loc());
-    functionName = func.getIdentifier();
+  FunctionOp mlirGen(const FunctionAST *func) {
+    auto location = loc(func->loc());
+    functionName = func->getIdentifier();
     functionHasReturnValue = false;
-    std::string name(func.getIdentifier());
+    std::string name(func->getIdentifier());
 
     // Create a scope in the symbol table to hold variable declarations.
     llvm::ScopedHashTableScope<StringRef, VariableSymbol> var_scope(
@@ -198,7 +199,7 @@ private:
     std::vector<llvm::StringRef> output_names;
     std::vector<const VariableDeclarationSubsectionAST *> tempvar;
     // register function result as output variable
-    auto retType = getType(*func.getType());
+    auto retType = getType(func->getType());
     if (!retType.isa<mlir::NoneType>()) {
       output_types.push_back(retType);
       output_names.push_back(name);
@@ -206,7 +207,7 @@ private:
     }
 
     // Parse the declaration subsections
-    const auto &declarations = func.getDeclarations()->getDecls();
+    const auto &declarations = func->getDeclarations()->getDecls();
     for (const auto &decl : declarations) {
       switch (decl->getKind()) {
       case DeclarationSubsectionAST::DeclarationASTKind::Decl_Constant:
@@ -266,7 +267,7 @@ private:
     // prologue: stack space for temporary variables
     for (const auto subsection : tempvar) {
       for (const auto &decl : subsection->getValues()) {
-        auto type = getType(*decl->getDataType());
+        auto type = getType(decl->getDataType());
         auto memRefType = AddressType::get(type);
         auto init = decl->getInitializer();
         for (const auto &var : decl->getVars()) {
@@ -277,7 +278,7 @@ private:
           declare(var->getIdentifier(), type, varStorage, true);
           if (init) {
             builder.create<StoreOp>(location, varStorage,
-                                    mlirGen(*init.getValue()));
+                                    mlirGen(init.getValue()));
           }
         }
       }
@@ -294,7 +295,7 @@ private:
     }
 
     // Emit the body of the function.
-    if (mlir::failed(mlirGen(*func.getCode()))) {
+    if (mlir::failed(mlirGen(func->getCode()))) {
       function.erase();
       return nullptr;
     }
@@ -318,18 +319,18 @@ private:
     }
   }
 
-  mlir::FuncOp mlirgen(const FunctionBlockAST &fb) {
-    emitError(loc(fb.loc())) << "TBD not implemented";
+  mlir::FuncOp mlirgen(const FunctionBlockAST *fb) {
+    emitError(loc(fb->loc())) << "TBD not implemented";
     return nullptr;
   }
 
-  mlir::FuncOp mlirgen(const DataBlockAST &db) {
-    emitError(loc(db.loc())) << "TBD not implemented";
+  mlir::FuncOp mlirgen(const DataBlockAST *db) {
+    emitError(loc(db->loc())) << "TBD not implemented";
     return nullptr;
   }
 
-  mlir::FuncOp mlirgen(const UserDefinedTypeAST &udt) {
-    emitError(loc(udt.loc())) << "TBD not implemented";
+  mlir::FuncOp mlirgen(const UserDefinedTypeAST *udt) {
+    emitError(loc(udt->loc())) << "TBD not implemented";
     return nullptr;
   }
 
@@ -338,55 +339,59 @@ private:
   // MARK: C.3 Data Types in SCL
 
   /// Codegen a code section, return failure if one statement hit an error.
-  mlir::LogicalResult mlirGen(const CodeSectionAST &code) {
+  mlir::LogicalResult mlirGen(const CodeSectionAST *code) {
     // ScopedHashTableScope<StringRef, mlir::Value> var_scope(symbolTable);
 
-    for (auto &instr : code.getInstructions()) {
+    for (auto &instr : code->getInstructions()) {
       // Generic expression dispatch codegen.
-      if (failed(mlirGen(*instr)))
+      if (failed(mlirGen(instr.get())))
         return mlir::failure();
     }
     return mlir::success();
   }
 
   /// Codegen an instruction.
-  mlir::LogicalResult mlirGen(const InstructionAST &instr) {
-    auto location = loc(instr.loc());
+  mlir::LogicalResult mlirGen(const InstructionAST *instr) {
+    auto location = loc(instr->loc());
 
-    switch (instr.getKind()) {
-    case InstructionAST::Instr_Assignment:
-      return mlirGen(llvm::cast<ValueAssignmentAST>(instr));
-    case InstructionAST::Instr_Continue:
+    return TypeSwitch<const InstructionAST*, mlir::LogicalResult>(instr)
+    .Case<ValueAssignmentAST>([&](auto assign) {
+      return mlirGen(assign);
+    })
+    .Case<ContinueAST>([&](auto instr) {
       builder.create<ContinueOp>(location);
-      break;
-    case InstructionAST::Instr_IfThenElse:
-      return mlirGen(llvm::cast<IfThenElseAST>(instr));
-    case InstructionAST::Instr_Return:
+      return mlir::success();
+    })
+    .Case<IfThenElseAST>([&](auto ifThenElse) {
+      return mlirGen(ifThenElse);
+    })
+    .Case<ReturnAST>([&](auto instr) {
       mlirgenReturn(location);
-      break;
-    case InstructionAST::Instr_Exit:
+      return mlir::success();
+    })
+    .Case<ExitAST>([&](auto instr) {
       builder.create<ExitOp>(location);
-      break;
-    default:
-      emitError(loc(instr.loc()))
+      return mlir::success();
+    })
+    .Default([&](auto instr) {
+      emitError(loc(instr->loc()))
           << "MLIR codegen encountered an unhandled instruction kind '"
-          << Twine(instr.getKind()) << "'";
+          << Twine(instr->getKind()) << "'";
       return mlir::failure();
-    }
-    return mlir::success();
+    });
   }
 
   /// Codegen a variable assignment
-  mlir::LogicalResult mlirGen(const ValueAssignmentAST &instr) {
-    auto location = loc(instr.loc());
+  mlir::LogicalResult mlirGen(const ValueAssignmentAST *instr) {
+    auto location = loc(instr->loc());
 
-    const auto &expr = llvm::cast<BinaryExpressionAST>(*instr.getExpression());
-    assert(expr.getOp() == tok_assignment);
+    const auto expr = llvm::cast<BinaryExpressionAST>(instr->getExpression());
+    assert(expr->getOp() == tok_assignment);
 
-    mlir::Value lhs = mlirGenLValue(*expr.getLhs());
+    mlir::Value lhs = mlirGenLValue(expr->getLhs());
     if (!lhs)
       return mlir::failure();
-    mlir::Value rhs = mlirGen(*expr.getRhs());
+    mlir::Value rhs = mlirGen(expr->getRhs());
     if (!rhs)
       return mlir::failure();
 
@@ -395,66 +400,73 @@ private:
     return mlir::success();
   }
 
-  mlir::Value mlirGenLValue(const ExpressionAST &expr) {
-    auto location = loc(expr.loc());
+  mlir::Value mlirGenLValue(const ExpressionAST *expr) {
+    auto location = loc(expr->loc());
 
-    switch (expr.getKind()) {
-    default:
-      emitError(location) << "not a lvalue, kind " << (int)expr.getKind();
-      return nullptr;
-    case ExpressionAST::Expr_SimpleVariable:
-      return mlirGenLValue(llvm::cast<SimpleVariableAST>(expr));
-    case ExpressionAST::Expr_IndexedVariable:
-      emitError(loc(expr.loc()))
+    return TypeSwitch<const ExpressionAST*, mlir::Value>(expr)
+    .Case<SimpleVariableAST>([&](auto expr) {
+      return mlirGenLValue(expr);
+    })
+    .Case<IndexedVariableAST>([&](auto expr) {
+      emitError(loc(expr->loc()))
           << "IndexedVariable not implemented"; // TODO: TBD
       return nullptr;
-    }
-  }
-
-  mlir::Value mlirGen(const ExpressionAST &expr) {
-    switch (expr.getKind()) {
-    case ExpressionAST::Expr_IntegerConstant:
-      return mlirGen(llvm::cast<IntegerConstantAST>(expr));
-    case ExpressionAST::Expr_RealConstant:
-      return mlirGen(llvm::cast<RealConstantAST>(expr));
-    case ExpressionAST::Expr_StringConstant:
-      return mlirGen(llvm::cast<StringConstantAST>(expr));
-    case ExpressionAST::Expr_SimpleVariable:
-      return mlirGen(llvm::cast<SimpleVariableAST>(expr));
-    case ExpressionAST::Expr_Binary:
-      return mlirGen(llvm::cast<BinaryExpressionAST>(expr));
-    case ExpressionAST::Expr_Unary:
-      return mlirGen(llvm::cast<UnaryExpressionAST>(expr));
-    default:
-      emitError(loc(expr.loc()))
-          << "expression kind not implemented"; // TODO: TBD
+    })
+    .Default([&](auto expr) {
+      emitError(location) << "not a lvalue, kind " << (int)expr->getKind();
       return nullptr;
-    }
+    });
   }
 
-  mlir::Value mlirGen(const IntegerConstantAST &expr) {
-    auto location = loc(expr.loc());
+  mlir::Value mlirGen(const ExpressionAST *expr) {
+    return TypeSwitch<const ExpressionAST *, mlir::Value>(expr)
+    .Case<IntegerConstantAST>([&](auto expr) {
+      return mlirGen(expr);
+    })
+    .Case<RealConstantAST>([&](auto expr) {
+      return mlirGen(expr);
+    })
+    .Case<StringConstantAST>([&](auto expr) {
+      return mlirGen(expr);
+    })
+    .Case<SimpleVariableAST>([&](auto expr) {
+      return mlirGen(expr);
+    })
+    .Case<BinaryExpressionAST>([&](auto expr) {
+      return mlirGen(expr);
+    })
+    .Case<UnaryExpressionAST>([&](auto expr) {
+      return mlirGen(expr);
+    })
+    .Default([&](auto expr) {
+      emitError(loc(expr->loc())) << "expression kind not implemented";
+      return nullptr; // TODO: TBD
+    });
+  }
+
+  mlir::Value mlirGen(const IntegerConstantAST *expr) {
+    auto location = loc(expr->loc());
     auto type = getType(tok_int); //TBD use expr.getType()
     auto attrType = builder.getIntegerType(16);
-    auto value = builder.getIntegerAttr(attrType, expr.getValue());
+    auto value = builder.getIntegerAttr(attrType, expr->getValue());
     return builder.create<ConstantOp>(location, type, value);
   }
 
-  mlir::Value mlirGen(const RealConstantAST &expr) {
-    auto location = loc(expr.loc());
+  mlir::Value mlirGen(const RealConstantAST *expr) {
+    auto location = loc(expr->loc());
     auto type = getType(tok_real);
-    auto value = builder.getF32FloatAttr(expr.getValue());
+    auto value = builder.getF32FloatAttr(expr->getValue());
     return builder.create<ConstantOp>(location, type, value);
   }
 
-  mlir::Value mlirGen(const StringConstantAST &expr) {
-    emitError(loc(expr.loc())) << "StringConstantAST not implemented";
+  mlir::Value mlirGen(const StringConstantAST *expr) {
+    emitError(loc(expr->loc())) << "StringConstantAST not implemented";
     return nullptr;
   }
 
-  mlir::Value mlirGen(const SimpleVariableAST &expr) {
-    auto location = loc(expr.loc());
-    auto name = llvm::cast<SimpleVariableAST>(expr).getName();
+  mlir::Value mlirGen(const SimpleVariableAST *expr) {
+    auto location = loc(expr->loc());
+    auto name = llvm::cast<SimpleVariableAST>(expr)->getName();
 
     auto variable = symbolTable.lookup(name);
     if (variable.isMemref())
@@ -465,9 +477,9 @@ private:
     return nullptr;
   }
 
-  mlir::Value mlirGenLValue(const SimpleVariableAST &expr) {
-    auto location = loc(expr.loc());
-    auto name = llvm::cast<SimpleVariableAST>(expr).getName();
+  mlir::Value mlirGenLValue(const SimpleVariableAST *expr) {
+    auto location = loc(expr->loc());
+    auto name = llvm::cast<SimpleVariableAST>(expr)->getName();
     auto variable = symbolTable.lookup(name);
     if (variable.isMemref())
       return variable.getValue();
@@ -475,12 +487,12 @@ private:
     return nullptr;
   }
 
-  mlir::Value mlirGen(const IndexedVariableAST &expr) {
-    emitError(loc(expr.loc())) << "IndexedVariableAST not implemented";
+  mlir::Value mlirGen(const IndexedVariableAST *expr) {
+    emitError(loc(expr->loc())) << "IndexedVariableAST not implemented";
     return nullptr;
   }
 
-  mlir::Value mlirGen(const BinaryExpressionAST &expr) {
+  mlir::Value mlirGen(const BinaryExpressionAST *expr) {
     // First emit the operations for each side of the operation before emitting
     // the operation itself. For example if the expression is `a + foo(a)`
     // 1) First it will visiting the LHS, which will return a reference to the
@@ -492,20 +504,20 @@ private:
     //    and the result value is returned. If an error occurs we get a nullptr
     //    and propagate.
     //
-    mlir::Value lhs = mlirGen(*expr.getLhs());
+    mlir::Value lhs = mlirGen(expr->getLhs());
     if (!lhs)
       return nullptr;
-    mlir::Value rhs = mlirGen(*expr.getRhs());
+    mlir::Value rhs = mlirGen(expr->getRhs());
     if (!rhs)
       return nullptr;
-    auto location = loc(expr.loc());
+    auto location = loc(expr->loc());
 
     // Derive the operation name from the binary operator. At the moment we only
     // support '+' and '*'.
-    switch (expr.getOp()) {
+    switch (expr->getOp()) {
     default:
       emitError(location, "invalid binary operator '")
-          << (int)expr.getOp() << "'";
+          << (int)expr->getOp() << "'";
       return nullptr;
     case tok_or:
       return builder.create<OrOp>(location, lhs, rhs);
@@ -542,17 +554,17 @@ private:
     }
 
     emitError(location, "invalid binary operator '")
-        << (int)expr.getOp() << "'";
+        << (int)expr->getOp() << "'";
     return nullptr;
   }
 
-  mlir::Value mlirGen(const UnaryExpressionAST &expr) {
-    mlir::Value rhs = mlirGen(*expr.getRhs());
+  mlir::Value mlirGen(const UnaryExpressionAST *expr) {
+    mlir::Value rhs = mlirGen(expr->getRhs());
     if (!rhs)
       return nullptr;
-    auto location = loc(expr.loc());
+    auto location = loc(expr->loc());
 
-    switch (expr.getOp()) {
+    switch (expr->getOp()) {
     case tok_minus:
       return builder.create<UnaryMinusOp>(location, rhs);
     case tok_not:
@@ -561,7 +573,7 @@ private:
       return rhs;
     default:
       emitError(location, "invalid binary operator '")
-          << (int)expr.getOp() << "'";
+          << (int)expr->getOp() << "'";
       return nullptr;
     }
   }
@@ -588,70 +600,71 @@ private:
       return RealType::get(builder.getContext());
     }
  }
-  mlir::Type getType(const ElementaryDataTypeAST &type) {
-    switch (type.getType()) {
+  mlir::Type getType(const ElementaryDataTypeAST *type) {
+    switch (type->getType()) {
     case ElementaryDataTypeAST::Type_Void:
       return builder.getNoneType();
     case ElementaryDataTypeAST::Type_Bool:
-      return LogicalType::get(builder.getContext(), 1);
+      return getType(tok_bool);
     case ElementaryDataTypeAST::Type_Byte:
-      return LogicalType::get(builder.getContext(), 8);
+      return getType(tok_byte);
     case ElementaryDataTypeAST::Type_Word:
-      return LogicalType::get(builder.getContext(), 16);
+      return getType(tok_word);
     case ElementaryDataTypeAST::Type_DWord:
-      return LogicalType::get(builder.getContext(), 32);
+      return getType(tok_dword);
     case ElementaryDataTypeAST::Type_Char:
-      return IntegerType::get(builder.getContext(), 8);
+      return getType(tok_char);
     case ElementaryDataTypeAST::Type_Int:
-      return IntegerType::get(builder.getContext(), 16);
+      return getType(tok_int);
     case ElementaryDataTypeAST::Type_DInt:
-      return IntegerType::get(builder.getContext(), 32);
+      return getType(tok_dint);
     case ElementaryDataTypeAST::Type_Real:
       return getType(tok_real);
     // TODO: TBD more types
     default:
-      emitError(loc(type.loc()))
+      emitError(loc(type->loc()))
           << "MLIR codegen encountered an unhandled type '"
-          << Twine(type.getType()) << "'";
+          << Twine(type->getType()) << "'";
       return nullptr;
     }
   }
 
-  mlir::LogicalResult getConstantInteger(const ExpressionAST &expr,
+  mlir::LogicalResult getConstantInteger(const ExpressionAST *expr,
                                          int &value) {
-    switch (expr.getKind()) {
-    default:
-      emitError(loc(expr.loc())) << "constant integer expected";
-      return mlir::failure();
-    case ExpressionAST::Expr_IntegerConstant:
-      value = llvm::cast<IntegerConstantAST>(expr).getValue();
+    return TypeSwitch<const ExpressionAST*, mlir::LogicalResult>(expr)
+    .Case<IntegerConstantAST>([&](auto expr) {
+      value = expr->getValue();
       return mlir::success();
-    }
+    })
+    .Default([&](auto expr) {
+      emitError(loc(expr->loc())) << "constant integer expected";
+      return mlir::failure();
+    });
   }
 
-  mlir::Type getType(const ArrayDataTypeSpecAST &type) {
-    mlir::Type elementType = getType(*type.getDataType());
+  mlir::Type getType(const ArrayDataTypeSpecAST *type) {
+    mlir::Type elementType = getType(type->getDataType());
     std::vector<ArrayType::DimTy> dimensions;
-    dimensions.reserve(type.getDimensions().size());
-    for (const auto &dim : type.getDimensions()) {
+    dimensions.reserve(type->getDimensions().size());
+    for (const auto &dim : type->getDimensions()) {
       int min, max;
-      if (mlir::failed(getConstantInteger(*dim.get()->getMin(), min)))
+      if (mlir::failed(getConstantInteger(dim.get()->getMin(), min)))
         return nullptr;
-      if (mlir::failed(getConstantInteger(*dim.get()->getMax(), max)))
+      if (mlir::failed(getConstantInteger(dim.get()->getMax(), max)))
         return nullptr;
       dimensions.push_back(std::make_pair(min, max));
     }
     return ArrayType::get(dimensions, elementType);
   }
 
-  mlir::Type getType(const StructDataTypeSpecAST &type) {
+  mlir::Type getType(const StructDataTypeSpecAST *type) {
     std::vector<mlir::Type> elements;
 
-    auto components = type.getComponents();
+    auto components = type->getComponents();
     elements.reserve(components.size());
 
     for (auto &component : components) {
-      mlir::Type type = getType(*component.get()->getDataType());
+      mlir::Type type = getType(component.get()->getDataType());
       if (!type)
         return nullptr;
       elements.push_back(type);
@@ -659,34 +672,37 @@ private:
     return StructType::get(elements);
   }
 
-  mlir::Type getType(const DataTypeSpecAST &type) {
-    switch (type.getKind()) {
-    case DataTypeSpecAST::DataType_Elementary:
-      return getType(llvm::cast<ElementaryDataTypeAST>(type));
-    case DataTypeSpecAST::DataType_Array:
-      return getType(llvm::cast<ArrayDataTypeSpecAST>(type));
-    case DataTypeSpecAST::DataType_Struct:
-      return getType(llvm::cast<StructDataTypeSpecAST>(type));
-    default:
-      emitError(loc(type.loc()))
+  mlir::Type getType(const DataTypeSpecAST *type) {
+    return TypeSwitch<const DataTypeSpecAST*, mlir::Type>(type)
+    .Case<ElementaryDataTypeAST>([&](auto type) {
+      return getType(type);
+    })
+    .Case<ArrayDataTypeSpecAST>([&](auto type) {
+      return getType(type);
+    })
+    .Case<StructDataTypeSpecAST>([&](auto type) {
+      return getType(type);
+    })
+    .Default([&](auto type) {
+      emitError(loc(type->loc()))
           << "MLIR codegen encountered an unhandled type kind '"
-          << Twine(type.getKind()) << "'";
+          << Twine(type->getKind()) << "'";
       return nullptr;
-    }
+    });
   }
 
   // MARK: C.7 Control Statements
 
   /// Codegen an if-then-else block
-  mlir::LogicalResult mlirGen(const IfThenElseAST &ifThenElse) {
+  mlir::LogicalResult mlirGen(const IfThenElseAST *ifThenElse) {
     mlir::Value condition;
 
     auto old = builder.saveInsertionPoint();
     bool first = true;
 
-    for (const auto &ifThen : ifThenElse.getThens()) {
+    for (const auto &ifThen : ifThenElse->getThens()) {
       auto location = loc(ifThen->loc());
-      auto condition = mlirGen(*ifThen->getCondition());
+      auto condition = mlirGen(ifThen->getCondition());
       if (!condition)
         return mlir::failure();
       auto cond = builder.create<IfThenElseOp>(location, condition);
@@ -699,14 +715,14 @@ private:
         builder.create<EndOp>(location);
       }
       builder.createBlock(&cond.thenBody());
-      mlirGen(*ifThen->getCodeBlock());
+      mlirGen(ifThen->getCodeBlock());
       builder.create<EndOp>(location);
       builder.createBlock(&cond.elseBody());
     }
-    if (ifThenElse.getElseBlock()) {
-      mlirGen(*ifThenElse.getElseBlock().getValue());
+    if (ifThenElse->getElseBlock()) {
+      mlirGen(ifThenElse->getElseBlock().getValue());
     }
-    builder.create<EndOp>(loc(ifThenElse.loc()));
+    builder.create<EndOp>(loc(ifThenElse->loc()));
 
     builder.restoreInsertionPoint(old);
 
@@ -721,7 +737,7 @@ namespace sclang {
 // The public API for codegen.
 mlir::OwningModuleRef mlirGen(mlir::MLIRContext &context,
                               ModuleAST &moduleAST) {
-  return MLIRGenImpl(context).mlirGen(moduleAST);
+  return MLIRGenImpl(context).mlirGen(&moduleAST);
 }
 
 } // namespace sclang
