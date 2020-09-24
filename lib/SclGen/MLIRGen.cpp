@@ -438,6 +438,9 @@ private:
     .Case<UnaryExpressionAST>([&](auto expr) {
       return mlirGen(expr);
     })
+    .Case<FunctionCallAST>([&](auto expr) {
+      return mlirGen(expr);
+    })
     .Default([&](auto expr) {
       emitError(loc(expr->loc())) << "expression kind not implemented";
       return nullptr; // TODO: TBD
@@ -576,6 +579,29 @@ private:
           << (int)expr->getOp() << "'";
       return nullptr;
     }
+  }
+
+  mlir::Value mlirGen(const FunctionCallAST *expr) {
+    auto location = loc(expr->loc());
+
+    // get callee
+    auto callee = TypeSwitch<const ExpressionAST*, StringRef>(expr->getFunction())
+    .Case<SimpleVariableAST>([&](auto var){
+      // well this is not a variable, but the function name is parsed as one.
+      return var->getName();
+    })
+    .Default([&](auto expr){ return ""; });
+    // TBD: lookup function name
+
+    // get arguments
+    SmallVector<mlir::Value, 4> arguments;
+    for (auto &arg : expr->getParameters()) {
+      arguments.push_back(mlirGen(arg.get()));
+    }
+
+    mlir::Type resultType = getType(tok_int); // TODO: TBD
+
+    return builder.create<CallFcOp>(location, resultType, callee, arguments);
   }
 
   mlir::Type getType(Token token) {

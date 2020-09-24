@@ -29,6 +29,26 @@ include "sclang/SclDialect/SclBase.td"
 // MARK: functions / function blocks
 //
 
+def CallFcOp : SCL_Op<"call.fc", [
+    //TBD, InFunctionScope,
+    DeclareOpInterfaceMethods<CallOpInterface>]> {
+  let summary = "Call another function";
+
+  let arguments = (ins
+    FlatSymbolRefAttr:$callee,
+    Variadic<Scl_Type>:$arguments
+  );
+
+  let results = (outs
+    Scl_Type:$result
+  );
+
+  let assemblyFormat = [{
+    $callee `(` $arguments `)` attr-dict `:`
+    functional-type($arguments, results)
+  }];
+}
+
 def FunctionOp : TopLevelOp<"function", [
     AutomaticAllocationScope, DeclareOpInterfaceMethods<CallableOpInterface>,
     FunctionLike, IsolatedFromAbove, Symbol

@@ -127,6 +127,16 @@ ArrayRef<Type> FunctionOp::getCallableResults() {
   return getType().getResults();
 }
 
+// MARK: CallFcOp
+
+CallInterfaceCallable CallFcOp::getCallableForCallee() {
+  return getAttrOfType<SymbolRefAttr>(callee());
+}
+
+Operation::operand_range CallFcOp::getArgOperands() {
+  return arguments();
+}
+
 
 //===----------------------------------------------------------------------===//
 // TableGen'd op method definitions

@@ -291,6 +291,21 @@ struct EndOpLowering : public OpConversionPattern<scl::EndOp> {
   }
 };
 
+// MARK: CallFcOpLowering
+
+struct CallFcOpLowering : public OpConversionPattern<scl::CallFcOp> {
+  using OpConversionPattern<scl::CallFcOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scl::CallFcOp op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const final {
+    scl::CallFcOp::Adaptor transformed(operands);
+    Type returnType = getTypeConverter()->convertType(op.getType());
+    rewriter.replaceOpWithNewOp<CallOp>(op, op.callee(), returnType, transformed.arguments());
+    return success();
+  }
+};
+
 // MARK: FunctionOpLowering
 
 struct FunctionOpLowering : public OpConversionPattern<scl::FunctionOp> {
@@ -427,6 +442,7 @@ void SclToStdLoweringPass::runOnOperation() {
   patterns.insert<
     AddOpLowering,
     AndOpLowering,
+    CallFcOpLowering,
     ConstantOpLowering,
     DialectCastOpLowering,
     DivOpLowering,

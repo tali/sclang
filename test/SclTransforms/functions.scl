@@ -1,0 +1,28 @@
+// RUN: sclang-gen --emit=mlir-std %s | FileCheck %s
+
+// CHECK-LABEL: func @callee(%arg0: i16, %arg1: i16) -> i16
+function callee : int
+
+var_input
+  a : int;
+  b : int;
+end_var
+
+begin
+
+  callee := a * 2 + b;
+
+end_function
+
+
+// CHECK-LABEL: func @caller() -> i16
+function caller : int
+
+begin
+
+// CHECK-DAG: [[C2:%[a-z_0-9]+]] = constant 2 : i16
+// CHECK-DAG: [[C3:%[a-z_0-9]+]] = constant 3 : i16
+// CHECK-DAG: call @callee([[C2]], [[C3]]) : (i16, i16) -> i16
+  caller := callee(2, 3);
+
+end_function

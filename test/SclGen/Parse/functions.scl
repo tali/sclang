@@ -1,0 +1,45 @@
+// RUN: sclang-gen --emit=ast %s | FileCheck %s
+
+// CHECK-LABEL: Function callee
+// CHECK-NEXT:    Type Int
+function callee : int
+
+var_input
+  a : int;
+  b : int;
+end_var
+
+// CHECK: CodeSection
+begin
+
+// CHECK-NEXT: ValueAssignment
+// CHECK-NEXT:   BinaryExpression :=
+// CHECK-NEXT:     SimpleVariable callee
+// CHECK-NEXT:     BinaryExpression +
+// CHECK-NEXT:       BinaryExpression *
+// CHECK-NEXT:         SimpleVariable a
+// CHECK-NEXT:         IntegerConstant 2
+// CHECK-NEXT:       SimpleVariable b
+  callee := a * 2 + b;
+
+end_function
+
+
+// CHECK-LABEL: Function caller
+// CHECK-NEXT:  Type Int
+function caller : int
+
+// CHECK: CodeSection
+begin
+
+// CHECK-NEXT: ValueAssignment
+// CHECK-NEXT:   BinaryExpression :=
+// CHECK-NEXT:     SimpleVariable caller
+// CHECK-NEXT:     FunctionCall
+// CHECK-NEXT:       SimpleVariable callee
+// CHECK-NEXT:       Parameters
+// CHECK-NEXT:           IntegerConstant 2
+// CHECK-NEXT:           IntegerConstant 3
+  caller := callee(2, 3);
+
+end_function
