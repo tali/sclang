@@ -50,8 +50,14 @@ def Scl_Bool :
   Type<CPred<"$_self.isa<::LogicalType>() && $_self.cast<::LogicalType>().getWidth() == 1">, "bool">,
   BuildableType<"LogicalType::get($_builder.getContext(), 1)">;
 
-
-def Scl_Type : AnyTypeOf<[Scl_StructType]>;
+// Any SCL type which can be used for function arguments
+def Scl_Type : AnyTypeOf<[
+  Scl_ArrayType,
+  Scl_StructType,
+  Scl_IntegerType,
+  Scl_LogicalType,
+  Scl_RealType
+]>;
 def Scl_NumericType : AnyTypeOf<[Scl_IntegerType, Scl_RealType]>;
 
 
