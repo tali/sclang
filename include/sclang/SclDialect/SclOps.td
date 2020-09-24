@@ -77,7 +77,6 @@ def FunctionOp : TopLevelOp<"function", [
   let verifier = [{ return success(); }];
 
   let builders = [OpBuilder<[{
-    OpBuilder &, OperationState &state,
     StringRef name, FunctionType type,
     ArrayRef<NamedAttribute> attrs = {}
   }]>];
@@ -157,9 +156,9 @@ def LoadOp : SCL_Op<"load", [/*SameOperandsAndResultElementType*/]> {
   let assemblyFormat = "$address `:` type($address) attr-dict `:` type($result)";
 
   let builders = [
-    OpBuilder<"OpBuilder &b, OperationState &state, Value memref", [{
-      auto elementType = memref.getType().cast<AddressType>().getElementType();
-      build(b, state, elementType, memref);
+    OpBuilder<"Value address", [{
+      auto elementType = address.getType().cast<AddressType>().getElementType();
+      build($_builder, $_state, elementType, address);
     }]>
   ];
 }
