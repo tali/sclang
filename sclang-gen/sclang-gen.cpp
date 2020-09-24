@@ -60,9 +60,7 @@ static cl::opt<enum InputType> inputType(
                           "load the input file as an MLIR file")));
 
 namespace {
-enum Action {
-  None, DumpAST, DumpMLIR, DumpMLIRStd
-};
+enum Action { None, DumpAST, DumpMLIR, DumpMLIRStd };
 }
 static cl::opt<enum Action> emitAction(
     "emit", cl::desc("Select the kind of output desired"),
@@ -87,8 +85,7 @@ std::unique_ptr<sclang::ModuleAST> parseInputFile(llvm::StringRef filename) {
   return parser.ParseModule();
 }
 
-int loadMLIR(mlir::MLIRContext &context,
-             mlir::OwningModuleRef &module) {
+int loadMLIR(mlir::MLIRContext &context, mlir::OwningModuleRef &module) {
   // Handle '.scl' input to the compiler.
   if (inputType != InputType::MLIR &&
       !llvm::StringRef(inputFilename).endswith(".mlir")) {

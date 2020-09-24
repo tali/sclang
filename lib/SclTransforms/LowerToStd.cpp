@@ -36,48 +36,43 @@ template <typename U> bool all_of_type(ArrayRef<Value> range) {
 class SclTypeConverter : public TypeConverter {
 public:
   SclTypeConverter() {
-    addConversion([&](scl::AddressType type){
+    addConversion([&](scl::AddressType type) {
       return mlir::MemRefType::get({}, convertType(type.getElementType()));
     });
-    addConversion([&](scl::IntegerType type){
+    addConversion([&](scl::IntegerType type) {
       return IntegerType::get(type.getWidth(), type.getContext());
     });
-    addConversion([&](scl::LogicalType type){
+    addConversion([&](scl::LogicalType type) {
       return IntegerType::get(type.getWidth(), type.getContext());
     });
-    addConversion([&](scl::RealType type){
+    addConversion([&](scl::RealType type) {
       return FloatType::getF32(type.getContext());
     });
 
-    // TODO: keep Std types
-    addConversion([&](FloatType type){ return type; });
-    addConversion([&](IntegerType type){ return type; });
+    // keep Std types
+    addConversion([&](FloatType type) { return type; });
+    addConversion([&](IntegerType type) { return type; });
 
     // Add generic source and target materializations to handle cases where
-    // non-LLVM types persist after an LLVM conversion.
+    // SCL types persist after conversion to Std.
     addSourceMaterialization([&](OpBuilder &builder, Type resultType,
                                  ValueRange inputs,
                                  Location loc) -> Optional<Value> {
       if (inputs.size() != 1)
         return None;
-      // FIXME: These should check CastOp can actually be constructed
-      // from the input and result.
-      return builder.create<scl::DialectCastOp>(loc, resultType, inputs[0])
-          .getResult();
+      auto op = builder.create<scl::DialectCastOp>(loc, resultType, inputs[0]);
+      return op.getResult();
     });
     addTargetMaterialization([&](OpBuilder &builder, Type resultType,
                                  ValueRange inputs,
                                  Location loc) -> Optional<Value> {
       if (inputs.size() != 1)
         return None;
-      // FIXME: These should check CastOp can actually be constructed
-      // from the input and result.
       return builder.create<scl::DialectCastOp>(loc, resultType, inputs[0])
           .getResult();
     });
   }
 };
-
 
 // MARK: CallFcOpLowering
 
@@ -89,7 +84,8 @@ struct CallFcOpLowering : public OpConversionPattern<scl::CallFcOp> {
                   ConversionPatternRewriter &rewriter) const final {
     scl::CallFcOp::Adaptor transformed(operands);
     Type returnType = getTypeConverter()->convertType(op.getType());
-    rewriter.replaceOpWithNewOp<CallOp>(op, op.callee(), returnType, transformed.arguments());
+    rewriter.replaceOpWithNewOp<CallOp>(op, op.callee(), returnType,
+                                        transformed.arguments());
     return success();
   }
 };
@@ -101,7 +97,8 @@ struct CallFcOpLowering : public OpConversionPattern<scl::CallFcOp> {
 template <typename CompareOp, CmpFPredicate predF, CmpIPredicate predI>
 struct CompareOpLowering : public ConversionPattern {
   CompareOpLowering(TypeConverter &typeConverter, MLIRContext *ctx)
-      : ConversionPattern(CompareOp::getOperationName(), 1, typeConverter, ctx) {}
+      : ConversionPattern(CompareOp::getOperationName(), 1, typeConverter,
+                          ctx) {}
 
   LogicalResult
   matchAndRewrite(Operation *op, ArrayRef<Value> operands,
@@ -140,7 +137,6 @@ struct ConstantOpLowering : public OpConversionPattern<scl::ConstantOp> {
   LogicalResult
   matchAndRewrite(scl::ConstantOp op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
-    // directly lower to Std
     rewriter.replaceOpWithNewOp<ConstantOp>(op, op.value());
     return success();
   }
@@ -148,8 +144,8 @@ struct ConstantOpLowering : public OpConversionPattern<scl::ConstantOp> {
 
 // MARK: DialectCastOpLowering
 
-struct DialectCastOpLowering
-    : public OpConversionPattern<scl::DialectCastOp> {
+/// Removes DialectCastOps when they are not necessary any more.
+struct DialectCastOpLowering : public OpConversionPattern<scl::DialectCastOp> {
   using OpConversionPattern<scl::DialectCastOp>::OpConversionPattern;
 
   LogicalResult
@@ -170,8 +166,9 @@ struct DialectCastOpLowering
 struct EndOpLowering : public OpConversionPattern<scl::EndOp> {
   using OpConversionPattern<scl::EndOp>::OpConversionPattern;
 
-  LogicalResult matchAndRewrite(scl::EndOp op, ArrayRef<Value> operands,
-                                ConversionPatternRewriter &rewriter) const final {
+  LogicalResult
+  matchAndRewrite(scl::EndOp op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const final {
     rewriter.replaceOpWithNewOp<scf::YieldOp>(op);
     return success();
   }
@@ -189,7 +186,9 @@ struct FunctionOpLowering : public OpConversionPattern<scl::FunctionOp> {
     StringRef name = op.getName();
     auto sclType = op.getType();
 
-    TypeConverter::SignatureConversion signatureConverter(sclType.getNumInputs());
+    // convert argument types
+    TypeConverter::SignatureConversion signatureConverter(
+        sclType.getNumInputs());
     for (auto argType : enumerate(sclType.getInputs())) {
       auto convertedType = typeConverter->convertType(argType.value());
       if (!convertedType)
@@ -198,22 +197,14 @@ struct FunctionOpLowering : public OpConversionPattern<scl::FunctionOp> {
     }
     auto inputs = signatureConverter.getConvertedTypes();
 
+    // convert result type
     SmallVector<Type, 4> results;
     if (failed(typeConverter->convertTypes(sclType.getResults(), results)))
       return failure();
 
-    // Create the converted spv.func op.
+    // Create the converted func op.
     auto newFuncType = rewriter.getFunctionType(inputs, results);
     auto newFuncOp = rewriter.create<FuncOp>(loc, name, newFuncType);
-
-#if false
-    // Copy over all attributes other than the function name and type.
-    for (const auto &namedAttr : op.getAttrs()) {
-      if (namedAttr.first != impl::getTypeAttrName() &&
-          namedAttr.first != SymbolTable::getSymbolAttrName())
-        newFuncOp.setAttr(namedAttr.first, namedAttr.second);
-    }
-#endif
 
     rewriter.inlineRegionBefore(op.getBody(), newFuncOp.getBody(),
                                 newFuncOp.end());
@@ -230,11 +221,12 @@ struct FunctionOpLowering : public OpConversionPattern<scl::FunctionOp> {
 struct IfThenElseOpLowering : public OpConversionPattern<scl::IfThenElseOp> {
   using OpConversionPattern<scl::IfThenElseOp>::OpConversionPattern;
 
-  LogicalResult matchAndRewrite(scl::IfThenElseOp op, ArrayRef<Value> operands,
-                                ConversionPatternRewriter &rewriter) const final {
+  LogicalResult
+  matchAndRewrite(scl::IfThenElseOp op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const final {
 
     auto loweredOp = rewriter.create<scf::IfOp>(op.getLoc(), op.cond(),
-                                                 /*withElseRegion=*/true);
+                                                /*withElseRegion=*/true);
     // inline the block from our then body into the lowered region,
     // then remove the implicitly created one
     rewriter.inlineRegionBefore(op.thenBody(), &loweredOp.thenRegion().back());
@@ -258,6 +250,7 @@ struct LoadOpLowering : public OpConversionPattern<scl::LoadOp> {
   matchAndRewrite(scl::LoadOp op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
     scl::LoadOp::Adaptor transformed(operands);
+
     rewriter.replaceOpWithNewOp<LoadOp>(op, transformed.address());
     return success();
   }
@@ -276,6 +269,7 @@ struct LogicalOpLowering : public ConversionPattern {
   matchAndRewrite(Operation *op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
     llvm::SmallVector<mlir::NamedAttribute, 0> attrs;
+
     rewriter.replaceOpWithNewOp<LoweredOp>(op, operands, attrs);
     return success();
   }
@@ -297,6 +291,7 @@ struct NumericOpLowering : public ConversionPattern {
   matchAndRewrite(Operation *op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
     llvm::SmallVector<mlir::NamedAttribute, 0> attrs;
+
     if (all_of_type<FloatType>(operands)) {
       rewriter.replaceOpWithNewOp<LoweredFloatOp>(op, operands, attrs);
       return success();
@@ -353,22 +348,26 @@ struct StoreOpLowering : public OpConversionPattern<scl::StoreOp> {
   matchAndRewrite(scl::StoreOp op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
     scl::StoreOp::Adaptor transformed(operands);
-    rewriter.replaceOpWithNewOp<StoreOp>(op, transformed.rhs(), transformed.lhs());
+
+    rewriter.replaceOpWithNewOp<StoreOp>(op, transformed.rhs(),
+                                         transformed.lhs());
     return success();
   }
 };
 
 // MARK: TempVariableOpLowering
 
-struct TempVariableOpLowering : public OpConversionPattern<scl::TempVariableOp> {
+struct TempVariableOpLowering
+    : public OpConversionPattern<scl::TempVariableOp> {
   using OpConversionPattern<scl::TempVariableOp>::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(scl::TempVariableOp op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
     auto resultType = getTypeConverter()->convertType(op.result().getType());
-    rewriter.replaceOpWithNewOp<AllocaOp>(
-        op, resultType.dyn_cast<MemRefType>());
+    auto memref = resultType.dyn_cast<MemRefType>();
+
+    rewriter.replaceOpWithNewOp<AllocaOp>(op, memref);
     return success();
   }
 };
@@ -377,24 +376,26 @@ struct TempVariableOpLowering : public OpConversionPattern<scl::TempVariableOp> 
 
 struct UnaryMinusOpLowering : public ConversionPattern {
   UnaryMinusOpLowering(TypeConverter &typeConverter, MLIRContext *ctx)
-      : ConversionPattern(scl::UnaryMinusOp::getOperationName(), 1, typeConverter, ctx) {}
+      : ConversionPattern(scl::UnaryMinusOp::getOperationName(), 1,
+                          typeConverter, ctx) {}
 
   LogicalResult
   matchAndRewrite(Operation *op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
     auto elementType = operands[0].getType();
-    if (elementType.isa<FloatType>()) {
-      rewriter.replaceOpWithNewOp<NegFOp>(op, operands[0]);
-      return success();
-    }
-    if (elementType.isa<IntegerType>()) {
-      auto loc = op->getLoc();
-      auto intType = elementType.dyn_cast<IntegerType>();
-      auto zero = rewriter.create<ConstantIntOp>(loc, 0, intType.getWidth());
-      rewriter.replaceOpWithNewOp<SubIOp>(op, zero, operands[0]);
-      return success();
-    }
-    return failure();
+    return TypeSwitch<Type, LogicalResult>(elementType)
+        .Case<FloatType>([&](auto elementType) {
+          rewriter.replaceOpWithNewOp<NegFOp>(op, operands[0]);
+          return success();
+        })
+        .Case<IntegerType>([&](auto elementType) {
+          auto loc = op->getLoc();
+          auto zero =
+              rewriter.create<ConstantIntOp>(loc, 0, elementType.getWidth());
+          rewriter.replaceOpWithNewOp<SubIOp>(op, zero, operands[0]);
+          return success();
+        })
+        .Default([&](auto elementType) { return failure(); });
   }
 };
 
@@ -410,13 +411,13 @@ struct UnaryNotOpLowering : public OpConversionPattern<scl::UnaryNotOp> {
     scl::UnaryNotOp::Adaptor transformed(operands);
     auto falseVal = rewriter.create<ConstantIntOp>(loc, 0, 1);
     auto trueVal = rewriter.create<ConstantIntOp>(loc, 1, 1);
-    rewriter.replaceOpWithNewOp<SelectOp>(op, transformed.rhs(), falseVal, trueVal);
+    rewriter.replaceOpWithNewOp<SelectOp>(op, transformed.rhs(), falseVal,
+                                          trueVal);
     return success();
   }
 };
 
 } // end anonymous namespace.
-
 
 // MARK: SclToStdLoweringPass
 
@@ -447,34 +448,14 @@ void SclToStdLoweringPass::runOnOperation() {
 
   OwningRewritePatternList patterns;
   patterns.insert<
-    AddOpLowering,
-    AndOpLowering,
-    CallFcOpLowering,
-    ConstantOpLowering,
-    DialectCastOpLowering,
-    DivOpLowering,
-    EndOpLowering,
-    EqualLowering,
-    FunctionOpLowering,
-    GreaterEqualLowering,
-    GreaterThanLowering,
-    IfThenElseOpLowering,
-    LessEqualLowering,
-    LessThanLowering,
-    LoadOpLowering,
-    ModOpLowering,
-    MulOpLowering,
-    NotEqualLowering,
-    OrOpLowering,
-    ReturnOpLowering,
-    ReturnValueOpLowering,
-    SubOpLowering,
-    StoreOpLowering,
-    TempVariableOpLowering,
-    UnaryMinusOpLowering,
-    UnaryNotOpLowering,
-    XOrOpLowering
-  >(converter, &getContext());
+      AddOpLowering, AndOpLowering, CallFcOpLowering, ConstantOpLowering,
+      DialectCastOpLowering, DivOpLowering, EndOpLowering, EqualLowering,
+      FunctionOpLowering, GreaterEqualLowering, GreaterThanLowering,
+      IfThenElseOpLowering, LessEqualLowering, LessThanLowering, LoadOpLowering,
+      ModOpLowering, MulOpLowering, NotEqualLowering, OrOpLowering,
+      ReturnOpLowering, ReturnValueOpLowering, SubOpLowering, StoreOpLowering,
+      TempVariableOpLowering, UnaryMinusOpLowering, UnaryNotOpLowering,
+      XOrOpLowering>(converter, &getContext());
 
   if (failed(applyPartialConversion(getOperation(), target, patterns)))
     signalPassFailure();

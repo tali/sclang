@@ -23,14 +23,13 @@
 #include "sclang/SclDialect/Dialect.h"
 
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/Function.h"
 #include "mlir/IR/FunctionImplementation.h"
-#include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/StandardTypes.h"
 
 using namespace mlir;
 using namespace mlir::scl;
-
 
 //===----------------------------------------------------------------------===//
 // MARK: ConstantOp
@@ -47,9 +46,7 @@ using namespace mlir::scl;
 ///     of the operation. The caller will remove the operation and use that
 ///     result instead.
 ///
-OpFoldResult ConstantOp::fold(ArrayRef<Attribute> operands) {
-  return value();
-}
+OpFoldResult ConstantOp::fold(ArrayRef<Attribute> operands) { return value(); }
 
 //===----------------------------------------------------------------------===//
 // MARK: FunctionOp
@@ -63,13 +60,13 @@ static ParseResult parseFunctionOp(OpAsmParser &parser, OperationState &state) {
   };
 
   return mlir::impl::parseFunctionLikeOp(parser, state, /*allowVariadic=*/false,
-                                   buildFuncType);
+                                         buildFuncType);
 }
 
 static void print(FunctionOp fnOp, OpAsmPrinter &printer) {
   FunctionType fnType = fnOp.getType();
-  mlir::impl::printFunctionLikeOp(printer, fnOp, fnType.getInputs(), /*isVariadic=*/false,
-                            fnType.getResults());
+  mlir::impl::printFunctionLikeOp(printer, fnOp, fnType.getInputs(),
+                                  /*isVariadic=*/false, fnType.getResults());
 }
 
 LogicalResult FunctionOp::verifyType() {
@@ -108,8 +105,8 @@ LogicalResult FunctionOp::verifyBody() {
 }
 
 void FunctionOp::build(OpBuilder &builder, OperationState &state,
-                          StringRef name, FunctionType type,
-                          ArrayRef<NamedAttribute> attrs) {
+                       StringRef name, FunctionType type,
+                       ArrayRef<NamedAttribute> attrs) {
   state.addAttribute(SymbolTable::getSymbolAttrName(),
                      builder.getStringAttr(name));
   state.addAttribute(getTypeAttrName(), TypeAttr::get(type));
@@ -133,10 +130,7 @@ CallInterfaceCallable CallFcOp::getCallableForCallee() {
   return getAttrOfType<SymbolRefAttr>(callee());
 }
 
-Operation::operand_range CallFcOp::getArgOperands() {
-  return arguments();
-}
-
+Operation::operand_range CallFcOp::getArgOperands() { return arguments(); }
 
 //===----------------------------------------------------------------------===//
 // TableGen'd op method definitions

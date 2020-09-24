@@ -20,9 +20,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "sclang/SclGen/MLIRGen.h"
 #include "sclang/SclDialect/Dialect.h"
 #include "sclang/SclGen/AST.h"
-#include "sclang/SclGen/MLIRGen.h"
 
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/Attributes.h"
@@ -45,14 +45,15 @@
 using namespace mlir::scl;
 using namespace sclang;
 
-using llvm::isa;
-using llvm::makeArrayRef;
 using llvm::ArrayRef;
+using llvm::isa;
+using llvm::dyn_cast;
+using llvm::makeArrayRef;
 using llvm::ScopedHashTableScope;
 using llvm::SmallVector;
 using llvm::StringRef;
-using llvm::TypeSwitch;
 using llvm::Twine;
+using llvm::TypeSwitch;
 
 namespace {
 
@@ -147,17 +148,15 @@ private:
 
   // MARK: C.1 Subunits of SCL Source Files
 
-  mlir::Operation * mlirGen(const UnitAST *unit) {
-    return TypeSwitch<const UnitAST*, mlir::Operation*>(unit)
-    .Case<FunctionAST>([&](auto function){
-      return mlirGen(function);
-    })
-    .Default([&](auto unit) {
-      emitError(loc(unit->loc()))
-          << "MLIR codegen encountered an unhandled expr kind '"
-          << Twine(unit->getKind()) << "'";
-      return nullptr;
-    });
+  mlir::Operation *mlirGen(const UnitAST *unit) {
+    return TypeSwitch<const UnitAST *, mlir::Operation *>(unit)
+        .Case<FunctionAST>([&](auto function) { return mlirGen(function); })
+        .Default([&](auto unit) {
+          emitError(loc(unit->loc()))
+              << "MLIR codegen encountered an unhandled expr kind '"
+              << Twine(unit->getKind()) << "'";
+          return nullptr;
+        });
   }
 
   /// Append all the types and names of a variable declaration to an array
@@ -301,9 +300,8 @@ private:
     }
 
     // Implicitly return if no return statement was emitted.
-    if (entryBlock.empty() || (
-        !isa<ReturnOp>(entryBlock.back()) &&
-        !isa<ReturnValueOp>(entryBlock.back()))) {
+    if (entryBlock.empty() || (!isa<ReturnOp>(entryBlock.back()) &&
+                               !isa<ReturnValueOp>(entryBlock.back()))) {
       mlirgenReturn(location);
     }
 
@@ -354,31 +352,28 @@ private:
   mlir::LogicalResult mlirGen(const InstructionAST *instr) {
     auto location = loc(instr->loc());
 
-    return TypeSwitch<const InstructionAST*, mlir::LogicalResult>(instr)
-    .Case<ValueAssignmentAST>([&](auto assign) {
-      return mlirGen(assign);
-    })
-    .Case<ContinueAST>([&](auto instr) {
-      builder.create<ContinueOp>(location);
-      return mlir::success();
-    })
-    .Case<IfThenElseAST>([&](auto ifThenElse) {
-      return mlirGen(ifThenElse);
-    })
-    .Case<ReturnAST>([&](auto instr) {
-      mlirgenReturn(location);
-      return mlir::success();
-    })
-    .Case<ExitAST>([&](auto instr) {
-      builder.create<ExitOp>(location);
-      return mlir::success();
-    })
-    .Default([&](auto instr) {
-      emitError(loc(instr->loc()))
-          << "MLIR codegen encountered an unhandled instruction kind '"
-          << Twine(instr->getKind()) << "'";
-      return mlir::failure();
-    });
+    return TypeSwitch<const InstructionAST *, mlir::LogicalResult>(instr)
+        .Case<ValueAssignmentAST>([&](auto assign) { return mlirGen(assign); })
+        .Case<ContinueAST>([&](auto instr) {
+          builder.create<ContinueOp>(location);
+          return mlir::success();
+        })
+        .Case<IfThenElseAST>(
+            [&](auto ifThenElse) { return mlirGen(ifThenElse); })
+        .Case<ReturnAST>([&](auto instr) {
+          mlirgenReturn(location);
+          return mlir::success();
+        })
+        .Case<ExitAST>([&](auto instr) {
+          builder.create<ExitOp>(location);
+          return mlir::success();
+        })
+        .Default([&](auto instr) {
+          emitError(loc(instr->loc()))
+              << "MLIR codegen encountered an unhandled instruction kind '"
+              << Twine(instr->getKind()) << "'";
+          return mlir::failure();
+        });
   }
 
   /// Codegen a variable assignment
@@ -403,53 +398,37 @@ private:
   mlir::Value mlirGenLValue(const ExpressionAST *expr) {
     auto location = loc(expr->loc());
 
-    return TypeSwitch<const ExpressionAST*, mlir::Value>(expr)
-    .Case<SimpleVariableAST>([&](auto expr) {
-      return mlirGenLValue(expr);
-    })
-    .Case<IndexedVariableAST>([&](auto expr) {
-      emitError(loc(expr->loc()))
-          << "IndexedVariable not implemented"; // TODO: TBD
-      return nullptr;
-    })
-    .Default([&](auto expr) {
-      emitError(location) << "not a lvalue, kind " << (int)expr->getKind();
-      return nullptr;
-    });
+    return TypeSwitch<const ExpressionAST *, mlir::Value>(expr)
+        .Case<SimpleVariableAST>([&](auto expr) { return mlirGenLValue(expr); })
+        .Case<IndexedVariableAST>([&](auto expr) {
+          emitError(loc(expr->loc()))
+              << "IndexedVariable not implemented"; // TODO: TBD
+          return nullptr;
+        })
+        .Default([&](auto expr) {
+          emitError(location) << "not a lvalue, kind " << (int)expr->getKind();
+          return nullptr;
+        });
   }
 
   mlir::Value mlirGen(const ExpressionAST *expr) {
     return TypeSwitch<const ExpressionAST *, mlir::Value>(expr)
-    .Case<IntegerConstantAST>([&](auto expr) {
-      return mlirGen(expr);
-    })
-    .Case<RealConstantAST>([&](auto expr) {
-      return mlirGen(expr);
-    })
-    .Case<StringConstantAST>([&](auto expr) {
-      return mlirGen(expr);
-    })
-    .Case<SimpleVariableAST>([&](auto expr) {
-      return mlirGen(expr);
-    })
-    .Case<BinaryExpressionAST>([&](auto expr) {
-      return mlirGen(expr);
-    })
-    .Case<UnaryExpressionAST>([&](auto expr) {
-      return mlirGen(expr);
-    })
-    .Case<FunctionCallAST>([&](auto expr) {
-      return mlirGen(expr);
-    })
-    .Default([&](auto expr) {
-      emitError(loc(expr->loc())) << "expression kind not implemented";
-      return nullptr; // TODO: TBD
-    });
+        .Case<IntegerConstantAST>([&](auto expr) { return mlirGen(expr); })
+        .Case<RealConstantAST>([&](auto expr) { return mlirGen(expr); })
+        .Case<StringConstantAST>([&](auto expr) { return mlirGen(expr); })
+        .Case<SimpleVariableAST>([&](auto expr) { return mlirGen(expr); })
+        .Case<BinaryExpressionAST>([&](auto expr) { return mlirGen(expr); })
+        .Case<UnaryExpressionAST>([&](auto expr) { return mlirGen(expr); })
+        .Case<FunctionCallAST>([&](auto expr) { return mlirGen(expr); })
+        .Default([&](auto expr) {
+          emitError(loc(expr->loc())) << "expression kind not implemented";
+          return nullptr; // TODO: TBD
+        });
   }
 
   mlir::Value mlirGen(const IntegerConstantAST *expr) {
     auto location = loc(expr->loc());
-    auto type = getType(tok_int); //TBD use expr.getType()
+    auto type = getType(tok_int); // TBD use expr.getType()
     auto attrType = builder.getIntegerType(16);
     auto value = builder.getIntegerAttr(attrType, expr->getValue());
     return builder.create<ConstantOp>(location, type, value);
@@ -584,13 +563,13 @@ private:
   mlir::Value mlirGen(const FunctionCallAST *expr) {
     auto location = loc(expr->loc());
 
-    // get callee
-    auto callee = TypeSwitch<const ExpressionAST*, StringRef>(expr->getFunction())
-    .Case<SimpleVariableAST>([&](auto var){
-      // well this is not a variable, but the function name is parsed as one.
-      return var->getName();
-    })
-    .Default([&](auto expr){ return ""; });
+    // The function name is parsed as a variable
+    auto callee = dyn_cast<SimpleVariableAST>(expr->getFunction());
+    if (!callee) {
+      emitError(location, "invalid callee in function call");
+      return nullptr;
+    }
+    auto name = callee->getName();
     // TBD: lookup function name
 
     // get arguments
@@ -601,7 +580,7 @@ private:
 
     mlir::Type resultType = getType(tok_int); // TODO: TBD
 
-    return builder.create<CallFcOp>(location, resultType, callee, arguments);
+    return builder.create<CallFcOp>(location, resultType, name, arguments);
   }
 
   mlir::Type getType(Token token) {
@@ -625,7 +604,7 @@ private:
     case tok_real:
       return RealType::get(builder.getContext());
     }
- }
+  }
   mlir::Type getType(const ElementaryDataTypeAST *type) {
     switch (type->getType()) {
     case ElementaryDataTypeAST::Type_Void:
@@ -657,15 +636,15 @@ private:
 
   mlir::LogicalResult getConstantInteger(const ExpressionAST *expr,
                                          int &value) {
-    return TypeSwitch<const ExpressionAST*, mlir::LogicalResult>(expr)
-    .Case<IntegerConstantAST>([&](auto expr) {
-      value = expr->getValue();
-      return mlir::success();
-    })
-    .Default([&](auto expr) {
-      emitError(loc(expr->loc())) << "constant integer expected";
-      return mlir::failure();
-    });
+    return TypeSwitch<const ExpressionAST *, mlir::LogicalResult>(expr)
+        .Case<IntegerConstantAST>([&](auto expr) {
+          value = expr->getValue();
+          return mlir::success();
+        })
+        .Default([&](auto expr) {
+          emitError(loc(expr->loc())) << "constant integer expected";
+          return mlir::failure();
+        });
   }
 
   mlir::Type getType(const ArrayDataTypeSpecAST *type) {
@@ -699,22 +678,16 @@ private:
   }
 
   mlir::Type getType(const DataTypeSpecAST *type) {
-    return TypeSwitch<const DataTypeSpecAST*, mlir::Type>(type)
-    .Case<ElementaryDataTypeAST>([&](auto type) {
-      return getType(type);
-    })
-    .Case<ArrayDataTypeSpecAST>([&](auto type) {
-      return getType(type);
-    })
-    .Case<StructDataTypeSpecAST>([&](auto type) {
-      return getType(type);
-    })
-    .Default([&](auto type) {
-      emitError(loc(type->loc()))
-          << "MLIR codegen encountered an unhandled type kind '"
-          << Twine(type->getKind()) << "'";
-      return nullptr;
-    });
+    return TypeSwitch<const DataTypeSpecAST *, mlir::Type>(type)
+        .Case<ElementaryDataTypeAST>([&](auto type) { return getType(type); })
+        .Case<ArrayDataTypeSpecAST>([&](auto type) { return getType(type); })
+        .Case<StructDataTypeSpecAST>([&](auto type) { return getType(type); })
+        .Default([&](auto type) {
+          emitError(loc(type->loc()))
+              << "MLIR codegen encountered an unhandled type kind '"
+              << Twine(type->getKind()) << "'";
+          return nullptr;
+        });
   }
 
   // MARK: C.7 Control Statements

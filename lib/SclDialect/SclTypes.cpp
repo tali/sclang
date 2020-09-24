@@ -29,7 +29,6 @@
 using namespace mlir;
 using namespace mlir::scl;
 
-
 //===----------------------------------------------------------------------===//
 // Scl Types
 //===----------------------------------------------------------------------===//
@@ -54,9 +53,7 @@ struct AddressTypeStorage : public mlir::TypeStorage {
   /// Define the comparison function for the key type with the current storage
   /// instance. This is used when constructing a new instance to ensure that we
   /// haven't already uniqued an instance of the given key.
-  bool operator==(const KeyTy &key) const {
-    return key == elementType;
-  }
+  bool operator==(const KeyTy &key) const { return key == elementType; }
 
   /// Define a construction method for creating a new instance of this storage.
   /// This method takes an instance of a storage allocator, and an instance of a
@@ -67,7 +64,7 @@ struct AddressTypeStorage : public mlir::TypeStorage {
 
     // Allocate the storage instance and construct it.
     return new (allocator.allocate<AddressTypeStorage>())
-      AddressTypeStorage(key);
+        AddressTypeStorage(key);
   }
 
   /// The following field contains the element types of the struct.
@@ -103,8 +100,7 @@ mlir::Type parseAddressType(mlir::DialectAsmParser &parser) {
 
   // Parse: type `>`
   mlir::Type elementType;
-  if (parser.parseLess() ||
-      parser.parseType(elementType) ||
+  if (parser.parseLess() || parser.parseType(elementType) ||
       parser.parseGreater())
     return Type();
 
@@ -112,7 +108,6 @@ mlir::Type parseAddressType(mlir::DialectAsmParser &parser) {
 }
 
 } // namespace
-
 
 // MARK: ArrayType
 
@@ -209,7 +204,7 @@ namespace {
 void print(ArrayType type, mlir::DialectAsmPrinter &printer) {
   // Print the struct type according to the parser format.
   printer << "array<" << type.getElementType();
-  for (const auto & dim : type.getDimensions()) {
+  for (const auto &dim : type.getDimensions()) {
     printer << ", " << dim.first << ":" << dim.second;
   }
   printer << '>';
@@ -360,7 +355,8 @@ namespace mlir {
 namespace scl {
 namespace detail {
 
-/// This class represents the internal storage of the SCL `IntegerType` and `LogicalType`.
+/// This class represents the internal storage of the SCL `IntegerType` and
+/// `LogicalType`.
 struct BitWidthStorage : public mlir::TypeStorage {
   /// The `KeyTy` is a required type that provides an interface for the storage
   /// instance. This type will be used when uniquing an instance of the type
@@ -369,22 +365,19 @@ struct BitWidthStorage : public mlir::TypeStorage {
   using KeyTy = int;
 
   /// A constructor for the type storage instance.
-  BitWidthStorage(KeyTy width)
-      : width(width) {}
+  BitWidthStorage(KeyTy width) : width(width) {}
 
   /// Define the comparison function for the key type with the current storage
   /// instance. This is used when constructing a new instance to ensure that we
   /// haven't already uniqued an instance of the given key.
-  bool operator==(const KeyTy &key) const {
-    return key == width;
-  }
+  bool operator==(const KeyTy &key) const { return key == width; }
 
   /// Define a construction method for creating a new instance of this storage.
   /// This method takes an instance of a storage allocator, and an instance of a
   /// `KeyTy`. The given allocator must be used for *all* necessary dynamic
   /// allocations used to create the type storage and its internal.
   static BitWidthStorage *construct(mlir::TypeStorageAllocator &allocator,
-                                     const KeyTy &key) {
+                                    const KeyTy &key) {
 
     // Copy the the provided `KeyTy` into the allocator.
     return new (allocator.allocate<BitWidthStorage>()) BitWidthStorage(key);
@@ -402,9 +395,7 @@ IntegerType IntegerType::get(mlir::MLIRContext *ctx, int width) {
   return Base::get(ctx, width);
 }
 
-int IntegerType::getWidth() {
-  return getImpl()->width;
-}
+int IntegerType::getWidth() { return getImpl()->width; }
 
 LogicalType LogicalType::get(mlir::MLIRContext *ctx, int width) {
   // Call into a helper 'get' method in 'TypeBase' to get a uniqued instance
@@ -413,13 +404,10 @@ LogicalType LogicalType::get(mlir::MLIRContext *ctx, int width) {
   return Base::get(ctx, width);
 }
 
-int LogicalType::getWidth() {
-  return getImpl()->width;
-}
+int LogicalType::getWidth() { return getImpl()->width; }
 
 } // end namespace scl
 } // end namespace mlir
-
 
 // MARK: parse and print
 
@@ -463,49 +451,41 @@ mlir::Type SclDialect::parseType(mlir::DialectAsmParser &parser) const {
 void SclDialect::printType(mlir::Type type,
                            mlir::DialectAsmPrinter &printer) const {
   TypeSwitch<Type>(type)
-  .Case<AddressType>([&](AddressType type) {
-    print(type, printer);
-  })
-  .Case<ArrayType>([&](ArrayType type) {
-    print(type, printer);
-  })
-  .Case<StructType>([&](StructType type) {
-    print(type, printer);
-  })
-  .Case<IntegerType>([&](IntegerType type) {
-    switch (type.getWidth()) {
-    default:
-      llvm_unreachable("Unhandled IntegerType bit width");
-    case 8:
-      printer << "char";
-      break;
-    case 16:
-      printer << "int";
-      break;
-    case 32:
-      printer << "dint";
-      break;
-    }
-  })
-  .Case<LogicalType>([&](LogicalType type) {
-    switch (type.getWidth()) {
-    default:
-    case 1:
-      printer << "bool";
-      break;
-    case 8:
-      printer << "byte";
-      break;
-    case 16:
-      printer << "word";
-      break;
-    case 32:
-      printer << "dword";
-      break;
-    }
-  })
-  .Case<RealType>([&](RealType) {
-    printer << "real";
-  })
-  .Default([&](Type) { llvm_unreachable("Unhandled SCL type"); });
+      .Case<AddressType>([&](AddressType type) { print(type, printer); })
+      .Case<ArrayType>([&](ArrayType type) { print(type, printer); })
+      .Case<StructType>([&](StructType type) { print(type, printer); })
+      .Case<IntegerType>([&](IntegerType type) {
+        switch (type.getWidth()) {
+        default:
+          llvm_unreachable("Unhandled IntegerType bit width");
+        case 8:
+          printer << "char";
+          break;
+        case 16:
+          printer << "int";
+          break;
+        case 32:
+          printer << "dint";
+          break;
+        }
+      })
+      .Case<LogicalType>([&](LogicalType type) {
+        switch (type.getWidth()) {
+        default:
+        case 1:
+          printer << "bool";
+          break;
+        case 8:
+          printer << "byte";
+          break;
+        case 16:
+          printer << "word";
+          break;
+        case 32:
+          printer << "dword";
+          break;
+        }
+      })
+      .Case<RealType>([&](RealType) { printer << "real"; })
+      .Default([&](Type) { llvm_unreachable("Unhandled SCL type"); });
 }

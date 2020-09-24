@@ -34,15 +34,14 @@ struct BitWidthStorage;
 } // end namespace detail
 
 /// This class defines the SCL addres type.
-class AddressType
-  : public mlir::Type::TypeBase<AddressType, mlir::Type,
-                                detail::AddressTypeStorage> {
+class AddressType : public mlir::Type::TypeBase<AddressType, mlir::Type,
+                                                detail::AddressTypeStorage> {
 public:
   /// Inherit some necessary constructors from 'TypeBase'.
   using Base::Base;
 
-  /// Create an instance of a `AddressType` with the given element types. There
-  /// *must* be atleast one element type.
+  /// Create an instance of `AddressType` with the given element types. There
+  /// *must* be at least one element type.
   static AddressType get(mlir::Type elementType);
 
   /// Returns the element types of this struct type.
@@ -50,15 +49,15 @@ public:
 };
 
 /// This class defines the SCL array type.
-class ArrayType
-  : public mlir::Type::TypeBase<ArrayType, mlir::Type,
-                                detail::ArrayTypeStorage> {
+class ArrayType : public mlir::Type::TypeBase<ArrayType, mlir::Type,
+                                              detail::ArrayTypeStorage> {
 public:
   /// Inherit some necessary constructors from 'TypeBase'.
   using Base::Base;
   using DimTy = std::pair<int32_t, int32_t>;
 
-  /// Create an instance of a `ArrayType` with the given dimensions and element type.
+  /// Create an instance of `ArrayType` with the given dimensions and element
+  /// type.
   static ArrayType get(llvm::ArrayRef<DimTy> dimensions,
                        mlir::Type elementType);
 
@@ -73,9 +72,8 @@ public:
 /// 'Type::TypeBase'. It takes as template parameters the concrete type
 /// (StructType), the base class to use (Type), and the storage class
 /// (StructTypeStorage).
-class StructType
-  : public mlir::Type::TypeBase<StructType, mlir::Type,
-                                detail::StructTypeStorage> {
+class StructType : public mlir::Type::TypeBase<StructType, mlir::Type,
+                                               detail::StructTypeStorage> {
 public:
   /// Inherit some necessary constructors from 'TypeBase'.
   using Base::Base;
@@ -91,10 +89,8 @@ public:
   size_t getNumElementTypes() { return getElementTypes().size(); }
 };
 
-
-class IntegerType
-  : public mlir::Type::TypeBase<IntegerType, mlir::Type,
-                                detail::BitWidthStorage> {
+class IntegerType : public mlir::Type::TypeBase<IntegerType, mlir::Type,
+                                                detail::BitWidthStorage> {
 public:
   using Base::Base;
 
@@ -104,9 +100,8 @@ public:
   int getWidth();
 };
 
-class LogicalType
-  : public mlir::Type::TypeBase<LogicalType, mlir::Type,
-                                detail::BitWidthStorage> {
+class LogicalType : public mlir::Type::TypeBase<LogicalType, mlir::Type,
+                                                detail::BitWidthStorage> {
 public:
   using Base::Base;
 
@@ -117,13 +112,12 @@ public:
 };
 
 class RealType
-  : public mlir::Type::TypeBase<RealType, mlir::Type, mlir::TypeStorage> {
+    : public mlir::Type::TypeBase<RealType, mlir::Type, mlir::TypeStorage> {
 public:
   using Base::Base;
 };
 
 } // end namespace scl
 } // end namespace mlir
-
 
 #endif // SCLANG_DIALECT_SCLTYPES_H_

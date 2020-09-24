@@ -66,8 +66,13 @@ static cl::opt<enum InputType> inputType(
 
 namespace {
 enum Action {
-  None, DumpAST, DumpMLIR, DumpMLIRStd, DumpMLIRLLVM,
-  DumpLLVMIR, RunJIT
+  None,
+  DumpAST,
+  DumpMLIR,
+  DumpMLIRStd,
+  DumpMLIRLLVM,
+  DumpLLVMIR,
+  RunJIT
 };
 }
 static cl::opt<enum Action> emitAction(
@@ -77,9 +82,8 @@ static cl::opt<enum Action> emitAction(
     cl::values(clEnumValN(DumpMLIRStd, "mlir-std",
                           "output the MLIR dump after std lowering")),
     cl::values(clEnumValN(DumpMLIRLLVM, "mlir-llvm",
-                         "output the MLIR dump after llvm lowering")),
-    cl::values(clEnumValN(DumpLLVMIR, "llvm",
-                          "output the LLVM IR dump")),
+                          "output the MLIR dump after llvm lowering")),
+    cl::values(clEnumValN(DumpLLVMIR, "llvm", "output the LLVM IR dump")),
     cl::values(clEnumValN(RunJIT, "jit", "run the code")));
 
 static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
@@ -98,8 +102,7 @@ std::unique_ptr<sclang::ModuleAST> parseInputFile(llvm::StringRef filename) {
   return parser.ParseModule();
 }
 
-int loadMLIR(mlir::MLIRContext &context,
-             mlir::OwningModuleRef &module) {
+int loadMLIR(mlir::MLIRContext &context, mlir::OwningModuleRef &module) {
   // Handle '.scl' input to the compiler.
   if (inputType != InputType::MLIR &&
       !llvm::StringRef(inputFilename).endswith(".mlir")) {

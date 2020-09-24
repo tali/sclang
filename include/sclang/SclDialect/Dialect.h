@@ -48,13 +48,12 @@ public:
                                  Location loc) override;
 
   mlir::Type parseType(mlir::DialectAsmParser &parser) const override;
-  void printType(mlir::Type type, mlir::DialectAsmPrinter &printer) const override;
+  void printType(mlir::Type type,
+                 mlir::DialectAsmPrinter &printer) const override;
 };
-
 
 } // end namespace scl
 } // end namespace mlir
-
 
 /// Include the auto-generated header file containing the declarations of the
 /// toy operations.
