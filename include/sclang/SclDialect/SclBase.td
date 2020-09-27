@@ -24,7 +24,6 @@
 
 include "mlir/IR/OpBase.td"
 include "mlir/IR/SymbolInterfaces.td"
-include "mlir/Interfaces/CallInterfaces.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
 class AssemblyFormat<string format> {

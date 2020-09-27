@@ -1,7 +1,7 @@
 // RUN: sclang-gen --emit=mlir %s | FileCheck %s
 
 // CHECK:      scl.function @abs(%arg0: !scl.int) -> !scl.int
-// CHECK-NEXT:   [[ABS:%[0-9]+]] = scl.tmpvar "abs" : !scl.address<!scl.int>
+// CHECK-NEXT:   %abs = scl.tmpvar "abs" : !scl.address<!scl.int>
 function abs : int
 
 var_input
@@ -9,33 +9,33 @@ var_input
 end_var;
 
 begin
-// CHECK: [[C0:%[0-9]+]] = scl.constant 0 : i16 -> !scl.int
+// CHECK: [[C0:%c0[_0-9]*]] = scl.constant 0 : i16 -> !scl.int
 // CHECK: [[LT:%[0-9]+]] = scl.cmplt %arg0, [[C0]]
 // CHECK: scl.if [[LT]]
   if in < 0 then
 
 // CHECK: [[NEG:%[0-9]+]] = scl.negate %arg0
-// CHECK: scl.store [[ABS]] : !scl.address<!scl.int> = [[NEG]]
+// CHECK: scl.store %abs : !scl.address<!scl.int> = [[NEG]]
     abs := -in;
 
 // CHECK: scl.end
-// CHECK: [[C0:%[0-9]+]] = scl.constant 0 : i16 -> !scl.int
+// CHECK: [[C0:%c0[_0-9]*]] = scl.constant 0 : i16 -> !scl.int
 // CHECK: [[GT:%[0-9]+]] = scl.cmpgt %arg0, [[C0]]
 // CHECK: scl.if [[GT]]
   elsif in > 0 then
 
-// CHECK: scl.store [[ABS]] : !scl.address<!scl.int> = %arg0
+// CHECK: scl.store %abs : !scl.address<!scl.int> = %arg0
     abs := in;
 
 // CHECK: scl.end
   else
 
-// CHECK: [[C0:%[0-9]+]] = scl.constant 0 : i16 -> !scl.int
-// CHECK: scl.store [[ABS]] : !scl.address<!scl.int> = [[C0]]
+// CHECK: [[C0:%c0[_0-9]*]] = scl.constant 0 : i16 -> !scl.int
+// CHECK: scl.store %abs : !scl.address<!scl.int> = [[C0]]
     abs := 0;
 
 // CHECK: scl.end
   end_if;
 
-// CHECK: scl.return.value [[ABS]] : !scl.address<!scl.int>
+// CHECK: scl.return.value %abs : !scl.address<!scl.int>
 end_function

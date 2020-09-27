@@ -48,6 +48,26 @@ using namespace mlir::scl;
 ///
 OpFoldResult ConstantOp::fold(ArrayRef<Attribute> operands) { return value(); }
 
+void ConstantOp::getAsmResultNames(
+    function_ref<void(Value, StringRef)> setNameFn) {
+  if (auto intCst = value().dyn_cast<IntegerAttr>()) {
+    LogicalType logTy = getType().dyn_cast<LogicalType>();
+
+    // Sugar BOOL constants with 'true' and 'false'.
+    if (logTy && logTy.getWidth() == 1)
+      return setNameFn(getResult(), (intCst.getInt() ? "true" : "false"));
+
+    // Otherwise, use the value.
+    SmallString<32> specialNameBuffer;
+    llvm::raw_svector_ostream specialName(specialNameBuffer);
+    specialName << 'c' << intCst.getInt();
+    setNameFn(getResult(), specialName.str());
+
+  } else {
+    setNameFn(getResult(), "cst");
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // MARK: FunctionOp
 //===----------------------------------------------------------------------===//
@@ -131,6 +151,14 @@ CallInterfaceCallable CallFcOp::getCallableForCallee() {
 }
 
 Operation::operand_range CallFcOp::getArgOperands() { return arguments(); }
+
+// MARK: TempVarOp
+
+void TempVariableOp::getAsmResultNames(
+    function_ref<void(Value, StringRef)> setNameFn) {
+  setNameFn(getResult(), name());
+}
+
 
 //===----------------------------------------------------------------------===//
 // TableGen'd op method definitions

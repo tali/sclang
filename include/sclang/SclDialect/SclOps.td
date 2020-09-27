@@ -23,6 +23,8 @@
 #define SCL_OPS
 
 include "sclang/SclDialect/SclBase.td"
+include "mlir/IR/OpAsmInterface.td"
+include "mlir/Interfaces/CallInterfaces.td"
 
 
 //
@@ -108,7 +110,8 @@ def FunctionOp : TopLevelOp<"function", [
 // MARK: variable handling
 //
 
-def TempVariableOp : SCL_Op<"tmpvar"> {
+def TempVariableOp : SCL_Op<"tmpvar",
+    [DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
   let summary = "allocate stack memory for a temporary variable";
   let description = [{ TBD }];
   let arguments = (ins StrAttr:$name);
@@ -137,7 +140,8 @@ def IntegerCastOp : SCL_Op<"int.cast", [NoSideEffect]> {
   let assemblyFormat = "attr-dict $value `:` type($value) `to` type($result)";
 }
 
-def ConstantOp : SCL_Op<"constant", [ConstantLike, NoSideEffect]> {
+def ConstantOp : SCL_Op<"constant",
+    [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
   let summary = "literal constant";
   let arguments = (ins AnyAttr:$value);
   let results = (outs AnyType:$result);

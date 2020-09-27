@@ -20,8 +20,8 @@ function caller : int
 
 begin
 
-// CHECK-DAG: [[C2:%[0-9]+]] = scl.constant 2 : i16
-// CHECK-DAG: [[C3:%[0-9]+]] = scl.constant 3 : i16
+// CHECK-DAG: [[C2:%c2[_0-9]*]] = scl.constant 2 : i16
+// CHECK-DAG: [[C3:%c3[_0-9]*]] = scl.constant 3 : i16
 // CHECK-DAG: scl.call.fc @callee([[C2]], [[C3]]) : (!scl.int, !scl.int) -> !scl.int
   caller := callee(2, 3);
 
