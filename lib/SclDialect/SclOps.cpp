@@ -152,6 +152,7 @@ CallInterfaceCallable CallFcOp::getCallableForCallee() {
 
 Operation::operand_range CallFcOp::getArgOperands() { return arguments(); }
 
+
 // MARK: TempVarOp
 
 void TempVariableOp::getAsmResultNames(

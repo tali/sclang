@@ -1,28 +1,67 @@
 // RUN: sclang-gen --emit=mlir-std %s | FileCheck %s
 
-// CHECK-LABEL: func @callee(%arg0: i16, %arg1: i16) -> i16
-function callee : int
+// CHECK-LABEL: func @callee_1(%arg0: i16) -> i16
+function callee_1 : int
 
 var_input
-  a : int;
-  b : int;
+a : int;
 end_var
 
 begin
 
-  callee := a * 2 + b;
+callee_1 := a * 2;
 
 end_function
 
 
-// CHECK-LABEL: func @caller() -> i16
-function caller : int
+// CHECK-LABEL: func @caller_1() -> i16
+function caller_1 : int
+
+begin
+
+// CHECK-DAG: [[C1:%[a-z_0-9]+]] = constant 1 : i16
+// CHECK-DAG: call @callee_1([[C1]]) : (i16) -> i16
+caller_1 := callee_1(1);
+
+end_function
+
+
+// CHECK-LABEL: func @callee_2(%arg0: i16, %arg1: i16) -> i16
+function callee_2 : int
+
+var_input
+a : int := 0;
+b : int := 1;
+end_var
+
+begin
+
+callee_2 := a * b;
+
+end_function
+
+
+// CHECK-LABEL: func @caller_2() -> i16
+function caller_2 : int
 
 begin
 
 // CHECK-DAG: [[C2:%[a-z_0-9]+]] = constant 2 : i16
 // CHECK-DAG: [[C3:%[a-z_0-9]+]] = constant 3 : i16
-// CHECK-DAG: call @callee([[C2]], [[C3]]) : (i16, i16) -> i16
-  caller := callee(2, 3);
+// CHECK-DAG: call @callee_2([[C2]], [[C3]]) : (i16, i16) -> i16
+caller_2 := callee_2(a:=2, b:=3);
+
+end_function
+
+
+// CHECK-LABEL: func @caller_2_reorder() -> i16
+function caller_2_reorder : int
+
+begin
+
+// CHECK-DAG: [[C2:%[a-z_0-9]+]] = constant 2 : i16
+// CHECK-DAG: [[C3:%[a-z_0-9]+]] = constant 3 : i16
+// CHECK-DAG: call @callee_2([[C2]], [[C3]]) : (i16, i16) -> i16
+caller_2_reorder := callee_2(b:=3, a:=2);
 
 end_function

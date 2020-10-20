@@ -192,6 +192,7 @@ private:
     llvm::ScopedHashTableScope<StringRef, VariableSymbol> var_scope(
         symbolTable);
 
+    mlir::MutableDictionaryAttr arguments;
     std::vector<mlir::Type> input_types;
     std::vector<llvm::StringRef> input_names;
     std::vector<mlir::Type> output_types;
@@ -254,6 +255,8 @@ private:
     builder.setInsertionPointToStart(&entryBlock);
 
     // Declare all the function arguments in the symbol table.
+    auto nameId = mlir::Identifier::get("scl.name", builder.getContext());
+    int argIndex = 0;
     for (const auto name_value :
          llvm::zip(input_types, input_names, entryBlock.getArguments())) {
       auto type = std::get<0>(name_value);
@@ -261,6 +264,9 @@ private:
       auto value = std::get<2>(name_value);
       if (failed(declare(name, type, value, false)))
         return nullptr;
+      auto nameAttr = builder.getStringAttr(name);
+      function.setArgAttr(argIndex, nameId, nameAttr);
+      argIndex++;
     }
 
     // prologue: stack space for temporary variables
@@ -562,6 +568,7 @@ private:
 
   mlir::Value mlirGen(const FunctionCallAST *expr) {
     auto location = loc(expr->loc());
+    auto context = builder.getContext();
 
     // The function name is parsed as a variable
     auto callee = dyn_cast<SimpleVariableAST>(expr->getFunction());
@@ -574,13 +581,32 @@ private:
 
     // get arguments
     SmallVector<mlir::Value, 4> arguments;
+    SmallVector<mlir::Attribute, 4> argNames;
     for (auto &arg : expr->getParameters()) {
-      arguments.push_back(mlirGen(arg.get()));
+      auto binary = dyn_cast<BinaryExpressionAST>(arg.get());
+      if (binary && binary->getOp() == tok_assignment) {
+        auto lhs = binary->getLhs();
+        auto name = dyn_cast<SimpleVariableAST>(lhs);
+        if (!name || name->isSymbol()) {
+          emitError(loc(lhs->loc()), "invalid parameter name");
+          return nullptr;
+        }
+        auto nameAttr = mlir::StringAttr::get(name->getName(), context);
+        argNames.push_back(nameAttr);
+        arguments.push_back(mlirGen(binary->getRhs()));
+      } else {
+        if (expr->getParameters().size() != 1) {
+          emitError(loc(arg->loc()), "parameter without name");
+          return nullptr;
+        }
+        arguments.push_back(mlirGen(arg.get()));
+      }
     }
+    auto argNamesAttr = mlir::ArrayAttr::get(argNames, context);
 
     mlir::Type resultType = getType(tok_int); // TODO: TBD
 
-    return builder.create<CallFcOp>(location, resultType, name, arguments);
+    return builder.create<CallFcOp>(location, resultType, name, arguments, argNamesAttr);
   }
 
   mlir::Type getType(Token token) {

@@ -38,7 +38,8 @@ def CallFcOp : SCL_Op<"call.fc", [
 
   let arguments = (ins
     FlatSymbolRefAttr:$callee,
-    Variadic<Scl_Type>:$arguments
+    Variadic<Scl_Type>:$arguments,
+    StrArrayAttr:$argNames
   );
 
   let results = (outs
@@ -49,6 +50,8 @@ def CallFcOp : SCL_Op<"call.fc", [
     $callee `(` $arguments `)` attr-dict `:`
     functional-type($arguments, results)
   }];
+
+  let hasCanonicalizer = 1;
 }
 
 def FunctionOp : TopLevelOp<"function", [

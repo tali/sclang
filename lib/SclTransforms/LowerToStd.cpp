@@ -83,6 +83,7 @@ struct CallFcOpLowering : public OpConversionPattern<scl::CallFcOp> {
   matchAndRewrite(scl::CallFcOp op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
     scl::CallFcOp::Adaptor transformed(operands);
+
     Type returnType = getTypeConverter()->convertType(op.getType());
     rewriter.replaceOpWithNewOp<CallOp>(op, op.callee(), returnType,
                                         transformed.arguments());

@@ -1,6 +1,6 @@
 // RUN: sclang-gen --emit=mlir %s | FileCheck %s
 
-// CHECK-LABEL: scl.function @abs(%arg0: !scl.real) -> !scl.real
+// CHECK-LABEL: scl.function @abs(%arg0: !scl.real {scl.name = "in"}) -> !scl.real
 // CHECK-DAG:   %abs = scl.tmpvar "abs" : !scl.address<!scl.real>
 function abs : real
 
