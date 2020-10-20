@@ -6,14 +6,18 @@ var
  a : INT := -1;
 // CHECK-DAG: %a = scl.tmpvar "a" : !scl.address<!scl.int>
 // CHECK-DAG: [[constA:%c-1[_0-9]*]] = scl.constant -1 : i16 -> !scl.int
-// CHECK:     scl.store %a : !scl.address<!scl.int> = [[constA]] : !scl.int
+// CHECK-DAG: scl.store %a : !scl.address<!scl.int> = [[constA]] : !scl.int
 
  b : INT := -2;
 // CHECK-DAG: %b = scl.tmpvar "b" : !scl.address<!scl.int>
 // CHECK-DAG: [[constB:%c-2[_0-9]*]] = scl.constant -2 : i16 -> !scl.int
-// CHECK:     scl.store %b : !scl.address<!scl.int> = [[constB]] : !scl.int
+// CHECK-DAG: scl.store %b : !scl.address<!scl.int> = [[constB]] : !scl.int
 
 end_var;
+
+// CHECK-DAG:   [[const2:%c2[_0-9]*]] = scl.constant 2 : i16 -> !scl.int
+// CHECK-DAG:   [[const3:%c3[_0-9]*]] = scl.constant 3 : i16 -> !scl.int
+// CHECK-DAG:   [[const5:%c5[_0-9]*]] = scl.constant 5 : i16 -> !scl.int
 
 begin
   if a < b then
@@ -24,7 +28,6 @@ begin
 
     a := b * 5;
 // CHECK-DAG:   [[valueB:%[+-9]+]] = scl.load %b : !scl.address<!scl.int> : !scl.int
-// CHECK-DAG:   [[const5:%c5[_0-9]*]] = scl.constant 5 : i16 -> !scl.int
 // CHECK-DAG:   [[mul5:%[0-9]+]] = scl.mul [[valueB]], [[const5]] : !scl.int
 // CHECK:       scl.store %a : !scl.address<!scl.int> = [[mul5]] : !scl.int
 
@@ -33,15 +36,13 @@ begin
 // CHECK:     } else  {
 
     b := 2 + 3 * a;
-// CHECK-DAG:   [[const2:%c2[_0-9]*]] = scl.constant 2 : i16 -> !scl.int
-// CHECK-DAG:   [[const3:%c3[_0-9]*]] = scl.constant 3 : i16 -> !scl.int
 // CHECK-DAG:   [[valueA:%[0-9]+]] = scl.load %a : !scl.address<!scl.int> : !scl.int
-// CHECK-DAG:   [[mul3:%[0-9]+]] = scl.mul [[const3]], [[valueA]] : !scl.int
-// CHECK-DAG:   [[add2:%[0-9]+]] = scl.add [[const2]], [[mul3]] : !scl.int
+// CHECK-DAG:   [[mul3:%[0-9]+]] = scl.mul [[valueA]], [[const3]] : !scl.int
+// CHECK-DAG:   [[add2:%[0-9]+]] = scl.add [[mul3]], [[const2]] : !scl.int
 // CHECK:       scl.store %b : !scl.address<!scl.int> = [[add2]] : !scl.int
 
   end_if;
-// CHECK-DAG:   scl.end
+// CHECK:   scl.end
 // CHECK:     }
 
   return;

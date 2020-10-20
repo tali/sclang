@@ -1,7 +1,7 @@
 // RUN: sclang-gen --emit=mlir %s | FileCheck %s
 
-// CHECK:      scl.function @abs(%arg0: !scl.real) -> !scl.real
-// CHECK-NEXT:   %abs = scl.tmpvar "abs" : !scl.address<!scl.real>
+// CHECK-LABEL: scl.function @abs(%arg0: !scl.real) -> !scl.real
+// CHECK-DAG:   %abs = scl.tmpvar "abs" : !scl.address<!scl.real>
 function abs : real
 
 var_input
@@ -9,33 +9,31 @@ var_input
 end_var;
 
 begin
-// CHECK: [[C0:%cst[_0-9]*]] = scl.constant 0.000000e+00 : f32 -> !scl.real
-// CHECK: [[LT:%[0-9]+]] = scl.cmplt %arg0, [[C0]]
-// CHECK: scl.if [[LT]]
+// CHECK-DAG:  [[C0:%cst[_0-9]*]] = scl.constant 0.000000e+00 : f32 -> !scl.real
+// CHECK-DAG:  [[LT:%[0-9]+]] = scl.cmplt %arg0, [[C0]]
+// CHECK:      scl.if [[LT]]
   if in < 0.0 then
 
-// CHECK: [[NEG:%[0-9]+]] = scl.negate %arg0
-// CHECK: scl.store %abs : !scl.address<!scl.real> = [[NEG]]
+// CHECK-DAG:  [[NEG:%[0-9]+]] = scl.negate %arg0
+// CHECK:      scl.store %abs : !scl.address<!scl.real> = [[NEG]]
     abs := -in;
 
-// CHECK: scl.end
-// CHECK: [[C0:%cst[_0-9]*]] = scl.constant 0.000000e+00 : f32 -> !scl.real
-// CHECK: [[GT:%[0-9]+]] = scl.cmpgt %arg0, [[C0]]
-// CHECK: scl.if [[GT]]
+// CHECK:      scl.end
+// CHECK:      [[GT:%[0-9]+]] = scl.cmpgt %arg0, [[C0]]
+// CHECK:      scl.if [[GT]]
   elsif in > 0.0 then
 
-// CHECK: scl.store %abs : !scl.address<!scl.real> = %arg0
+// CHECK:      scl.store %abs : !scl.address<!scl.real> = %arg0
     abs := in;
 
-// CHECK: scl.end
+// CHECK:      scl.end
   else
 
-// CHECK: [[C0:%cst[_0-9]*]] = scl.constant 0.000000e+00 : f32 -> !scl.real
-// CHECK: scl.store %abs : !scl.address<!scl.real> = [[C0]]
+// CHECK:      scl.store %abs : !scl.address<!scl.real> = [[C0]]
     abs := 0.0;
 
-// CHECK: scl.end
+// CHECK:      scl.end
   end_if;
 
-// CHECK: scl.return.value %abs : !scl.address<!scl.real>
+// CHECK:      scl.return.value %abs : !scl.address<!scl.real>
 end_function

@@ -123,6 +123,7 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
   mlir::PassManager pm(&context);
   // Apply any generic pass manager command line options and run the pipeline.
   applyPassManagerCLOptions(pm);
+  pm.addNestedPass<mlir::scl::FunctionOp>(mlir::createCanonicalizerPass());
 
   // Check to see what granularity of MLIR we are compiling to.
   bool isLoweringToStd = emitAction >= Action::DumpMLIRStd;

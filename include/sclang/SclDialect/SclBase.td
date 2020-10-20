@@ -36,6 +36,7 @@ class AssemblyFormat<string format> {
 def SCL_Dialect : Dialect {
   let name = "scl";
   let cppNamespace = "::mlir::scl";
+  let hasConstantMaterializer = 1;
 }
 
 def Scl_AddressType : Type<CPred<"$_self.isa<scl::AddressType>()">, "AddressType">;

@@ -52,6 +52,5 @@ mlir::Operation *SclDialect::materializeConstant(mlir::OpBuilder &builder,
                                                  mlir::Attribute value,
                                                  mlir::Type type,
                                                  mlir::Location loc) {
-  return builder.create<ConstantOp>(loc, type,
-                                    value.cast<mlir::DenseElementsAttr>());
+  return builder.create<ConstantOp>(loc, type, value);
 }
