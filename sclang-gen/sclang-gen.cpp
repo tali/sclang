@@ -163,7 +163,6 @@ int dumpAST() {
 }
 
 int main(int argc, char **argv) {
-  mlir::registerAllDialects();
   mlir::registerPassManagerCLOptions();
   cl::ParseCommandLineOptions(argc, argv, "SCL compiler\n");
 
@@ -172,7 +171,7 @@ int main(int argc, char **argv) {
 
   // If we aren't dumping the AST, then we are compiling with/to MLIR.
 
-  mlir::MLIRContext context(/*loadAllDialects=*/false);
+  mlir::MLIRContext context;
   // Load our Dialect in this MLIR Context.
   context.getOrLoadDialect<mlir::scl::SclDialect>();
 
