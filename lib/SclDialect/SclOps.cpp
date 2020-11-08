@@ -125,12 +125,10 @@ LogicalResult FunctionOp::verifyBody() {
 }
 
 void FunctionOp::build(OpBuilder &builder, OperationState &state,
-                       StringRef name, FunctionType type,
-                       ArrayRef<NamedAttribute> attrs) {
+                       StringRef name, FunctionType type) {
   state.addAttribute(SymbolTable::getSymbolAttrName(),
                      builder.getStringAttr(name));
   state.addAttribute(getTypeAttrName(), TypeAttr::get(type));
-  state.attributes.append(attrs.begin(), attrs.end());
   state.addRegion();
 }
 
@@ -192,7 +190,7 @@ LogicalResult FunctionBlockOp::verifyBody() {
 }
 
 void FunctionBlockOp::build(OpBuilder &builder, OperationState &state,
-                       StringRef name, ArrayRef<NamedAttribute> attrs) {
+                       StringRef name) {
   Type idb = InstanceDbType::get(builder.getContext(), name);
   SmallVector<Type, 1> inputs = { idb };
   SmallVector<Type, 0> results = {};
@@ -201,7 +199,6 @@ void FunctionBlockOp::build(OpBuilder &builder, OperationState &state,
   state.addAttribute(SymbolTable::getSymbolAttrName(),
                      builder.getStringAttr(name));
   state.addAttribute(getTypeAttrName(), TypeAttr::get(func_type));
-  state.attributes.append(attrs.begin(), attrs.end());
 
   state.addRegion();
 }

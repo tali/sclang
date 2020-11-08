@@ -81,10 +81,9 @@ def FunctionOp : TopLevelOp<"function", [
   let printer = [{ return ::print(*this, p); }];
   let verifier = [{ return success(); }];
 
-  let builders = [OpBuilder<[{
-    StringRef name, FunctionType type,
-    ArrayRef<NamedAttribute> attrs = {}
-  }]>];
+  let builders = [
+    OpBuilderDAG<(ins "StringRef":$name, "FunctionType":$type)>
+  ];
 
   let extraClassDeclaration = [{
   private:
@@ -135,9 +134,9 @@ def FunctionBlockOp : TopLevelOp<"function_block", [
   let printer = [{ return ::print(*this, p); }];
   let verifier = [{ return success(); }];
 
-  let builders = [OpBuilder<[{
-    StringRef name, ArrayRef<NamedAttribute> attrs = {}
-  }]>];
+  let builders = [
+    OpBuilderDAG<(ins "StringRef":$name)>
+  ];
 
   let extraClassDeclaration = [{
   private:
@@ -179,9 +178,9 @@ def VariableOp : SCL_Op<"var", [Symbol]> {
 
   let assemblyFormat = "(`input` $input^)? (`output` $output^)? $sym_name attr-dict `:` $type";
 
-  let builders = [OpBuilder<[{
-    Type type, bool isInput, bool isOutput, StringRef name
-  }]>];
+  let builders = [
+    OpBuilderDAG<(ins "Type":$type, "bool":$isInput, "bool":$isOutput, "StringRef":$name)>
+  ];
 }
 
 def TempVariableOp : SCL_Op<"tmpvar",
@@ -234,7 +233,7 @@ def LoadOp : SCL_Op<"load", [/*SameOperandsAndResultElementType*/]> {
   let assemblyFormat = "$address `:` type($address) attr-dict `:` type($result)";
 
   let builders = [
-    OpBuilder<"Value address", [{
+    OpBuilderDAG<(ins "Value":$address), [{
       auto elementType = address.getType().cast<AddressType>().getElementType();
       build($_builder, $_state, elementType, address);
     }]>

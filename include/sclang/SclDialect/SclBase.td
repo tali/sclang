@@ -81,9 +81,9 @@ class CompareOp<string mnemonic, list<OpTrait> traits = []> :
     Arguments<(ins AnyType:$lhs, AnyType:$rhs)>,
     Results<(outs Scl_Bool:$result)>,
     AssemblyFormat<"attr-dict $lhs `,` $rhs `:` type($rhs)"> {
-      let builders = [OpBuilder<"OpBuilder &builder, OperationState &result, Value lhs, Value rhs", [{
-        auto resType = LogicalType::get(builder.getContext(), 1);
-        build(builder, result, resType, lhs, rhs);
+      let builders = [OpBuilderDAG<(ins "Value":$lhs, "Value":$rhs), [{
+        auto resType = LogicalType::get($_builder.getContext(), 1);
+        build($_builder, $_state, resType, lhs, rhs);
       }]>];
     }
 class UnaryArithmeticOp<string mnemonic, list<OpTrait> traits = []> :
