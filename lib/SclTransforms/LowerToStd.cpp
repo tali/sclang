@@ -458,7 +458,8 @@ void SclToStdLoweringPass::runOnOperation() {
       TempVariableOpLowering, UnaryMinusOpLowering, UnaryNotOpLowering,
       XOrOpLowering>(converter, &getContext());
 
-  if (failed(applyPartialConversion(getOperation(), target, patterns)))
+  if (failed(applyPartialConversion(getOperation(), target,
+                                    std::move(patterns))))
     signalPassFailure();
 }
 
