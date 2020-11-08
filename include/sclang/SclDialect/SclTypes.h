@@ -29,8 +29,9 @@ namespace scl {
 namespace detail {
 struct AddressTypeStorage;
 struct ArrayTypeStorage;
-struct StructTypeStorage;
 struct BitWidthStorage;
+struct InstanceDbTypeStorage;
+struct StructTypeStorage;
 } // end namespace detail
 
 /// This class defines the SCL addres type.
@@ -67,26 +68,15 @@ public:
   mlir::Type getElementType();
 };
 
-/// This class defines the SCL struct type. It represents a collection of
-/// element types. All derived types in MLIR must inherit from the CRTP class
-/// 'Type::TypeBase'. It takes as template parameters the concrete type
-/// (StructType), the base class to use (Type), and the storage class
-/// (StructTypeStorage).
-class StructType : public mlir::Type::TypeBase<StructType, mlir::Type,
-                                               detail::StructTypeStorage> {
+/// This class defines the SCL type for an instance DB
+class InstanceDbType : public mlir::Type::TypeBase<InstanceDbType, mlir::Type,detail::InstanceDbTypeStorage> {
 public:
-  /// Inherit some necessary constructors from 'TypeBase'.
   using Base::Base;
 
-  /// Create an instance of a `StructType` with the given element types. There
-  /// *must* be atleast one element type.
-  static StructType get(llvm::ArrayRef<mlir::Type> elementTypes);
+  /// Create an instance of `InstanceDbType` given a reference to the function block.
+  static InstanceDbType get(mlir::MLIRContext *ctx, StringRef fbSymbol);
 
-  /// Returns the element types of this struct type.
-  llvm::ArrayRef<mlir::Type> getElementTypes();
-
-  /// Returns the number of element type held by this struct.
-  size_t getNumElementTypes() { return getElementTypes().size(); }
+  StringRef getFbSymbol();
 };
 
 class IntegerType : public mlir::Type::TypeBase<IntegerType, mlir::Type,
@@ -115,6 +105,28 @@ class RealType
     : public mlir::Type::TypeBase<RealType, mlir::Type, mlir::TypeStorage> {
 public:
   using Base::Base;
+};
+
+/// This class defines the SCL struct type. It represents a collection of
+/// element types. All derived types in MLIR must inherit from the CRTP class
+/// 'Type::TypeBase'. It takes as template parameters the concrete type
+/// (StructType), the base class to use (Type), and the storage class
+/// (StructTypeStorage).
+class StructType : public mlir::Type::TypeBase<StructType, mlir::Type,
+                                               detail::StructTypeStorage> {
+public:
+  /// Inherit some necessary constructors from 'TypeBase'.
+  using Base::Base;
+
+  /// Create an instance of a `StructType` with the given element types. There
+  /// *must* be atleast one element type.
+  static StructType get(llvm::ArrayRef<mlir::Type> elementTypes);
+
+  /// Returns the element types of this struct type.
+  llvm::ArrayRef<mlir::Type> getElementTypes();
+
+  /// Returns the number of element type held by this struct.
+  size_t getNumElementTypes() { return getElementTypes().size(); }
 };
 
 } // end namespace scl

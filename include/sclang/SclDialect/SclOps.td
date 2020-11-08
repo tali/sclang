@@ -108,10 +108,81 @@ def FunctionOp : TopLevelOp<"function", [
   }];
 }
 
+def FunctionBlockOp : TopLevelOp<"function_block", [
+    AutomaticAllocationScope, DeclareOpInterfaceMethods<CallableOpInterface>,
+    FunctionLike, IsolatedFromAbove, Symbol
+  ]> {
+  let summary = "Declare or define a function block";
+
+  let description = [{
+    This op declares or defines an SCL function block using one region, which
+    contains one or more blocks.
+
+    This op itself takes no operands and generates no results. Its region
+    takes one arguments with the address to its IDB and returns zero values.
+  }];
+
+  let arguments = (ins
+    TypeAttr:$type,
+    StrAttr:$sym_name
+  );
+
+  let results = (outs);
+
+  let regions = (region AnyRegion:$body);
+
+  let parser = [{ return ::parseFunctionBlockOp(parser, result); }];
+  let printer = [{ return ::print(*this, p); }];
+  let verifier = [{ return success(); }];
+
+  let builders = [OpBuilder<[{
+    StringRef name, ArrayRef<NamedAttribute> attrs = {}
+  }]>];
+
+  let extraClassDeclaration = [{
+  private:
+    // This trait needs access to the hooks defined below.
+    friend class OpTrait::FunctionLike<FunctionBlockOp>;
+
+    /// Returns the number of arguments. Hook for OpTrait::FunctionLike.
+    unsigned getNumFuncArguments() { return getType().getNumInputs(); }
+
+    /// Returns the number of results. Hook for OpTrait::FunctionLike.
+    unsigned getNumFuncResults() { return getType().getNumResults(); }
+
+    /// Hook for OpTrait::FunctionLike, called after verifying that the 'type'
+    /// attribute is present and checks if it holds a function type. Ensures
+    /// getType, getNumFuncArguments, and getNumFuncResults can be called safely
+    LogicalResult verifyType();
+
+    /// Hook for OpTrait::FunctionLike, called after verifying the function
+    /// type and the presence of the (potentially empty) function body.
+    LogicalResult verifyBody();
+  }];
+}
+
 
 //
 // MARK: variable handling
 //
+
+def VariableOp : SCL_Op<"var", [Symbol]> {
+  let summary = "declare a static/input/output variable in a FB";
+
+  let arguments = (ins
+    TypeAttr:$type,
+    OptionalAttr<UnitAttr>:$input,
+    OptionalAttr<UnitAttr>:$output,
+    StrAttr:$sym_name
+  );
+  let results = (outs);
+
+  let assemblyFormat = "(`input` $input^)? (`output` $output^)? $sym_name attr-dict `:` $type";
+
+  let builders = [OpBuilder<[{
+    Type type, bool isInput, bool isOutput, StringRef name
+  }]>];
+}
 
 def TempVariableOp : SCL_Op<"tmpvar",
     [DeclareOpInterfaceMethods<OpAsmOpInterface>]> {

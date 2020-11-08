@@ -42,10 +42,11 @@ SclDialect::SclDialect(mlir::MLIRContext *ctx)
       >();
   addTypes<AddressType>();
   addTypes<ArrayType>();
-  addTypes<StructType>();
+  addTypes<InstanceDbType>();
   addTypes<IntegerType>();
   addTypes<LogicalType>();
   addTypes<RealType>();
+  addTypes<StructType>();
 }
 
 mlir::Operation *SclDialect::materializeConstant(mlir::OpBuilder &builder,

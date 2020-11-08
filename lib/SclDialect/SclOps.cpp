@@ -144,6 +144,79 @@ ArrayRef<Type> FunctionOp::getCallableResults() {
   return getType().getResults();
 }
 
+//===----------------------------------------------------------------------===//
+// MARK: FunctionBlockOp
+//===----------------------------------------------------------------------===//
+
+static ParseResult parseFunctionBlockOp(OpAsmParser &parser, OperationState &state) {
+  auto buildFuncType = [](Builder &builder, ArrayRef<Type> argTypes,
+                          ArrayRef<Type> results, impl::VariadicFlag,
+                          std::string &) {
+    return builder.getFunctionType(argTypes, results);
+  };
+
+  return mlir::impl::parseFunctionLikeOp(parser, state, /*allowVariadic=*/false,
+                                         buildFuncType);
+}
+
+static void print(FunctionBlockOp fnOp, OpAsmPrinter &printer) {
+  FunctionType fnType = fnOp.getType();
+  mlir::impl::printFunctionLikeOp(printer, fnOp, fnType.getInputs(),
+                                  /*isVariadic=*/false, fnType.getResults());
+}
+
+LogicalResult FunctionBlockOp::verifyType() {
+  auto type = getTypeAttr().getValue();
+  if (!type.isa<FunctionType>())
+    return emitOpError("requires '" + getTypeAttrName() +
+                       "' attribute of function type");
+  if (getType().getNumInputs() != 1)
+    return emitOpError("must have one input");
+  if (getType().getNumResults() != 0)
+    return emitOpError("cannot have results");
+  return success();
+}
+
+LogicalResult FunctionBlockOp::verifyBody() {
+  FunctionType fnType = getType();
+  auto walkResult = walk([fnType](Operation *op) -> WalkResult {
+    if (auto retOp = dyn_cast<ReturnValueOp>(op)) {
+      return retOp.emitOpError(
+                "returns 1 value but enclosing function requires ")
+             << fnType.getNumResults() << " results";
+    }
+    return WalkResult::advance();
+  });
+
+  return failure(walkResult.wasInterrupted());
+}
+
+void FunctionBlockOp::build(OpBuilder &builder, OperationState &state,
+                       StringRef name, ArrayRef<NamedAttribute> attrs) {
+  Type idb = InstanceDbType::get(builder.getContext(), name);
+  SmallVector<Type, 1> inputs = { idb };
+  SmallVector<Type, 0> results = {};
+  FunctionType func_type = builder.getFunctionType(inputs, results);
+
+  state.addAttribute(SymbolTable::getSymbolAttrName(),
+                     builder.getStringAttr(name));
+  state.addAttribute(getTypeAttrName(), TypeAttr::get(func_type));
+  state.attributes.append(attrs.begin(), attrs.end());
+
+  state.addRegion();
+}
+
+// CallableOpInterface
+Region *FunctionBlockOp::getCallableRegion() {
+  return isExternal() ? nullptr : &body();
+}
+
+// CallableOpInterface
+ArrayRef<Type> FunctionBlockOp::getCallableResults() {
+  return getType().getResults();
+}
+
+
 // MARK: CallFcOp
 
 CallInterfaceCallable CallFcOp::getCallableForCallee() {
@@ -159,6 +232,22 @@ void TempVariableOp::getAsmResultNames(
     function_ref<void(Value, StringRef)> setNameFn) {
   setNameFn(getResult(), name());
 }
+
+
+// MARK: VariableOp
+
+void VariableOp::build(OpBuilder &builder, OperationState &state,
+                       Type type, bool isInput, bool isOutput, StringRef name) {
+  auto typeAttr = mlir::TypeAttr::get(type);
+  UnitAttr inAttr, outAttr;
+  if (isInput)
+    inAttr = builder.getUnitAttr();
+  if (isOutput)
+    outAttr = builder.getUnitAttr();
+  auto nameAttr = builder.getStringAttr(name);
+
+  build(builder, state, typeAttr, inAttr, outAttr, nameAttr);
+};
 
 
 //===----------------------------------------------------------------------===//

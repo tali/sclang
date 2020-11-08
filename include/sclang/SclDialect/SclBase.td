@@ -41,10 +41,11 @@ def SCL_Dialect : Dialect {
 
 def Scl_AddressType : Type<CPred<"$_self.isa<scl::AddressType>()">, "AddressType">;
 def Scl_ArrayType : Type<CPred<"$_self.isa<scl::ArrayType>()">, "ArrayType">;
-def Scl_StructType : Type<CPred<"$_self.isa<scl::StructType>()">, "StructType">;
+def Scl_InstanceDbType : Type<CPred<"$_self.isa<scl::InstanceDbType>()">, "IDB">;
 def Scl_IntegerType : Type<CPred<"$_self.isa<scl::IntegerType>()">, "IntegerType">;
 def Scl_LogicalType : Type<CPred<"$_self.isa<scl::LogicalType>()">, "LogicalType">;
 def Scl_RealType : Type<CPred<"$_self.isa<scl::RealType>()">, "RealType">;
+def Scl_StructType : Type<CPred<"$_self.isa<scl::StructType>()">, "StructType">;
 
 def Scl_Bool :
   Type<CPred<"$_self.isa<::LogicalType>() && $_self.cast<::LogicalType>().getWidth() == 1">, "bool">,
@@ -53,10 +54,11 @@ def Scl_Bool :
 // Any SCL type which can be used for function arguments
 def Scl_Type : AnyTypeOf<[
   Scl_ArrayType,
-  Scl_StructType,
+  Scl_InstanceDbType,
   Scl_IntegerType,
   Scl_LogicalType,
-  Scl_RealType
+  Scl_RealType,
+  Scl_StructType
 ]>;
 def Scl_NumericType : AnyTypeOf<[Scl_IntegerType, Scl_RealType]>;
 
@@ -101,7 +103,7 @@ class TopLevelOp<string mnemonic, list<OpTrait> traits = []> :
   SCL_Op<mnemonic, !listconcat(traits, [InModuleScope])>;
 
 class FuncTerminatorOp<string mnemonic, list<OpTrait> traits = []> :
-    SCL_Op<mnemonic, !listconcat(traits, [NoSideEffect, Terminator, HasParent<"FunctionOp">])>;
+    SCL_Op<mnemonic, !listconcat(traits, [NoSideEffect, Terminator])>;
 
 
 #endif // SCL_BASE

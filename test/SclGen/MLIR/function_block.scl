@@ -1,0 +1,41 @@
+// RUN: sclang-gen --emit=mlir %s | FileCheck %s
+
+// CHECK-LABEL: scl.function_block @fb_1
+function_block fb_1
+
+// CHECK: scl.var input "a" : !scl.int
+var_input
+  a : int;
+end_var;
+
+// CHECK: scl.var output "b" : !scl.int
+var_output
+  b : int;
+end_var;
+
+begin
+
+//  b := a * 2;
+
+end_function_block
+
+
+(*
+
+data_block idb_1 : fb_1
+begin
+end_data_block;
+
+// COM:CHECK-LABEL: scl.function @caller_1
+function ifc_1 : int
+
+begin
+
+// COM:CHECK-DAG: [[C1:%c1[_0-9]*]] = scl.constant 1 : i16
+// COM:CHECK-DAG: scl.call.fc @callee_1([[C1]]) {argNames = ["a"]} : (!scl.int) -> !scl.int
+  idb_1.a := 1
+  idb_1.fb_1();
+  ifc_1 := idb_1.b;
+
+end_function
+*)

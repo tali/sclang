@@ -24,6 +24,7 @@
 
 #include "llvm/ADT/TypeSwitch.h"
 
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectImplementation.h"
 
 using namespace mlir;
@@ -349,6 +350,86 @@ mlir::Type parseStructType(mlir::DialectAsmParser &parser) {
 
 } // namespace
 
+// MARK: InstanceDbType
+
+namespace mlir {
+namespace scl {
+namespace detail {
+/// This class represents the internal storage of the SCL `InstanceDbType`.
+struct InstanceDbTypeStorage : public mlir::TypeStorage {
+  /// The `KeyTy` is a required type that provides an interface for the storage
+  /// instance. This type will be used when uniquing an instance of the type
+  /// storage. For our instance DB type, we will unique each instance structurally on
+  /// the name of the function block.
+  using KeyTy = llvm::StringRef;
+
+  /// A constructor for the type storage instance.
+  InstanceDbTypeStorage(llvm::StringRef fbSymbol)
+      : fbSymbol(fbSymbol) {}
+
+  /// Define the comparison function for the key type with the current storage
+  /// instance. This is used when constructing a new instance to ensure that we
+  /// haven't already uniqued an instance of the given key.
+  bool operator==(const KeyTy &key) const { return key == fbSymbol; }
+
+  /// Define a hash function for the key type. This is used when uniquing
+  /// instances of the storage, see the `StructType::get` method.
+  /// Note: This method isn't necessary as both llvm::ArrayRef and mlir::Type
+  /// have hash functions available, so we could just omit this entirely.
+  static llvm::hash_code hashKey(const KeyTy &key) { return hash_value(key); }
+
+  /// Define a construction method for creating a new instance of this storage.
+  /// This method takes an instance of a storage allocator, and an instance of a
+  /// `KeyTy`. The given allocator must be used for *all* necessary dynamic
+  /// allocations used to create the type storage and its internal.
+  static InstanceDbTypeStorage *construct(mlir::TypeStorageAllocator &allocator,
+                                      const KeyTy &key) {
+    // Copy the elements from the provided `KeyTy` into the allocator.
+    StringRef fbSymbol = allocator.copyInto(key);
+
+    // Allocate the storage instance and construct it.
+    return new (allocator.allocate<InstanceDbTypeStorage>())
+      InstanceDbTypeStorage(fbSymbol);
+  }
+
+  /// The following field contains the symbol name of the function block.
+  llvm::StringRef fbSymbol;
+};
+} // end namespace detail
+} // end namespace scl
+} // end namespace mlir
+
+/// Create an instance of a `InstanceDbType` with the given element types. There
+/// *must* be at least one element type.
+InstanceDbType InstanceDbType::get(mlir::MLIRContext *ctx, StringRef fbSymbol) {
+  return Base::get(ctx, fbSymbol);
+}
+
+StringRef InstanceDbType::getFbSymbol() {
+  return getImpl()->fbSymbol;
+}
+
+namespace {
+
+void print(InstanceDbType type, mlir::DialectAsmPrinter &printer) {
+  // Print the struct type according to the parser format.
+  printer << "idb<" << type.getFbSymbol() << '>';
+}
+
+/// Parse a struct type instance.
+mlir::Type parseInstanceDbType(mlir::DialectAsmParser &parser) {
+  // Parse a struct type in the following form:
+  //   instance-db-type ::= `idb` `<` fb-symbol `>`
+
+  StringRef fbSymbol;
+  if (parser.parseLess() || parser.parseKeyword(&fbSymbol) || parser.parseGreater())
+    return Type();
+
+  return InstanceDbType::get(parser.getBuilder().getContext(), fbSymbol);
+}
+
+} // namespace
+
 // MARK: integer and logical types
 
 namespace mlir {
@@ -423,6 +504,8 @@ mlir::Type SclDialect::parseType(mlir::DialectAsmParser &parser) const {
     return parseArrayType(parser);
   if (keyword == "struct")
     return parseStructType(parser);
+  if (keyword == "idb")
+    return parseInstanceDbType(parser);
 
   if (keyword == "char")
     return IntegerType::get(getContext(), 8);
@@ -453,6 +536,7 @@ void SclDialect::printType(mlir::Type type,
   TypeSwitch<Type>(type)
       .Case<AddressType>([&](AddressType type) { print(type, printer); })
       .Case<ArrayType>([&](ArrayType type) { print(type, printer); })
+      .Case<InstanceDbType>([&](InstanceDbType type) { print(type, printer); })
       .Case<StructType>([&](StructType type) { print(type, printer); })
       .Case<IntegerType>([&](IntegerType type) {
         switch (type.getWidth()) {

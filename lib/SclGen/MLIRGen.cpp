@@ -150,10 +150,14 @@ private:
 
   mlir::Operation *mlirGen(const UnitAST *unit) {
     return TypeSwitch<const UnitAST *, mlir::Operation *>(unit)
+        .Case<DataBlockAST>([&](auto db) { return mlirGen(db); })
         .Case<FunctionAST>([&](auto function) { return mlirGen(function); })
+        .Case<FunctionBlockAST>([&](auto fb) { return mlirGen(fb); })
+        .Case<OrganizationBlockAST>([&](auto ob) { return mlirGen(ob); })
+        .Case<UserDefinedTypeAST>([&](auto udt) { return mlirGen(udt); })
         .Default([&](auto unit) {
           emitError(loc(unit->loc()))
-              << "MLIR codegen encountered an unhandled expr kind '"
+              << "MLIR codegen encountered an unhandled unit kind '"
               << Twine(unit->getKind()) << "'";
           return nullptr;
         });
@@ -175,6 +179,20 @@ private:
         names.push_back(var->getIdentifier());
       }
     }
+  }
+
+  mlir::LogicalResult mlirGen(const VariableDeclarationSubsectionAST *decls,
+                              bool isInput, bool isOutput) {
+    for (const auto &decl : decls->getValues()) {
+      auto type = getType(decl->getDataType());
+      // TODO: initializer
+      for (const auto &var : decl->getVars()) {
+        auto location = loc(var->loc());
+        builder.create<VariableOp>(location, type, isInput, isOutput,
+                                   var->getIdentifier());
+      }
+    }
+    return mlir::success();
   }
 
   mlir::FuncOp mlirGen(const OrganizationBlockAST *ob) {
@@ -323,9 +341,91 @@ private:
     }
   }
 
-  mlir::FuncOp mlirgen(const FunctionBlockAST *fb) {
-    emitError(loc(fb->loc())) << "TBD not implemented";
-    return nullptr;
+  FunctionBlockOp mlirGen(const FunctionBlockAST *fb) {
+    auto location = loc(fb->loc());
+    functionName = fb->getIdentifier();
+    functionHasReturnValue = false;
+    std::string name(fb->getIdentifier());
+
+    // Create a scope in the symbol table to hold variable declarations.
+    llvm::ScopedHashTableScope<StringRef, VariableSymbol> var_scope(
+        symbolTable);
+
+    mlir::MutableDictionaryAttr arguments;
+    std::vector<const VariableDeclarationSubsectionAST *> tempvar;
+
+    // Create an MLIR function
+    auto function = builder.create<FunctionBlockOp>(location, name);
+    if (!function)
+      return nullptr;
+
+    // Let's start the body of the function now!
+    // In MLIR the entry block of the function is special: it must have the same
+    // argument list as the function itself.
+    auto &entryBlock = *function.addEntryBlock();
+
+    // Set the insertion point in the builder to the beginning of the function
+    // body, it will be used throughout the codegen to create operations in this
+    // function.
+    builder.setInsertionPointToStart(&entryBlock);
+
+    // Parse the declaration subsections
+    const auto &declarations = fb->getDeclarations()->getDecls();
+    for (const auto &decl : declarations) {
+      TypeSwitch<DeclarationSubsectionAST*>(decl.get())
+      .Case<VariableDeclarationSubsectionAST>([&](auto decl) {
+        switch (decl->getKind()) {
+        case VariableDeclarationSubsectionAST::VarInput:
+          mlirGen(decl, /*isInput=*/true, /*isOutput=*/false);
+          break;
+        case VariableDeclarationSubsectionAST::VarOutput:
+          mlirGen(decl, /*isInput=*/false, /*isOutput=*/true);
+          break;
+        case VariableDeclarationSubsectionAST::VarInOut:
+          mlirGen(decl, /*isInput=*/true, /*isOutput=*/true);
+          break;
+        case VariableDeclarationSubsectionAST::Var:
+          mlirGen(decl, /*isInput=*/false, /*isOutput=*/false);
+          break;
+        case VariableDeclarationSubsectionAST::VarTemp:
+          tempvar.push_back(decl);
+          break;
+        }
+      });
+    }
+
+    // prologue: stack space for temporary variables
+    for (const auto subsection : tempvar) {
+      for (const auto &decl : subsection->getValues()) {
+        auto type = getType(decl->getDataType());
+        auto memRefType = AddressType::get(type);
+        auto init = decl->getInitializer();
+        for (const auto &var : decl->getVars()) {
+          auto location = loc(var->loc());
+          auto varStorage = builder.create<TempVariableOp>(
+              location, memRefType,
+              builder.getStringAttr(var->getIdentifier()));
+          declare(var->getIdentifier(), type, varStorage, true);
+          if (init) {
+            builder.create<StoreOp>(location, varStorage,
+                                    mlirGen(init.getValue()));
+          }
+        }
+      }
+    }
+
+    // Emit the body of the function.
+    if (mlir::failed(mlirGen(fb->getCode()))) {
+      function.erase();
+      return nullptr;
+    }
+
+    // Implicitly return if no return statement was emitted.
+    if (entryBlock.empty() || !isa<ReturnOp>(entryBlock.back())) {
+      mlirgenReturn(location);
+    }
+
+    return function;
   }
 
   mlir::FuncOp mlirgen(const DataBlockAST *db) {
