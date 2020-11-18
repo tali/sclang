@@ -1,4 +1,4 @@
-// RUN: sclang-gen --emit=mlir %s 2>&1 | FileCheck %s
+// RUN: sclang-gen --emit=mlir %s 2>&1 | sclang-gen -x mlir --emit=mlir | FileCheck %s
 
 function empty_function : void
 // CHECK:      scl.function @empty_function()

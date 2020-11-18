@@ -1,4 +1,4 @@
-// RUN: sclang-gen --emit=mlir %s | FileCheck %s
+// RUN: sclang-gen --emit=mlir %s | sclang-gen -x mlir --emit=mlir | FileCheck %s
 function abc : int
 // CHECK: scl.function @abc() -> !scl.int {
 

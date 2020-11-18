@@ -1,4 +1,4 @@
-// RUN: sclang-gen --emit=mlir %s | FileCheck %s
+// RUN: sclang-gen --emit=mlir %s | sclang-gen -x mlir --emit=mlir | FileCheck %s
 
 // CHECK-LABEL: scl.function @abs(%arg0: !scl.int {scl.name = "in"}) -> !scl.int
 // CHECK-DAG:   %abs = scl.tmpvar "abs" : !scl.address<!scl.int>
