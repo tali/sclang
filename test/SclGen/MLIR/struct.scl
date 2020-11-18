@@ -1,0 +1,17 @@
+// RUN: sclang-gen --emit=mlir %s | sclang-gen -x mlir --emit=mlir | FileCheck %s
+
+// CHECK-LABEL:      scl.function @f
+function f : void
+
+// CHECK-SAME:       !scl.struct<a1: !scl.int, a2: !scl.real> {scl.name = "a"}
+var_input
+  a : struct
+    a1 : int;
+    a2 : real;
+  end_struct;
+end_var;
+
+// CHECK-NEXT: scl.return
+begin
+  ;
+end_function

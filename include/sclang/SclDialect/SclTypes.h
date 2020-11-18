@@ -119,14 +119,21 @@ public:
   using Base::Base;
 
   /// Create an instance of a `StructType` with the given element types. There
-  /// *must* be atleast one element type.
-  static StructType get(llvm::ArrayRef<mlir::Type> elementTypes);
+  /// *must* be at least one element type.
+  static StructType get(llvm::ArrayRef<mlir::Identifier> elementNames,
+                        llvm::ArrayRef<mlir::Type> elementTypes);
 
-  /// Returns the element types of this struct type.
+  /// Returns the elements of this struct type.
+  llvm::ArrayRef<mlir::Identifier> getElementNames();
+
+  /// Returns the elements of this struct type.
   llvm::ArrayRef<mlir::Type> getElementTypes();
 
-  /// Returns the number of element type held by this struct.
-  size_t getNumElementTypes() { return getElementTypes().size(); }
+  /// Returns the type of the given element.
+  mlir::Type getElementType(mlir::Identifier name);
+
+  /// Returns the number of elements held by this struct.
+  size_t getNumElements() { return getElementTypes().size(); }
 };
 
 } // end namespace scl

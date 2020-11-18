@@ -149,9 +149,7 @@ struct ArrayTypeStorage : public mlir::TypeStorage {
   }
 
   /// Define a hash function for the key type. This is used when uniquing
-  /// instances of the storage, see the `StructType::get` method.
-  /// Note: This method isn't necessary as both llvm::ArrayRef and mlir::Type
-  /// have hash functions available, so we could just omit this entirely.
+  /// instances of the storage, see the `ArrayType::get` method.
   static llvm::hash_code hashKey(const KeyTy &key) {
     return hash_value(key.elementType);
   }
@@ -258,22 +256,19 @@ struct StructTypeStorage : public mlir::TypeStorage {
   /// instance. This type will be used when uniquing an instance of the type
   /// storage. For our struct type, we will unique each instance structurally on
   /// the elements that it contains.
-  using KeyTy = llvm::ArrayRef<mlir::Type>;
+  using KeyTy = std::pair< llvm::ArrayRef<Identifier>, llvm::ArrayRef<Type> >;
 
   /// A constructor for the type storage instance.
-  StructTypeStorage(llvm::ArrayRef<mlir::Type> elementTypes)
-      : elementTypes(elementTypes) {}
+  StructTypeStorage(llvm::ArrayRef<Identifier> elementNames,
+                    llvm::ArrayRef<Type> elementTypes)
+      : elementNames(elementNames), elementTypes(elementTypes) {}
 
   /// Define the comparison function for the key type with the current storage
   /// instance. This is used when constructing a new instance to ensure that we
   /// haven't already uniqued an instance of the given key.
-  bool operator==(const KeyTy &key) const { return key == elementTypes; }
-
-  /// Define a hash function for the key type. This is used when uniquing
-  /// instances of the storage, see the `StructType::get` method.
-  /// Note: This method isn't necessary as both llvm::ArrayRef and mlir::Type
-  /// have hash functions available, so we could just omit this entirely.
-  static llvm::hash_code hashKey(const KeyTy &key) { return hash_value(key); }
+  bool operator==(const KeyTy &key) const {
+    return key.first == elementNames || key.second == elementTypes;
+  }
 
   /// Define a construction method for creating a new instance of this storage.
   /// This method takes an instance of a storage allocator, and an instance of a
@@ -281,16 +276,15 @@ struct StructTypeStorage : public mlir::TypeStorage {
   /// allocations used to create the type storage and its internal.
   static StructTypeStorage *construct(mlir::TypeStorageAllocator &allocator,
                                       const KeyTy &key) {
-    // Copy the elements from the provided `KeyTy` into the allocator.
-    llvm::ArrayRef<mlir::Type> elementTypes = allocator.copyInto(key);
-
     // Allocate the storage instance and construct it.
     return new (allocator.allocate<StructTypeStorage>())
-        StructTypeStorage(elementTypes);
+        StructTypeStorage(allocator.copyInto(key.first),
+                          allocator.copyInto(key.second));
   }
 
   /// The following field contains the element types of the struct.
-  llvm::ArrayRef<mlir::Type> elementTypes;
+  llvm::ArrayRef<Identifier> elementNames;
+  llvm::ArrayRef<Type> elementTypes;
 };
 } // end namespace detail
 } // end namespace scl
@@ -298,11 +292,20 @@ struct StructTypeStorage : public mlir::TypeStorage {
 
 /// Create an instance of a `StructType` with the given element types. There
 /// *must* be at least one element type.
-StructType StructType::get(llvm::ArrayRef<mlir::Type> elementTypes) {
+StructType StructType::get(llvm::ArrayRef<Identifier> elementNames,
+                           llvm::ArrayRef<Type> elementTypes) {
+  assert(elementNames.size() == elementTypes.size() &&
+         "expected same number of elementNames and elementTypes");
   assert(!elementTypes.empty() && "expected at least 1 element type");
 
   mlir::MLIRContext *ctx = elementTypes.front().getContext();
-  return Base::get(ctx, elementTypes);
+  return Base::get(ctx, elementNames, elementTypes);
+}
+
+/// Returns the element types of this struct type.
+llvm::ArrayRef<Identifier> StructType::getElementNames() {
+  // 'getImpl' returns a pointer to the internal storage instance.
+  return getImpl()->elementNames;
 }
 
 /// Returns the element types of this struct type.
@@ -311,32 +314,61 @@ llvm::ArrayRef<mlir::Type> StructType::getElementTypes() {
   return getImpl()->elementTypes;
 }
 
+mlir::Type StructType::getElementType(Identifier name) {
+  auto names = getElementNames();
+  auto types = getElementTypes();
+
+  for (unsigned i = 0; i < names.size(); i++) {
+    if (names[i] == name)
+      return types[i];
+  }
+  return Type();
+}
+
 namespace {
 
 void print(StructType type, mlir::DialectAsmPrinter &printer) {
   // Print the struct type according to the parser format.
+  auto names = type.getElementNames();
+  auto types = type.getElementTypes();
+
   printer << "struct<";
-  llvm::interleaveComma(type.getElementTypes(), printer);
+  for (unsigned i = 0; i < names.size(); i++) {
+    if (i) printer << ", ";
+    printer << names[i];
+    printer << ": ";
+    printer << types[i];
+  }
   printer << '>';
 }
 
 /// Parse a struct type instance.
 mlir::Type parseStructType(mlir::DialectAsmParser &parser) {
   // Parse a struct type in the following form:
-  //   struct-type ::= `struct` `<` type (`,` type)* `>`
+  //   struct-type ::= `struct` `<` name `:` type (`,` name `:` type)* `>`
 
   // Parse: `<`
   if (parser.parseLess())
     return Type();
 
-  // Parse the element types of the struct.
+  // Parse the elements of the struct.
+  auto context = parser.getBuilder().getContext();
+  SmallVector<mlir::Identifier, 1> elementNames;
   SmallVector<mlir::Type, 1> elementTypes;
   do {
+    // Parse the current element name.
+    StringRef elementName;
+    if (parser.parseKeyword(&elementName))
+      return nullptr;
+    elementNames.push_back(mlir::Identifier::get(elementName, context));
+
+    if (parser.parseColon())
+      return nullptr;
+
     // Parse the current element type.
     mlir::Type elementType;
     if (parser.parseType(elementType))
       return nullptr;
-
     elementTypes.push_back(elementType);
 
     // Parse the optional: `,`
@@ -345,7 +377,7 @@ mlir::Type parseStructType(mlir::DialectAsmParser &parser) {
   // Parse: `>`
   if (parser.parseGreater())
     return Type();
-  return StructType::get(elementTypes);
+  return StructType::get(elementNames, elementTypes);
 }
 
 } // namespace

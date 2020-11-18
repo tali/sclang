@@ -789,18 +789,24 @@ private:
   }
 
   mlir::Type getType(const StructDataTypeSpecAST *type) {
-    std::vector<mlir::Type> elements;
+    llvm::SmallVector<mlir::Identifier, 1> names;
+    llvm::SmallVector<mlir::Type, 1> types;
 
+    auto context = builder.getContext();
     auto components = type->getComponents();
-    elements.reserve(components.size());
+    names.reserve(components.size());
+    types.reserve(components.size());
 
     for (auto &component : components) {
+      auto name = mlir::Identifier::get(component.get()->getName(), context);
+      names.push_back(name);
+
       mlir::Type type = getType(component.get()->getDataType());
       if (!type)
         return nullptr;
-      elements.push_back(type);
+      types.push_back(type);
     }
-    return StructType::get(elements);
+    return StructType::get(names, types);
   }
 
   mlir::Type getType(const DataTypeSpecAST *type) {
