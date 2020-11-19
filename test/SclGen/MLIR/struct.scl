@@ -1,9 +1,11 @@
 // RUN: sclang-gen --emit=mlir %s | sclang-gen -x mlir --emit=mlir | FileCheck %s
 
 // CHECK-LABEL:      scl.function @f
-function f : void
+function f : int
 
 // CHECK-SAME:       !scl.struct<a1: !scl.int, a2: !scl.real> {scl.name = "a"}
+// CHECK:            %a = scl.tmpvar "a" : !scl.address<!scl.struct<a1: !scl.int, a2: !scl.real>>
+// CHECK:            scl.store %a : !scl.address<!scl.struct<a1: !scl.int, a2: !scl.real>> = %arg0 : !scl.struct<a1: !scl.int, a2: !scl.real>
 var_input
   a : struct
     a1 : int;
@@ -11,7 +13,12 @@ var_input
   end_struct;
 end_var;
 
-// CHECK-NEXT: scl.return
+
 begin
-  ;
+// CHECK:            %a1 = scl.getelement "a1" from %a : !scl.address<!scl.struct<a1: !scl.int, a2: !scl.real>> -> !scl.address<!scl.int>
+// CHECK:            %0 = scl.load %a1 : !scl.address<!scl.int> : !scl.int
+// CHECK:            scl.store %f : !scl.address<!scl.int> = %0 : !scl.int
+  f := a.a1;
+
+// CHECK-NEXT:       scl.return.value %f
 end_function

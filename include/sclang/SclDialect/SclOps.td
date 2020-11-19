@@ -222,6 +222,23 @@ def ConstantOp : SCL_Op<"constant",
   let hasFolder = 1;
 }
 
+def GetElementOp : SCL_Op<"getelement",
+    [NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
+  let summary = "get the address of a struct element";
+  let arguments = (ins Scl_AddressType:$addr, StrAttr:$name);
+  let results = (outs Scl_AddressType:$element);
+  let assemblyFormat = "attr-dict $name `from` $addr `:` type($addr) `->` type($element)";
+
+  let builders = [
+    OpBuilderDAG<(ins "Value":$address, "StringRef":$name), [{
+      auto structType = address.getType().cast<AddressType>().getElementType();
+      auto elementType = structType.cast<StructType>().getElementType(name);
+      auto resultType = AddressType::get(elementType);
+      build($_builder, $_state, resultType, address, name);
+    }]>
+  ];
+}
+
 def LoadOp : SCL_Op<"load", [/*SameOperandsAndResultElementType*/]> {
   let summary = "load a value from memory";
   let description = [{

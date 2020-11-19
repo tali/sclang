@@ -131,6 +131,9 @@ public:
 
   /// Returns the type of the given element.
   mlir::Type getElementType(mlir::Identifier name);
+  mlir::Type getElementType(llvm::StringRef name) {
+    return getElementType(Identifier::get(name, getContext()));
+  }
 
   /// Returns the number of elements held by this struct.
   size_t getNumElements() { return getElementTypes().size(); }

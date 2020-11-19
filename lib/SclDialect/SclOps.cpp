@@ -222,6 +222,12 @@ CallInterfaceCallable CallFcOp::getCallableForCallee() {
 
 Operation::operand_range CallFcOp::getArgOperands() { return arguments(); }
 
+// MARK: GetElementOp
+
+void GetElementOp::getAsmResultNames(
+    function_ref<void(Value, StringRef)> setNameFn) {
+  setNameFn(getResult(), name());
+}
 
 // MARK: TempVarOp
 

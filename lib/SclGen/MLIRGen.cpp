@@ -614,6 +614,16 @@ private:
     mlir::Value lhs = mlirGen(expr->getLhs());
     if (!lhs)
       return nullptr;
+    if (expr->getOp() == tok_dot) {
+      // this BinaryExpression is a STRUCT element access:
+      // the right hand side is special, it's not a normal expression but a name
+      if (!isa<SimpleVariableAST>(expr->getRhs())) {
+        emitError(loc(expr->getRhs()->loc()), "expected element name");
+        return nullptr;
+      }
+      auto name = llvm::cast<SimpleVariableAST>(expr->getRhs())->getName();
+      return builder.create<GetElementOp>(location, lhs, name);
+    }
     lhs = mlirGenRValue(lhs);
     mlir::Value rhs = mlirGenRValue(expr->getRhs());
     if (!rhs)
@@ -711,14 +721,15 @@ private:
           return nullptr;
         }
         auto nameAttr = mlir::StringAttr::get(name->getName(), context);
+        auto value = mlirGenRValue(binary->getRhs());
         argNames.push_back(nameAttr);
-        arguments.push_back(mlirGen(binary->getRhs()));
+        arguments.push_back(value);
       } else {
         if (expr->getParameters().size() != 1) {
           emitError(loc(arg->loc()), "parameter without name");
           return nullptr;
         }
-        arguments.push_back(mlirGen(arg.get()));
+        arguments.push_back(mlirGenRValue(arg.get()));
       }
     }
     auto argNamesAttr = mlir::ArrayAttr::get(argNames, context);
