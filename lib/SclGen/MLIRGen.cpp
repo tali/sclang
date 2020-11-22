@@ -629,8 +629,7 @@ private:
     if (!rhs)
       return nullptr;
 
-    // Derive the operation name from the binary operator. At the moment we only
-    // support '+' and '*'.
+    // Derive the operation name from the binary operator.
     switch (expr->getOp()) {
     default:
       emitError(location, "invalid binary operator '")
@@ -640,33 +639,33 @@ private:
       return builder.create<OrOp>(location, lhs, rhs);
     case tok_xor:
       return builder.create<XOrOp>(location, lhs, rhs);
-    case sclang::tok_ampersand:
-    case sclang::tok_and:
+    case tok_ampersand:
+    case tok_and:
       return builder.create<AndOp>(location, lhs, rhs);
-    case sclang::tok_cmp_eq:
+    case tok_cmp_eq:
       return builder.create<EqualOp>(location, lhs, rhs);
-    case sclang::tok_cmp_ne:
+    case tok_cmp_ne:
       return builder.create<NotEqualOp>(location, lhs, rhs);
-    case sclang::tok_cmp_lt:
+    case tok_cmp_lt:
       return builder.create<LessThanOp>(location, lhs, rhs);
-    case sclang::tok_cmp_le:
+    case tok_cmp_le:
       return builder.create<LessEqualOp>(location, lhs, rhs);
-    case sclang::tok_cmp_gt:
+    case tok_cmp_gt:
       return builder.create<GreaterThanOp>(location, lhs, rhs);
-    case sclang::tok_cmp_ge:
+    case tok_cmp_ge:
       return builder.create<GreaterEqualOp>(location, lhs, rhs);
-    case sclang::tok_minus:
+    case tok_minus:
       return builder.create<SubOp>(location, lhs, rhs);
-    case sclang::tok_plus:
+    case tok_plus:
       return builder.create<AddOp>(location, lhs, rhs);
-    case sclang::tok_times:
+    case tok_times:
       return builder.create<MulOp>(location, lhs, rhs);
-    case sclang::tok_div:
-    case sclang::tok_divide:
+    case tok_div:
+    case tok_divide:
       return builder.create<DivOp>(location, lhs, rhs);
-    case sclang::tok_mod:
+    case tok_mod:
       return builder.create<ModOp>(location, lhs, rhs);
-    case sclang::tok_exponent:
+    case tok_exponent:
       return builder.create<ExpOp>(location, lhs, rhs);
     }
 
