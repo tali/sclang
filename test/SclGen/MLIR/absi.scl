@@ -4,26 +4,32 @@
 // CHECK-DAG:   %abs = scl.tmpvar "abs" : !scl.address<!scl.int>
 function abs : int
 
+// CHECK-DAG:   %in = scl.tmpvar "in" : !scl.address<!scl.int>
+// CHECK-DAG:   scl.store %in : !scl.address<!scl.int> = %arg0 : !scl.int
 var_input
  in : INT;
 end_var;
 
 begin
 // CHECK-DAG:   [[C0:%c0[_0-9]*]] = scl.constant 0 : i16 -> !scl.int
-// CHECK-DAG:   [[LT:%[0-9]+]] = scl.cmplt %arg0, [[C0]]
+// CHECK-DAG:   [[IN:%[0-9]+]] = scl.load %in
+// CHECK-DAG:   [[LT:%[0-9]+]] = scl.cmplt [[IN]], [[C0]]
 // CHECK: scl.if [[LT]]
   if in < 0 then
 
-// CHECK-DAG:   [[NEG:%[0-9]+]] = scl.negate %arg0
+// CHECK-DAG:   [[IN:%[0-9]+]] = scl.load %in
+// CHECK-DAG:   [[NEG:%[0-9]+]] = scl.negate [[IN]]
 // CHECK:       scl.store %abs : !scl.address<!scl.int> = [[NEG]]
     abs := -in;
 
 // CHECK:       scl.end
-// CHECK-DAG:   [[GT:%[0-9]+]] = scl.cmpgt %arg0, [[C0]]
+// CHECK-DAG:   [[IN:%[0-9]+]] = scl.load %in
+// CHECK-DAG:   [[GT:%[0-9]+]] = scl.cmpgt [[IN]], [[C0]]
 // CHECK:       scl.if [[GT]]
   elsif in > 0 then
 
-// CHECK:       scl.store %abs : !scl.address<!scl.int> = %arg0
+// CHECK-DAG:   [[IN:%[0-9]+]] = scl.load %in
+// CHECK:       scl.store %abs : !scl.address<!scl.int> = [[IN]]
     abs := in;
 
 // CHECK:       scl.end

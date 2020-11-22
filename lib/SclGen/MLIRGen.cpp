@@ -280,8 +280,12 @@ private:
       auto type = std::get<0>(name_value);
       auto name = std::get<1>(name_value);
       auto value = std::get<2>(name_value);
-      if (failed(declare(name, type, value, false)))
+      auto memRefType = AddressType::get(type);
+      auto varStorage = builder.create<TempVariableOp>(
+          location, memRefType, builder.getStringAttr(name));
+      if (failed(declare(name, type, varStorage, true)))
         return nullptr;
+      builder.create<StoreOp>(location, varStorage, value);
       auto nameAttr = builder.getStringAttr(name);
       function.setArgAttr(argIndex, nameId, nameAttr);
       argIndex++;
@@ -492,7 +496,7 @@ private:
     mlir::Value lhs = mlirGenLValue(expr->getLhs());
     if (!lhs)
       return mlir::failure();
-    mlir::Value rhs = mlirGen(expr->getRhs());
+    mlir::Value rhs = mlirGenRValue(expr->getRhs());
     if (!rhs)
       return mlir::failure();
 
@@ -532,6 +536,19 @@ private:
         });
   }
 
+  mlir::Value mlirGenRValue(const ExpressionAST *expr) {
+    return mlirGenRValue(mlirGen(expr));
+  }
+  mlir::Value mlirGenRValue(mlir::Value expr) {
+    if (!expr)
+      return nullptr;
+    if (expr.getType().isa<AddressType>()) {
+      return builder.create<LoadOp>(expr.getLoc(), expr);
+    }
+    return expr;
+  }
+
+
   mlir::Value mlirGen(const IntegerConstantAST *expr) {
     auto location = loc(expr->loc());
     auto type = getType(tok_int); // TBD use expr.getType()
@@ -558,7 +575,8 @@ private:
 
     auto variable = symbolTable.lookup(name);
     if (variable.isMemref())
-      return builder.create<LoadOp>(location, variable.getValue());
+      return variable.getValue();
+//TBD      return builder.create<LoadOp>(location, variable.getValue());
     if (variable.isDirect())
       return variable.getValue();
     emitError(location) << "unknown variable '" << name << "'";
@@ -581,6 +599,7 @@ private:
   }
 
   mlir::Value mlirGen(const BinaryExpressionAST *expr) {
+    auto location = loc(expr->loc());
     // First emit the operations for each side of the operation before emitting
     // the operation itself. For example if the expression is `a + foo(a)`
     // 1) First it will visiting the LHS, which will return a reference to the
@@ -595,10 +614,10 @@ private:
     mlir::Value lhs = mlirGen(expr->getLhs());
     if (!lhs)
       return nullptr;
-    mlir::Value rhs = mlirGen(expr->getRhs());
+    lhs = mlirGenRValue(lhs);
+    mlir::Value rhs = mlirGenRValue(expr->getRhs());
     if (!rhs)
       return nullptr;
-    auto location = loc(expr->loc());
 
     // Derive the operation name from the binary operator. At the moment we only
     // support '+' and '*'.
@@ -647,7 +666,7 @@ private:
   }
 
   mlir::Value mlirGen(const UnaryExpressionAST *expr) {
-    mlir::Value rhs = mlirGen(expr->getRhs());
+    mlir::Value rhs = mlirGenRValue(expr->getRhs());
     if (!rhs)
       return nullptr;
     auto location = loc(expr->loc());
@@ -833,7 +852,7 @@ private:
 
     for (const auto &ifThen : ifThenElse->getThens()) {
       auto location = loc(ifThen->loc());
-      auto condition = mlirGen(ifThen->getCondition());
+      auto condition = mlirGenRValue(ifThen->getCondition());
       if (!condition)
         return mlir::failure();
       auto cond = builder.create<IfThenElseOp>(location, condition);

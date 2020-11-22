@@ -10,21 +10,26 @@ end_var;
 begin
 
 // CHECK: [[C0:%[a-z0-9]+]] = constant 0.000000e+00 : f32
-// CHECK: [[ABS:%[0-9]+]] = alloca() : memref<f32>
-// CHECK: [[LT:%[0-9]+]] = cmpf "ult", %arg0, [[C0]]
+// CHECK: store %arg0, [[INVAR:%[0-9]+]][] : memref<f32>
+
+// CHECK: [[IN:%[0-9]+]] = load [[INVAR]]
+// CHECK: [[LT:%[0-9]+]] = cmpf "ult", [[IN]], [[C0]]
 // CHECK: scf.if [[LT]] {
   if in < 0.0 then
 
-// CHECK:   [[NEG:%[0-9]+]] = negf %arg0 : f32
-// CHECK:   store [[NEG]], [[ABS]][] : memref<f32>
+// CHECK:   [[IN:%[0-9]+]] = load [[INVAR]]
+// CHECK:   [[NEG:%[0-9]+]] = negf [[IN]] : f32
+// CHECK:   store [[NEG]], [[ABS:%[0-9]+]][] : memref<f32>
     abs := -in;
 
 // CHECK: } else {
-// CHECK:   [[GT:%[0-9]+]] = cmpf "ugt", %arg0, [[C0]]
+// CHECK:   [[IN:%[0-9]+]] = load [[INVAR]]
+// CHECK:   [[GT:%[0-9]+]] = cmpf "ugt", [[IN]], [[C0]]
 // CHECK:   scf.if [[GT]] {
   elsif in > 0.0 then
 
-// CHECK:     store %arg0, [[ABS]][] : memref<f32>
+// CHECK:     [[IN:%[0-9]+]] = load [[INVAR]]
+// CHECK:     store [[IN]], [[ABS]][] : memref<f32>
     abs := in;
 
 // CHECK:   } else {
