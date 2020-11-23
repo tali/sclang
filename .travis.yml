@@ -18,9 +18,9 @@ jobs:
   - name: "CLANG Release build"
     compiler: clang
     env: BUILD_FLAGS="-DCMAKE_BUILD_TYPE=Release"
-  - name: "Address/UB Sanitizer debug build"
-    compiler: clang
-    env: BUILD_FLAGS="-DCMAKE_BUILD_TYPE=Debug -DLLVM_USE_SANITIZER='Address;Undefined'"
+#  - name: "Address/UB Sanitizer debug build"
+#    compiler: clang
+#    env: BUILD_FLAGS="-DCMAKE_BUILD_TYPE=Debug -DLLVM_USE_SANITIZER='Address;Undefined'"
 
 script:
   - git clone https://github.com/tali/llvm-project --depth 1
