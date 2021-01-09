@@ -1,4 +1,4 @@
-//===- MLIRGen.cpp - MLIR Generation from a Toy AST -----------------------===//
+//===- MLIRGen.cpp - MLIR Generation from SCL AST -------------------------===//
 //
 // Copyright 2019 The MLIR Authors.
 //
@@ -27,8 +27,8 @@
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
-#include "mlir/IR/StandardTypes.h"
 #include "mlir/IR/Verifier.h"
 
 #include "llvm/ADT/STLExtras.h"
