@@ -40,10 +40,10 @@ public:
       return mlir::MemRefType::get({}, convertType(type.getElementType()));
     });
     addConversion([&](scl::IntegerType type) {
-      return IntegerType::get(type.getWidth(), type.getContext());
+      return IntegerType::get(type.getContext(), type.getWidth());
     });
     addConversion([&](scl::LogicalType type) {
-      return IntegerType::get(type.getWidth(), type.getContext());
+      return IntegerType::get(type.getContext(), type.getWidth());
     });
     addConversion([&](scl::RealType type) {
       return FloatType::getF32(type.getContext());
