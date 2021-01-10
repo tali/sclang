@@ -43,7 +43,7 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
   /// Fill in the argument name attribute from the referenced function.
   mlir::LogicalResult
   canonicalizeSingleArgument(scl::CallFcOp op, scl::FunctionOp func, PatternRewriter &rewriter) const {
-    auto context = rewriter.getContext(); // TODO: member property?
+    auto context = op->getContext();
 
     auto argCallNames = op.argNames().getValue();
     if (argCallNames.size() == 1)
@@ -54,7 +54,7 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
     auto nameAttr = func.getArgAttrOfType<StringAttr>(0, nameId);
     SmallVector<Attribute, 1> argNames;
     argNames.push_back(nameAttr);
-    auto argNamesAttr = ArrayAttr::get(argNames, op.getContext());
+    auto argNamesAttr = ArrayAttr::get(argNames, context);
 
     rewriter.replaceOpWithNewOp<scl::CallFcOp>(op, op.getType(), op.callee(),
                                                op.arguments(), argNamesAttr);
@@ -65,7 +65,7 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
   /// Reorder arguments to match the referenced function.
   mlir::LogicalResult
   canonicalizeArguments(scl::CallFcOp op, scl::FunctionOp func, PatternRewriter &rewriter) const {
-    auto context = rewriter.getContext();
+    auto context = op->getContext();
     auto funcType = func.getType();
 
     auto argCallNames = op.argNames().getValue();
@@ -101,7 +101,7 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
         reordered = true;
         auto defaultValue = func.getArgAttr(i, defaultId);
         if (defaultValue) {
-          Dialect * scl = op.getDialect();
+          Dialect * scl = op->getDialect();
           auto loc = Location(func.getArgAttrOfType<LocationAttr>(i, defaultId));
           auto c = scl->materializeConstant(rewriter, defaultValue,
                                              funcType.getInput(i), loc);
@@ -114,7 +114,7 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
     if (!argUsed.all() || !reordered)
       return failure();
 
-    auto argNamesAttr = ArrayAttr::get(argNames, op.getContext());
+    auto argNamesAttr = ArrayAttr::get(argNames, context);
     rewriter.replaceOpWithNewOp<scl::CallFcOp>(op, op.getType(), op.callee(),
                                                arguments, argNamesAttr);
 
@@ -127,7 +127,7 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
   mlir::LogicalResult
   matchAndRewrite(scl::CallFcOp op, PatternRewriter &rewriter) const override {
     scl::FunctionOp func =
-        SymbolTable::lookupNearestSymbolFrom<scl::FunctionOp>(op.getParentOp(),
+        SymbolTable::lookupNearestSymbolFrom<scl::FunctionOp>(op->getParentOp(),
                                                               op.callee());
     assert(func && "cannot lookup FunctionOp");
 

@@ -216,7 +216,7 @@ ArrayRef<Type> FunctionBlockOp::getCallableResults() {
 // MARK: CallFcOp
 
 CallInterfaceCallable CallFcOp::getCallableForCallee() {
-  return getAttrOfType<SymbolRefAttr>(callee());
+  return getOperation()->getAttrOfType<SymbolRefAttr>(callee());
 }
 
 Operation::operand_range CallFcOp::getArgOperands() { return arguments(); }
