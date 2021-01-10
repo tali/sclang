@@ -208,7 +208,6 @@ private:
     llvm::ScopedHashTableScope<StringRef, VariableSymbol> var_scope(
         symbolTable);
 
-    mlir::MutableDictionaryAttr arguments;
     std::vector<mlir::Type> input_types;
     std::vector<llvm::StringRef> input_names;
     std::vector<mlir::Type> output_types;
@@ -353,7 +352,6 @@ private:
     llvm::ScopedHashTableScope<StringRef, VariableSymbol> var_scope(
         symbolTable);
 
-    mlir::MutableDictionaryAttr arguments;
     std::vector<const VariableDeclarationSubsectionAST *> tempvar;
 
     // Create an MLIR function
