@@ -13,7 +13,7 @@ begin
 // CHECK: store %arg0, [[INVAR:%[0-9]+]][] : memref<i16>
 
 // CHECK: [[IN:%[0-9]+]] = load [[INVAR]]
-// CHECK: [[LT:%[0-9]+]] = cmpi "slt", [[IN]], [[C0]]
+// CHECK: [[LT:%[0-9]+]] = cmpi slt, [[IN]], [[C0]]
 // CHECK: scf.if [[LT]] {
   if in < int#0 then
 
@@ -24,7 +24,7 @@ begin
 
 // CHECK: } else {
 // CHECK:   [[IN:%[0-9]+]] = load [[INVAR]]
-// CHECK:   [[GT:%[0-9]+]] = cmpi "sgt", [[IN]], [[C0]]
+// CHECK:   [[GT:%[0-9]+]] = cmpi sgt, [[IN]], [[C0]]
 // CHECK:   scf.if [[GT]] {
   elsif in > int#0 then
 

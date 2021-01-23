@@ -198,7 +198,7 @@ scl.function @mod_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.real {
 // MARK: scl.cmpeq
 
 // CHECK-LABEL: func @cmpeq_i8
-// CHECK:       cmpi "eq", %arg0, %arg1 : i8
+// CHECK:       cmpi eq, %arg0, %arg1 : i8
 scl.function @cmpeq_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.bool {
   %res = scl.cmpeq %arg0, %arg1 : !scl.char
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -207,7 +207,7 @@ scl.function @cmpeq_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.bool {
 }
 
 // CHECK-LABEL: func @cmpeq_i16
-// CHECK:       cmpi "eq", %arg0, %arg1 : i16
+// CHECK:       cmpi eq, %arg0, %arg1 : i16
 scl.function @cmpeq_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.bool {
   %res = scl.cmpeq %arg0, %arg1 : !scl.int
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -216,7 +216,7 @@ scl.function @cmpeq_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.bool {
 }
 
 // CHECK-LABEL: func @cmpeq_i32
-// CHECK:       cmpi "eq", %arg0, %arg1 : i32
+// CHECK:       cmpi eq, %arg0, %arg1 : i32
 scl.function @cmpeq_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
   %res = scl.cmpeq %arg0, %arg1 : !scl.dint
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -225,7 +225,7 @@ scl.function @cmpeq_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
 }
 
 // CHECK-LABEL: func @cmpeq_f32
-// CHECK:       cmpf "ueq", %arg0, %arg1 : f32
+// CHECK:       cmpf ueq, %arg0, %arg1 : f32
 scl.function @cmpeq_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
   %res = scl.cmpeq %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -237,7 +237,7 @@ scl.function @cmpeq_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
 // MARK: scl.cmpne
 
 // CHECK-LABEL: func @cmpne_i8
-// CHECK:       cmpi "ne", %arg0, %arg1 : i8
+// CHECK:       cmpi ne, %arg0, %arg1 : i8
 scl.function @cmpne_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.bool {
   %res = scl.cmpne %arg0, %arg1 : !scl.char
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -246,7 +246,7 @@ scl.function @cmpne_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.bool {
 }
 
 // CHECK-LABEL: func @cmpne_i16
-// CHECK:       cmpi "ne", %arg0, %arg1 : i16
+// CHECK:       cmpi ne, %arg0, %arg1 : i16
 scl.function @cmpne_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.bool {
   %res = scl.cmpne %arg0, %arg1 : !scl.int
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -255,7 +255,7 @@ scl.function @cmpne_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.bool {
 }
 
 // CHECK-LABEL: func @cmpne_i32
-// CHECK:       cmpi "ne", %arg0, %arg1 : i32
+// CHECK:       cmpi ne, %arg0, %arg1 : i32
 scl.function @cmpne_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
   %res = scl.cmpne %arg0, %arg1 : !scl.dint
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -264,7 +264,7 @@ scl.function @cmpne_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
 }
 
 // CHECK-LABEL: func @cmpne_f32
-// CHECK:       cmpf "une", %arg0, %arg1 : f32
+// CHECK:       cmpf une, %arg0, %arg1 : f32
 scl.function @cmpne_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
   %res = scl.cmpne %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -276,7 +276,7 @@ scl.function @cmpne_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
 // MARK: scl.cmpge
 
 // CHECK-LABEL: func @cmpge_i8
-// CHECK:       cmpi "sge", %arg0, %arg1 : i8
+// CHECK:       cmpi sge, %arg0, %arg1 : i8
 scl.function @cmpge_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.bool {
   %res = scl.cmpge %arg0, %arg1 : !scl.char
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -285,7 +285,7 @@ scl.function @cmpge_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.bool {
 }
 
 // CHECK-LABEL: func @cmpge_i16
-// CHECK:       cmpi "sge", %arg0, %arg1 : i16
+// CHECK:       cmpi sge, %arg0, %arg1 : i16
 scl.function @cmpge_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.bool {
   %res = scl.cmpge %arg0, %arg1 : !scl.int
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -294,7 +294,7 @@ scl.function @cmpge_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.bool {
 }
 
 // CHECK-LABEL: func @cmpge_i32
-// CHECK:       cmpi "sge", %arg0, %arg1 : i32
+// CHECK:       cmpi sge, %arg0, %arg1 : i32
 scl.function @cmpge_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
   %res = scl.cmpge %arg0, %arg1 : !scl.dint
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -303,7 +303,7 @@ scl.function @cmpge_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
 }
 
 // CHECK-LABEL: func @cmpge_f32
-// CHECK:       cmpf "uge", %arg0, %arg1 : f32
+// CHECK:       cmpf uge, %arg0, %arg1 : f32
 scl.function @cmpge_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
   %res = scl.cmpge %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -315,7 +315,7 @@ scl.function @cmpge_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
 // MARK: scl.cmpgt
 
 // CHECK-LABEL: func @cmpgt_i8
-// CHECK:       cmpi "sgt", %arg0, %arg1 : i8
+// CHECK:       cmpi sgt, %arg0, %arg1 : i8
 scl.function @cmpgt_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.bool {
   %res = scl.cmpgt %arg0, %arg1 : !scl.char
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -324,7 +324,7 @@ scl.function @cmpgt_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.bool {
 }
 
 // CHECK-LABEL: func @cmpgt_i16
-// CHECK:       cmpi "sgt", %arg0, %arg1 : i16
+// CHECK:       cmpi sgt, %arg0, %arg1 : i16
 scl.function @cmpgt_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.bool {
   %res = scl.cmpgt %arg0, %arg1 : !scl.int
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -333,7 +333,7 @@ scl.function @cmpgt_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.bool {
 }
 
 // CHECK-LABEL: func @cmpgt_i32
-// CHECK:       cmpi "sgt", %arg0, %arg1 : i32
+// CHECK:       cmpi sgt, %arg0, %arg1 : i32
 scl.function @cmpgt_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
   %res = scl.cmpgt %arg0, %arg1 : !scl.dint
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -342,7 +342,7 @@ scl.function @cmpgt_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
 }
 
 // CHECK-LABEL: func @cmpgt_f32
-// CHECK:       cmpf "ugt", %arg0, %arg1 : f32
+// CHECK:       cmpf ugt, %arg0, %arg1 : f32
 scl.function @cmpgt_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
   %res = scl.cmpgt %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -354,7 +354,7 @@ scl.function @cmpgt_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
 // MARK: scl.cmple
 
 // CHECK-LABEL: func @cmple_i8
-// CHECK:       cmpi "sle", %arg0, %arg1 : i8
+// CHECK:       cmpi sle, %arg0, %arg1 : i8
 scl.function @cmple_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.bool {
   %res = scl.cmple %arg0, %arg1 : !scl.char
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -363,7 +363,7 @@ scl.function @cmple_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.bool {
 }
 
 // CHECK-LABEL: func @cmple_i16
-// CHECK:       cmpi "sle", %arg0, %arg1 : i16
+// CHECK:       cmpi sle, %arg0, %arg1 : i16
 scl.function @cmple_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.bool {
   %res = scl.cmple %arg0, %arg1 : !scl.int
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -372,7 +372,7 @@ scl.function @cmple_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.bool {
 }
 
 // CHECK-LABEL: func @cmple_i32
-// CHECK:       cmpi "sle", %arg0, %arg1 : i32
+// CHECK:       cmpi sle, %arg0, %arg1 : i32
 scl.function @cmple_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
   %res = scl.cmple %arg0, %arg1 : !scl.dint
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -381,7 +381,7 @@ scl.function @cmple_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
 }
 
 // CHECK-LABEL: func @cmple_f32
-// CHECK:       cmpf "ule", %arg0, %arg1 : f32
+// CHECK:       cmpf ule, %arg0, %arg1 : f32
 scl.function @cmple_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
   %res = scl.cmple %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -393,7 +393,7 @@ scl.function @cmple_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
 // MARK: scl.cmplt
 
 // CHECK-LABEL: func @cmplt_i8
-// CHECK:       cmpi "slt", %arg0, %arg1 : i8
+// CHECK:       cmpi slt, %arg0, %arg1 : i8
 scl.function @cmplt_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.bool {
   %res = scl.cmplt %arg0, %arg1 : !scl.char
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -402,7 +402,7 @@ scl.function @cmplt_i8(%arg0: !scl.char, %arg1: !scl.char) -> !scl.bool {
 }
 
 // CHECK-LABEL: func @cmplt_i16
-// CHECK:       cmpi "slt", %arg0, %arg1 : i16
+// CHECK:       cmpi slt, %arg0, %arg1 : i16
 scl.function @cmplt_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.bool {
   %res = scl.cmplt %arg0, %arg1 : !scl.int
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -411,7 +411,7 @@ scl.function @cmplt_i16(%arg0: !scl.int, %arg1: !scl.int) -> !scl.bool {
 }
 
 // CHECK-LABEL: func @cmplt_i32
-// CHECK:       cmpi "slt", %arg0, %arg1 : i32
+// CHECK:       cmpi slt, %arg0, %arg1 : i32
 scl.function @cmplt_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
   %res = scl.cmplt %arg0, %arg1 : !scl.dint
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -420,7 +420,7 @@ scl.function @cmplt_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
 }
 
 // CHECK-LABEL: func @cmplt_f32
-// CHECK:       cmpf "ult", %arg0, %arg1 : f32
+// CHECK:       cmpf ult, %arg0, %arg1 : f32
 scl.function @cmplt_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
   %res = scl.cmplt %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
