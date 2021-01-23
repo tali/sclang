@@ -25,6 +25,7 @@ target_link_libraries(sclang-gen
     SclGen
     SclTransforms
     MLIRAnalysis
+    MLIRCastInterfaces
     MLIRIR
     MLIRParser
     MLIRSideEffectInterfaces

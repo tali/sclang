@@ -25,6 +25,7 @@
 include "sclang/SclDialect/SclBase.td"
 include "mlir/IR/OpAsmInterface.td"
 include "mlir/Interfaces/CallInterfaces.td"
+include "mlir/Interfaces/CastInterfaces.td"
 
 
 //
@@ -192,21 +193,21 @@ def TempVariableOp : SCL_Op<"tmpvar",
   let assemblyFormat = "$name attr-dict `:` type($result)";
 }
 
-def BitCastOp : SCL_Op<"bit.cast", [NoSideEffect]> {
+def BitCastOp : SCL_Op<"bit.cast", [DeclareOpInterfaceMethods<CastOpInterface>, NoSideEffect]> {
   let summary = "Type cast between different representations of the same bits";
   let arguments = (ins AnyType:$value);
   let results = (outs AnyType:$result);
   let assemblyFormat = "attr-dict $value `:` type($value) `to` type($result)";
 }
 
-def DialectCastOp : SCL_Op<"mlir.cast", [NoSideEffect]> {
+def DialectCastOp : SCL_Op<"mlir.cast", [DeclareOpInterfaceMethods<CastOpInterface>, NoSideEffect]> {
   let summary = "Type cast between SCL and Standard dialect";
   let arguments = (ins AnyType:$value);
   let results = (outs AnyType:$result);
   let assemblyFormat = "attr-dict $value `:` type($value) `to` type($result)";
 }
 
-def IntegerCastOp : SCL_Op<"int.cast", [NoSideEffect]> {
+def IntegerCastOp : SCL_Op<"int.cast", [DeclareOpInterfaceMethods<CastOpInterface>, NoSideEffect]> {
   let summary = "Type cast between integers with different bitwidths";
   let arguments = (ins Scl_IntegerType:$value);
   let results = (outs Scl_IntegerType:$result);

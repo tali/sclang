@@ -35,6 +35,7 @@ target_link_libraries(sclang
     SclTransforms
     MLIRAnalysis
     MLIRCallInterfaces
+    MLIRCastInterfaces
     MLIRExecutionEngine
     MLIRIR
     MLIRLLVMIR

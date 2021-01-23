@@ -22,10 +22,14 @@
 
 #include "sclang/SclDialect/Dialect.h"
 
+#include "llvm/ADT/TypeSwitch.h"
+
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/FunctionImplementation.h"
+
+#include "sclang/SclDialect/SclTypes.h"
 
 using namespace mlir;
 using namespace mlir::scl;
@@ -66,6 +70,54 @@ void ConstantOp::getAsmResultNames(
     setNameFn(getResult(), "cst");
   }
 }
+
+//===----------------------------------------------------------------------===//
+// MARK: BitCastOp
+//===----------------------------------------------------------------------===//
+
+namespace {
+int bitWidth(Type type) {
+  TypeSwitch<Type>(type)
+  .Case<scl::IntegerType>([&](scl::IntegerType type) {
+    return type.getWidth();
+  })
+  .Case<scl::LogicalType>([&](scl::LogicalType type) {
+    return type.getWidth();
+  })
+  .Case<scl::RealType>([&](scl::RealType type) {
+    return 32;
+  });
+
+  return -1;
+}
+}
+
+/// Returns true if the given set of input and result types are compatible with
+/// this cast operation. This is required by the `CastOpInterface` to verify
+/// this operation and provide other additional utilities.
+bool BitCastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
+  if (inputs.size() != 1 || outputs.size() != 1)
+    return false;
+  int inputWidth = bitWidth(inputs.front());
+  int outputWidth = bitWidth(outputs.front());
+  return inputWidth > 0 && inputWidth == outputWidth;
+}
+
+
+// MARK: DialectCastOp
+
+/// Returns true if the given set of input and result types are compatible with
+/// this cast operation. This is required by the `CastOpInterface` to verify
+/// this operation and provide other additional utilities.
+bool DialectCastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
+  if (inputs.size() != 1 || outputs.size() != 1)
+    return false;
+  bool inputScl = isa<SclDialect>(inputs.front().getDialect());
+  bool outputScl = isa<SclDialect>(outputs.front().getDialect());
+  // TBD check dialects
+  return inputScl != outputScl;
+}
+
 
 //===----------------------------------------------------------------------===//
 // MARK: FunctionOp
@@ -221,11 +273,30 @@ CallInterfaceCallable CallFcOp::getCallableForCallee() {
 
 Operation::operand_range CallFcOp::getArgOperands() { return arguments(); }
 
+
 // MARK: GetElementOp
 
 void GetElementOp::getAsmResultNames(
     function_ref<void(Value, StringRef)> setNameFn) {
   setNameFn(getResult(), name());
+}
+
+
+// MARK: IntegerCastOp
+
+/// Returns true if the given set of input and result types are compatible with
+/// this cast operation. This is required by the `CastOpInterface` to verify
+/// this operation and provide other additional utilities.
+bool IntegerCastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
+  if (inputs.size() != 1 || outputs.size() != 1)
+    return false;
+  // must be a cast between two integer types
+  IntegerType input = inputs.front().dyn_cast<IntegerType>();
+  IntegerType output = outputs.front().dyn_cast<IntegerType>();
+  if (!input || !output)
+    return false;
+  return true;
+
 }
 
 // MARK: TempVarOp
