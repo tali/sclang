@@ -58,18 +58,17 @@ namespace {
 class VariableSymbol {
   mlir::Type type;
   mlir::Value value;
-  bool memref;
-  bool direct;
 
 public:
-  VariableSymbol() : type(), value(), memref(false), direct(false) {}
-  VariableSymbol(mlir::Type type, mlir::Value value, bool memref)
-      : type(type), value(value), memref(memref), direct(!memref) {}
+  VariableSymbol() : type(), value() {}
+  VariableSymbol(mlir::Type type, mlir::Value value)
+      : type(type), value(value) {}
 
   mlir::Type getType() const { return type; }
   mlir::Value getValue() const { return value; }
-  bool isMemref() const { return memref; }
-  bool isDirect() const { return direct; }
+  bool isMemref() const { return type.isa<mlir::MemRefType>(); }
+  bool isDirect() const { return value != nullptr; }
+  bool isElement() const { return type && value == nullptr; }
 };
 
 /// Implementation of a simple MLIR emission from the SCL AST.
@@ -136,11 +135,11 @@ private:
   /// Declare a variable in the current scope, return success if the variable
   /// wasn't declared yet.
   mlir::LogicalResult declare(llvm::StringRef var, mlir::Type type,
-                              mlir::Value value, bool memref) {
+                              mlir::Value value) {
     assert(!var.empty());
     if (symbolTable.count(var))
       return mlir::failure();
-    symbolTable.insert(var, VariableSymbol(type, value, memref));
+    symbolTable.insert(var, VariableSymbol(type, value));
     return mlir::success();
   }
 
@@ -186,8 +185,9 @@ private:
       // TODO: initializer
       for (const auto &var : decl->getVars()) {
         auto location = loc(var->loc());
-        builder.create<VariableOp>(location, type, isInput, isOutput,
-                                   var->getIdentifier());
+        auto name = var->getIdentifier();
+        declare(name, type, nullptr);
+        builder.create<VariableOp>(location, type, isInput, isOutput, name);
       }
     }
     return mlir::success();
@@ -280,7 +280,7 @@ private:
       auto memRefType = AddressType::get(type);
       auto varStorage = builder.create<TempVariableOp>(
           location, memRefType, builder.getStringAttr(name));
-      if (failed(declare(name, type, varStorage, true)))
+      if (failed(declare(name, type, varStorage)))
         return nullptr;
       builder.create<StoreOp>(location, varStorage, value);
       auto nameAttr = builder.getStringAttr(name);
@@ -299,7 +299,7 @@ private:
           auto varStorage = builder.create<TempVariableOp>(
               location, memRefType,
               builder.getStringAttr(var->getIdentifier()));
-          declare(var->getIdentifier(), type, varStorage, true);
+          declare(var->getIdentifier(), type, varStorage);
           if (init) {
             builder.create<StoreOp>(location, varStorage,
                                     mlirGen(init.getValue()));
@@ -315,7 +315,7 @@ private:
       auto memRefType = AddressType::get(type);
       auto varStorage = builder.create<TempVariableOp>(
           location, memRefType, builder.getStringAttr(name));
-      declare(name, type, varStorage, true);
+      declare(name, type, varStorage);
     }
 
     // Emit the body of the function.
@@ -369,6 +369,11 @@ private:
     // function.
     builder.setInsertionPointToStart(&entryBlock);
 
+    // declare argument to instance db
+    auto idb = InstanceDbType::get(builder.getContext(), name);
+    declare("$self", idb, entryBlock.getArgument(0));
+
+
     // Parse the declaration subsections
     const auto &declarations = fb->getDeclarations()->getDecls();
     for (const auto &decl : declarations) {
@@ -405,7 +410,7 @@ private:
           auto varStorage = builder.create<TempVariableOp>(
               location, memRefType,
               builder.getStringAttr(var->getIdentifier()));
-          declare(var->getIdentifier(), type, varStorage, true);
+          declare(var->getIdentifier(), type, varStorage);
           if (init) {
             builder.create<StoreOp>(location, varStorage,
                                     mlirGen(init.getValue()));
@@ -574,9 +579,14 @@ private:
     auto name = llvm::cast<SimpleVariableAST>(expr)->getName();
 
     auto variable = symbolTable.lookup(name);
+    if (variable.isElement()) {
+      auto type = variable.getType();
+      auto self = symbolTable.lookup("$self").getValue();
+      assert(self);
+      return builder.create<GetElementOp>(location, type, self, name);
+    }
     if (variable.isMemref())
       return variable.getValue();
-//TBD      return builder.create<LoadOp>(location, variable.getValue());
     if (variable.isDirect())
       return variable.getValue();
     emitError(location) << "unknown variable '" << name << "'";
@@ -587,6 +597,12 @@ private:
     auto location = loc(expr->loc());
     auto name = llvm::cast<SimpleVariableAST>(expr)->getName();
     auto variable = symbolTable.lookup(name);
+    if (variable.isElement()) {
+      auto type = variable.getType();
+      auto self = symbolTable.lookup("$self").getValue();
+      assert(self);
+      return builder.create<GetElementOp>(location, type, self, name);
+    }
     if (variable.isMemref())
       return variable.getValue();
     emitError(location) << "not a lvalue, variable " << name;
