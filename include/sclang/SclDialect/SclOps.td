@@ -28,6 +28,21 @@ include "mlir/Interfaces/CallInterfaces.td"
 include "mlir/Interfaces/CastInterfaces.td"
 
 
+// MARK: data block
+
+def DataBlockOp : SCL_Op<"db", [Symbol]> {
+  let summary = "Define a data block";
+
+  let arguments = (ins
+    TypeAttr:$type,
+    StrAttr:$sym_name
+  );
+
+  let results = (outs);
+
+  let assemblyFormat = "attr-dict $sym_name `:` $type";
+}
+
 //
 // MARK: functions / function blocks
 //

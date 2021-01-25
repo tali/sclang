@@ -345,7 +345,7 @@ private:
       return ParseAttributeValue(tok_colon);
     }
 
-    return parseError<AttributeAST>("value", "for block attribute");
+    return nullptr;
   }
 
   /// Parse the block attribues

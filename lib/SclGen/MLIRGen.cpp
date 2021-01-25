@@ -428,12 +428,16 @@ private:
     return function;
   }
 
-  mlir::FuncOp mlirgen(const DataBlockAST *db) {
-    emitError(loc(db->loc())) << "TBD not implemented";
-    return nullptr;
+  DataBlockOp mlirGen(const DataBlockAST *db) {
+    auto location = loc(db->loc());
+    StringRef name = db->getIdentifier();
+    mlir::Type type = getType(db->getType());
+    if (!type) return nullptr;
+    mlir::TypeAttr typeAttr = mlir::TypeAttr::get(type);
+    return builder.create<DataBlockOp>(location, typeAttr, name);
   }
 
-  mlir::FuncOp mlirgen(const UserDefinedTypeAST *udt) {
+  mlir::FuncOp mlirGen(const UserDefinedTypeAST *udt) {
     emitError(loc(udt->loc())) << "TBD not implemented";
     return nullptr;
   }

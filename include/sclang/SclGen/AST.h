@@ -456,7 +456,7 @@ class UserDefinedTypeIdentifierAST : public DataTypeSpecAST {
 
 public:
   UserDefinedTypeIdentifierAST(Location loc, std::string name)
-      : DataTypeSpecAST(std::move(loc), DataType_UDT) {}
+      : DataTypeSpecAST(std::move(loc), DataType_UDT), name(std::move(name)) {}
 
   llvm::StringRef getName() const { return name; }
 
