@@ -65,7 +65,7 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
     auto nameAttr = func.getArgAttrOfType<StringAttr>(0, nameId);
     SmallVector<Attribute, 1> argNames;
     argNames.push_back(nameAttr);
-    auto argNamesAttr = ArrayAttr::get(argNames, context);
+    auto argNamesAttr = ArrayAttr::get(context, argNames);
 
     rewriter.replaceOpWithNewOp<scl::CallFcOp>(op, op.getType(), op.callee(),
                                                op.arguments(), argNamesAttr);
@@ -125,7 +125,7 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
     if (!argUsed.all() || !reordered)
       return failure();
 
-    auto argNamesAttr = ArrayAttr::get(argNames, context);
+    auto argNamesAttr = ArrayAttr::get(context, argNames);
     rewriter.replaceOpWithNewOp<scl::CallFcOp>(op, op.getType(), op.callee(),
                                                arguments, argNamesAttr);
 

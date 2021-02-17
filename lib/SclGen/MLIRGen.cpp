@@ -760,7 +760,7 @@ private:
           emitError(loc(lhs->loc()), "invalid parameter name");
           return nullptr;
         }
-        auto nameAttr = mlir::StringAttr::get(name->getName(), context);
+        auto nameAttr = mlir::StringAttr::get(context, name->getName());
         auto value = mlirGenRValue(binary->getRhs());
         argNames.push_back(nameAttr);
         arguments.push_back(value);
@@ -775,7 +775,7 @@ private:
 
     mlir::Type resultType = getType(tok_int); // TODO: TBD
 
-    auto argNamesAttr = mlir::ArrayAttr::get(argNames, context);
+    auto argNamesAttr = mlir::ArrayAttr::get(context, argNames);
     return builder.create<CallFcOp>(location, resultType, callee, arguments, argNamesAttr);
   }
 
