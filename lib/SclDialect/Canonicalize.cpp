@@ -30,6 +30,17 @@ using namespace mlir;
 using llvm::SmallBitVector;
 
 //===----------------------------------------------------------------------===//
+// MARK: CallFbOp
+//===----------------------------------------------------------------------===//
+
+
+void scl::CallFbOp::getCanonicalizationPatterns(
+                    OwningRewritePatternList &results, MLIRContext *context) {
+  //TODO: TBD results.insert<CanonicalizeCallArguments>(context);
+}
+
+
+//===----------------------------------------------------------------------===//
 // MARK: CallFcOp
 //===----------------------------------------------------------------------===//
 

@@ -49,6 +49,9 @@ public:
       return FloatType::getF32(type.getContext());
     });
 
+    // keep structs and arrays
+    //addConversion([&](scl::StructType type) { return type; });
+
     // keep Std types
     addConversion([&](FloatType type) { return type; });
     addConversion([&](IntegerType type) { return type; });

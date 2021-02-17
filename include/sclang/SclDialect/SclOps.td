@@ -47,10 +47,29 @@ def DataBlockOp : SCL_Op<"db", [Symbol]> {
 // MARK: functions / function blocks
 //
 
+def CallFbOp : SCL_Op<"call.fb", [
+    //TBD, InFunctionScope,
+    DeclareOpInterfaceMethods<CallOpInterface>]> {
+  let summary = "Call a function block";
+
+  let arguments = (ins
+    FlatSymbolRefAttr:$fb,
+    Scl_InstanceDbType:$idb
+  );
+
+  let results = (outs);
+
+  let assemblyFormat = [{
+    $fb `(` $idb `:` type($idb) `)` attr-dict `:`
+  }];
+
+  let hasCanonicalizer = 1;
+}
+
 def CallFcOp : SCL_Op<"call.fc", [
     //TBD, InFunctionScope,
     DeclareOpInterfaceMethods<CallOpInterface>]> {
-  let summary = "Call another function";
+  let summary = "Call a function";
 
   let arguments = (ins
     FlatSymbolRefAttr:$callee,
@@ -236,6 +255,13 @@ def ConstantOp : SCL_Op<"constant",
   let results = (outs AnyType:$result);
   let assemblyFormat = "attr-dict $value `->` type($result)";
   let hasFolder = 1;
+}
+
+def GetGlobalOp : SCL_Op<"getglobal",
+    [NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
+  let arguments = (ins FlatSymbolRefAttr:$name);
+  let results = (outs Scl_AddressType:$element);
+  let assemblyFormat = "attr-dict $name `:` type($element)";
 }
 
 def GetElementOp : SCL_Op<"getelement",

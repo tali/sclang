@@ -265,6 +265,17 @@ ArrayRef<Type> FunctionBlockOp::getCallableResults() {
 }
 
 
+// MARK: CallFbOp
+
+CallInterfaceCallable CallFbOp::getCallableForCallee() {
+  return getOperation()->getAttrOfType<SymbolRefAttr>(fb());
+}
+
+Operation::operand_range CallFbOp::getArgOperands() {
+  return {getOperation()->operand_begin(), getOperation()->operand_end()}; // only operand is `idb`
+}
+
+
 // MARK: CallFcOp
 
 CallInterfaceCallable CallFcOp::getCallableForCallee() {
@@ -273,6 +284,13 @@ CallInterfaceCallable CallFcOp::getCallableForCallee() {
 
 Operation::operand_range CallFcOp::getArgOperands() { return arguments(); }
 
+
+// MARK: GetGlobalOp
+
+void GetGlobalOp::getAsmResultNames(
+    function_ref<void(Value, StringRef)> setNameFn) {
+  setNameFn(getResult(), name());
+}
 
 // MARK: GetElementOp
 

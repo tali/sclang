@@ -469,6 +469,7 @@ private:
 
     return TypeSwitch<const InstructionAST *, mlir::LogicalResult>(instr)
         .Case<ValueAssignmentAST>([&](auto assign) { return mlirGen(assign); })
+        .Case<SubroutineProcessingAST>([&](auto call) { return mlirGen(call); })
         .Case<ContinueAST>([&](auto instr) {
           builder.create<ContinueOp>(location);
           return mlir::success();
@@ -507,6 +508,13 @@ private:
 
     builder.create<StoreOp>(location, lhs, rhs);
 
+    return mlir::success();
+  }
+
+  mlir::LogicalResult mlirGen(const SubroutineProcessingAST *call) {
+    mlir::Value result = mlirGen(call->getCall());
+    if (!result)
+      return mlir::failure();
     return mlir::success();
   }
 
@@ -712,16 +720,33 @@ private:
 
   mlir::Value mlirGen(const FunctionCallAST *expr) {
     auto location = loc(expr->loc());
-    auto context = builder.getContext();
+    mlir::Value call = nullptr;
 
-    // The function name is parsed as a variable
-    auto callee = dyn_cast<SimpleVariableAST>(expr->getFunction());
-    if (!callee) {
+    TypeSwitch<const ExpressionAST *>(expr->getFunction())
+    .Case<SimpleVariableAST>([&](auto callee) {
+      call = mlirGenFcCall(expr, callee->getName());
+    })
+    .Case<BinaryExpressionAST>([&](auto callee) {
+      if (callee->getOp() != tok_dot) return;
+      auto idbVar = dyn_cast<SimpleVariableAST>(callee->getLhs());
+      if (!idbVar) {
+        emitError(location, "invalid instance db in function call");
+      }
+      auto fbVar = dyn_cast<SimpleVariableAST>(callee->getRhs());
+      if (!fbVar) {
+        emitError(location, "invalid fb in function call");
+      }
+      mlirGenFbCall(expr, idbVar->getName(), fbVar->getName());
+    })
+    .Default([&](auto callee) {
       emitError(location, "invalid callee in function call");
-      return nullptr;
-    }
-    auto name = callee->getName();
-    // TBD: lookup function name
+    });
+    return call;
+  }
+
+  mlir::Value mlirGenFcCall(const FunctionCallAST *expr, StringRef callee) {
+    auto location = loc(expr->loc());
+    auto context = builder.getContext();
 
     // get arguments
     SmallVector<mlir::Value, 4> arguments;
@@ -747,11 +772,42 @@ private:
         arguments.push_back(mlirGenRValue(arg.get()));
       }
     }
-    auto argNamesAttr = mlir::ArrayAttr::get(argNames, context);
 
     mlir::Type resultType = getType(tok_int); // TODO: TBD
 
-    return builder.create<CallFcOp>(location, resultType, name, arguments, argNamesAttr);
+    auto argNamesAttr = mlir::ArrayAttr::get(argNames, context);
+    return builder.create<CallFcOp>(location, resultType, callee, arguments, argNamesAttr);
+  }
+
+  mlir::LogicalResult mlirGenFbCall(const FunctionCallAST *expr, StringRef idb, StringRef fb) {
+    auto location = loc(expr->loc());
+
+    auto idbType = InstanceDbType::get(builder.getContext(), fb);
+    auto idbRef = builder.create<GetGlobalOp>(location, idbType, idb);
+
+    // get arguments
+    for (auto &arg : expr->getParameters()) {
+      auto binary = dyn_cast<BinaryExpressionAST>(arg.get());
+      if (binary && binary->getOp() == tok_assignment) {
+        auto lhs = binary->getLhs();
+        auto nameVar = dyn_cast<SimpleVariableAST>(lhs);
+        if (!nameVar || nameVar->isSymbol()) {
+          emitError(loc(lhs->loc()), "invalid parameter name");
+          return mlir::failure();
+        }
+        auto name = nameVar->getName();
+        auto value = mlirGenRValue(binary->getRhs());
+
+        auto elem = builder.create<GetElementOp>(location, idbRef, name);
+        builder.create<StoreOp>(location, elem, value);
+      } else {
+        emitError(loc(arg->loc()), "parameter without name");
+        return mlir::failure();
+      }
+    }
+
+    builder.create<CallFbOp>(location, fb, idbRef);
+    return mlir::success();
   }
 
   mlir::Type getType(Token token) {
@@ -854,11 +910,17 @@ private:
     return StructType::get(names, types);
   }
 
+  mlir::Type getType(const UserDefinedTypeIdentifierAST *type) {
+    // TODO: TBD other types
+    return InstanceDbType::get(builder.getContext(), type->getName());
+  }
+
   mlir::Type getType(const DataTypeSpecAST *type) {
     return TypeSwitch<const DataTypeSpecAST *, mlir::Type>(type)
         .Case<ElementaryDataTypeAST>([&](auto type) { return getType(type); })
         .Case<ArrayDataTypeSpecAST>([&](auto type) { return getType(type); })
         .Case<StructDataTypeSpecAST>([&](auto type) { return getType(type); })
+        .Case<UserDefinedTypeIdentifierAST>([&](auto type) { return getType(type); })
         .Default([&](auto type) {
           emitError(loc(type->loc()))
               << "MLIR codegen encountered an unhandled type kind '"
