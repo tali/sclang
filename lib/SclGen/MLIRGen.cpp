@@ -56,17 +56,19 @@ using llvm::TypeSwitch;
 namespace {
 
 class VariableSymbol {
+  llvm::Optional<mlir::Location> loc;
   mlir::Type type;
   mlir::Value value;
 
 public:
-  VariableSymbol() : type(), value() {}
-  VariableSymbol(mlir::Type type, mlir::Value value)
-      : type(type), value(value) {}
+  VariableSymbol() : loc(), type(), value() {}
+  VariableSymbol(mlir::Location loc, mlir::Type type, mlir::Value value)
+      : loc(loc), type(type), value(value) {}
 
+  mlir::Location getLocation() const { return loc.getValue(); }
   mlir::Type getType() const { return type; }
   mlir::Value getValue() const { return value; }
-  bool isMemref() const { return type.isa<mlir::MemRefType>(); }
+  bool isMemref() const { return type && type.isa<mlir::MemRefType>(); }
   bool isDirect() const { return value != nullptr; }
   bool isElement() const { return type && value == nullptr; }
 };
@@ -134,12 +136,14 @@ private:
 
   /// Declare a variable in the current scope, return success if the variable
   /// wasn't declared yet.
-  mlir::LogicalResult declare(llvm::StringRef var, mlir::Type type,
-                              mlir::Value value) {
+  mlir::LogicalResult declare(mlir::Location loc, llvm::StringRef var,
+                              mlir::Type type, mlir::Value value) {
     assert(!var.empty());
-    if (symbolTable.count(var))
+    if (symbolTable.count(var)) {
+      emitError(loc) << "variable already declared: " << var;
       return mlir::failure();
-    symbolTable.insert(var, VariableSymbol(type, value));
+    }
+    symbolTable.insert(var, VariableSymbol(loc, type, value));
     return mlir::success();
   }
 
@@ -186,7 +190,8 @@ private:
       for (const auto &var : decl->getVars()) {
         auto location = loc(var->loc());
         auto name = var->getIdentifier();
-        declare(name, type, nullptr);
+        if (failed(declare(location, name, type, nullptr)))
+          return mlir::failure();
         builder.create<VariableOp>(location, type, isInput, isOutput, name);
       }
     }
@@ -280,7 +285,7 @@ private:
       auto memRefType = AddressType::get(type);
       auto varStorage = builder.create<TempVariableOp>(
           location, memRefType, builder.getStringAttr(name));
-      if (failed(declare(name, type, varStorage)))
+      if (failed(declare(location, name, type, varStorage)))
         return nullptr;
       builder.create<StoreOp>(location, varStorage, value);
       auto nameAttr = builder.getStringAttr(name);
@@ -299,7 +304,8 @@ private:
           auto varStorage = builder.create<TempVariableOp>(
               location, memRefType,
               builder.getStringAttr(var->getIdentifier()));
-          declare(var->getIdentifier(), type, varStorage);
+          if (failed(declare(location, var->getIdentifier(), type, varStorage)))
+              return nullptr;
           if (init) {
             builder.create<StoreOp>(location, varStorage,
                                     mlirGen(init.getValue()));
@@ -315,7 +321,8 @@ private:
       auto memRefType = AddressType::get(type);
       auto varStorage = builder.create<TempVariableOp>(
           location, memRefType, builder.getStringAttr(name));
-      declare(name, type, varStorage);
+      if (failed(declare(location, name, type, varStorage)))
+        return nullptr;
     }
 
     // Emit the body of the function.
@@ -371,7 +378,8 @@ private:
 
     // declare argument to instance db
     auto idb = InstanceDbType::get(builder.getContext(), name);
-    declare("$self", idb, entryBlock.getArgument(0));
+    if (failed(declare(location, "$self", idb, entryBlock.getArgument(0))))
+      return nullptr;
 
 
     // Parse the declaration subsections
@@ -410,7 +418,8 @@ private:
           auto varStorage = builder.create<TempVariableOp>(
               location, memRefType,
               builder.getStringAttr(var->getIdentifier()));
-          declare(var->getIdentifier(), type, varStorage);
+          if (failed(declare(location, var->getIdentifier(), type, varStorage)))
+            return nullptr;
           if (init) {
             builder.create<StoreOp>(location, varStorage,
                                     mlirGen(init.getValue()));
