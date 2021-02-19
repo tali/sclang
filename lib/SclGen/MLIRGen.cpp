@@ -68,7 +68,7 @@ public:
   mlir::Location getLocation() const { return loc.getValue(); }
   mlir::Type getType() const { return type; }
   mlir::Value getValue() const { return value; }
-  bool isMemref() const { return type && type.isa<mlir::MemRefType>(); }
+  bool isAddress() const { return type && type.isa<AddressType>(); }
   bool isDirect() const { return value != nullptr; }
   bool isElement() const { return type && value == nullptr; }
 };
@@ -282,10 +282,10 @@ private:
       auto type = std::get<0>(name_value);
       auto name = std::get<1>(name_value);
       auto value = std::get<2>(name_value);
-      auto memRefType = AddressType::get(type);
+      auto addressType = AddressType::get(type);
       auto varStorage = builder.create<TempVariableOp>(
-          location, memRefType, builder.getStringAttr(name));
-      if (failed(declare(location, name, type, varStorage)))
+          location, addressType, builder.getStringAttr(name));
+      if (failed(declare(location, name, addressType, varStorage)))
         return nullptr;
       builder.create<StoreOp>(location, varStorage, value);
       auto nameAttr = builder.getStringAttr(name);
@@ -297,14 +297,14 @@ private:
     for (const auto subsection : tempvar) {
       for (const auto &decl : subsection->getValues()) {
         auto type = getType(decl->getDataType());
-        auto memRefType = AddressType::get(type);
+        auto addressType = AddressType::get(type);
         auto init = decl->getInitializer();
         for (const auto &var : decl->getVars()) {
           auto location = loc(var->loc());
           auto varStorage = builder.create<TempVariableOp>(
-              location, memRefType,
+              location, addressType,
               builder.getStringAttr(var->getIdentifier()));
-          if (failed(declare(location, var->getIdentifier(), type, varStorage)))
+          if (failed(declare(location, var->getIdentifier(), addressType, varStorage)))
               return nullptr;
           if (init) {
             builder.create<StoreOp>(location, varStorage,
@@ -318,10 +318,10 @@ private:
     for (const auto name_value : llvm::zip(output_types, output_names)) {
       auto type = std::get<0>(name_value);
       auto name = std::get<1>(name_value);
-      auto memRefType = AddressType::get(type);
+      auto addressType = AddressType::get(type);
       auto varStorage = builder.create<TempVariableOp>(
-          location, memRefType, builder.getStringAttr(name));
-      if (failed(declare(location, name, type, varStorage)))
+          location, addressType, builder.getStringAttr(name));
+      if (failed(declare(location, name, addressType, varStorage)))
         return nullptr;
     }
 
@@ -602,7 +602,7 @@ private:
       assert(self);
       return builder.create<GetElementOp>(location, type, self, name);
     }
-    if (variable.isMemref())
+    if (variable.isAddress())
       return variable.getValue();
     if (variable.isDirect())
       return variable.getValue();
@@ -620,7 +620,7 @@ private:
       assert(self);
       return builder.create<GetElementOp>(location, type, self, name);
     }
-    if (variable.isMemref())
+    if (variable.isAddress())
       return variable.getValue();
     emitError(location) << "not a lvalue, variable " << name;
     return nullptr;
