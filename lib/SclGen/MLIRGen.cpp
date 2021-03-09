@@ -37,6 +37,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <map>
+#include <functional>
 #include <numeric>
 #include <string>
 
@@ -378,7 +379,8 @@ private:
 
     // declare argument to instance db
     auto idb = InstanceDbType::get(builder.getContext(), name);
-    if (failed(declare(location, "$self", idb, entryBlock.getArgument(0))))
+    auto selfType = AddressType::get(idb);
+    if (failed(declare(location, "$self", selfType, entryBlock.getArgument(0))))
       return nullptr;
 
 
@@ -521,10 +523,7 @@ private:
   }
 
   mlir::LogicalResult mlirGen(const SubroutineProcessingAST *call) {
-    mlir::Value result = mlirGen(call->getCall());
-    if (!result)
-      return mlir::failure();
-    return mlir::success();
+    return mlirGenVoid(call->getCall());
   }
 
   mlir::Value mlirGenLValue(const ExpressionAST *expr) {
@@ -597,7 +596,7 @@ private:
 
     auto variable = symbolTable.lookup(name);
     if (variable.isElement()) {
-      auto type = variable.getType();
+      auto type = AddressType::get(variable.getType());
       auto self = symbolTable.lookup("$self").getValue();
       assert(self);
       return builder.create<GetElementOp>(location, type, self, name);
@@ -615,7 +614,7 @@ private:
     auto name = llvm::cast<SimpleVariableAST>(expr)->getName();
     auto variable = symbolTable.lookup(name);
     if (variable.isElement()) {
-      auto type = variable.getType();
+      auto type = AddressType::get(variable.getType());
       auto self = symbolTable.lookup("$self").getValue();
       assert(self);
       return builder.create<GetElementOp>(location, type, self, name);
@@ -727,30 +726,83 @@ private:
     }
   }
 
-  mlir::Value mlirGen(const FunctionCallAST *expr) {
+  mlir::LogicalResult mlirGenVoid(const FunctionCallAST *expr) {
     auto location = loc(expr->loc());
-    mlir::Value call = nullptr;
 
-    TypeSwitch<const ExpressionAST *>(expr->getFunction())
+    return TypeSwitch<const ExpressionAST *, mlir::LogicalResult>(expr->getFunction())
     .Case<SimpleVariableAST>([&](auto callee) {
-      call = mlirGenFcCall(expr, callee->getName());
+      mlirGenFcCall(expr, callee->getName());
+      return mlir::success();
     })
     .Case<BinaryExpressionAST>([&](auto callee) {
-      if (callee->getOp() != tok_dot) return;
+      if (callee->getOp() != tok_dot)
+        return mlir::failure();
       auto idbVar = dyn_cast<SimpleVariableAST>(callee->getLhs());
       if (!idbVar) {
         emitError(location, "invalid instance db in function call");
+        return mlir::failure();
       }
       auto fbVar = dyn_cast<SimpleVariableAST>(callee->getRhs());
       if (!fbVar) {
         emitError(location, "invalid fb in function call");
+        return mlir::failure();
       }
-      mlirGenFbCall(expr, idbVar->getName(), fbVar->getName());
+      if (failed(mlirGenFbCall(expr, idbVar->getName(), fbVar->getName()))) {
+        emitError(location, "invalid FB call");
+        return mlir::failure();
+      }
+      return mlir::success();
     })
     .Default([&](auto callee) {
-      emitError(location, "invalid callee in function call");
+      emitError(location, "invalid callee in function or FB call");
+      return mlir::failure();
     });
-    return call;
+  }
+
+  mlir::Value mlirGen(const FunctionCallAST *expr) {
+    auto location = loc(expr->loc());
+
+    // The function name is parsed as a variable
+    auto callee = dyn_cast<SimpleVariableAST>(expr->getFunction());
+    if (!callee) {
+      emitError(location, "invalid callee in function call");
+      return nullptr;
+    }
+    return mlirGenFcCall(expr, callee->getName());
+   }
+
+  mlir::LogicalResult mlirGenCallParameters(const FunctionCallAST *fc,
+        std::function<void (StringRef, mlir::Value)> fN,
+        std::function<void (mlir::Value)> fNN) {
+    for (auto &arg : fc->getParameters()) {
+      auto binary = dyn_cast<BinaryExpressionAST>(arg.get());
+      if (binary && binary->getOp() == tok_assignment) {
+        auto lhs = binary->getLhs();
+        auto name = dyn_cast<SimpleVariableAST>(lhs);
+        if (!name || name->isSymbol()) {
+          emitError(loc(lhs->loc()), "invalid parameter name");
+          return mlir::failure();
+        }
+        mlir::Value value = mlirGen(binary->getRhs());
+        fN(name->getName(), value);
+      } else {
+        if (!fNN) {
+          emitError(loc(arg->loc()), "parameter without name");
+          return mlir::failure();
+        }
+        if (fc->getParameters().size() != 1) {
+          emitError(loc(arg->loc()), "parameter without name");
+          return mlir::failure();
+        }
+        fNN(mlirGen(arg.get()));
+      }
+    }
+    return mlir::success();
+  }
+
+  mlir::LogicalResult mlirGenCallParameters(const FunctionCallAST *fc,
+       std::function<void (StringRef, mlir::Value)> f) {
+    return mlirGenCallParameters(fc, f, nullptr);
   }
 
   mlir::Value mlirGenFcCall(const FunctionCallAST *expr, StringRef callee) {
@@ -760,27 +812,14 @@ private:
     // get arguments
     SmallVector<mlir::Value, 4> arguments;
     SmallVector<mlir::Attribute, 4> argNames;
-    for (auto &arg : expr->getParameters()) {
-      auto binary = dyn_cast<BinaryExpressionAST>(arg.get());
-      if (binary && binary->getOp() == tok_assignment) {
-        auto lhs = binary->getLhs();
-        auto name = dyn_cast<SimpleVariableAST>(lhs);
-        if (!name || name->isSymbol()) {
-          emitError(loc(lhs->loc()), "invalid parameter name");
-          return nullptr;
-        }
-        auto nameAttr = mlir::StringAttr::get(context, name->getName());
-        auto value = mlirGenRValue(binary->getRhs());
-        argNames.push_back(nameAttr);
-        arguments.push_back(value);
-      } else {
-        if (expr->getParameters().size() != 1) {
-          emitError(loc(arg->loc()), "parameter without name");
-          return nullptr;
-        }
-        arguments.push_back(mlirGenRValue(arg.get()));
-      }
-    }
+    if (failed(mlirGenCallParameters(expr, [&] (StringRef name, mlir::Value value) {
+      argNames.push_back(mlir::StringAttr::get(context, name));
+      arguments.push_back(value);
+      return mlir::success();
+    }, [&] (mlir::Value value) {
+      arguments.push_back(value);
+    })))
+      return nullptr;
 
     mlir::Type resultType = getType(tok_int); // TODO: TBD
 
@@ -792,28 +831,19 @@ private:
     auto location = loc(expr->loc());
 
     auto idbType = InstanceDbType::get(builder.getContext(), fb);
-    auto idbRef = builder.create<GetGlobalOp>(location, idbType, idb);
-
-    // get arguments
-    for (auto &arg : expr->getParameters()) {
-      auto binary = dyn_cast<BinaryExpressionAST>(arg.get());
-      if (binary && binary->getOp() == tok_assignment) {
-        auto lhs = binary->getLhs();
-        auto nameVar = dyn_cast<SimpleVariableAST>(lhs);
-        if (!nameVar || nameVar->isSymbol()) {
-          emitError(loc(lhs->loc()), "invalid parameter name");
-          return mlir::failure();
-        }
-        auto name = nameVar->getName();
-        auto value = mlirGenRValue(binary->getRhs());
-
-        auto elem = builder.create<GetElementOp>(location, idbRef, name);
-        builder.create<StoreOp>(location, elem, value);
-      } else {
-        emitError(loc(arg->loc()), "parameter without name");
-        return mlir::failure();
-      }
+    auto argType = AddressType::get(idbType);
+    auto idbRef = builder.create<GetGlobalOp>(location, argType, idb);
+    if (!idbRef) {
+      emitError(location, "invalid IDB reference");
+      return mlir::failure();
     }
+
+    if (failed(mlirGenCallParameters(expr, [&] (StringRef name, mlir::Value value) {
+      auto elem = builder.create<GetElementOp>(location, idbRef, name);
+      builder.create<StoreOp>(location, elem, value);
+      return mlir::success();
+    })))
+        return mlir::failure();
 
     builder.create<CallFbOp>(location, fb, idbRef);
     return mlir::success();
@@ -962,12 +992,14 @@ private:
         builder.create<EndOp>(location);
       }
       builder.createBlock(&cond.thenBody());
-      mlirGen(ifThen->getCodeBlock());
+      if (failed(mlirGen(ifThen->getCodeBlock())))
+        return mlir::failure();
       builder.create<EndOp>(location);
       builder.createBlock(&cond.elseBody());
     }
     if (ifThenElse->getElseBlock()) {
-      mlirGen(ifThenElse->getElseBlock().getValue());
+      if (failed(mlirGen(ifThenElse->getElseBlock().getValue())))
+        return mlir::failure();
     }
     builder.create<EndOp>(loc(ifThenElse->loc()));
 

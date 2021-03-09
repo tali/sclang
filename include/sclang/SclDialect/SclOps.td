@@ -54,13 +54,13 @@ def CallFbOp : SCL_Op<"call.fb", [
 
   let arguments = (ins
     FlatSymbolRefAttr:$fb,
-    Scl_InstanceDbType:$idb
+    Scl_AddressType:$idb
   );
 
   let results = (outs);
 
   let assemblyFormat = [{
-    $fb `(` $idb `:` type($idb) `)` attr-dict `:`
+    $fb `(` $idb `:` type($idb) `)` attr-dict
   }];
 
   let hasCanonicalizer = 1;

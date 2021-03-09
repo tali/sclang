@@ -243,7 +243,8 @@ LogicalResult FunctionBlockOp::verifyBody() {
 void FunctionBlockOp::build(OpBuilder &builder, OperationState &state,
                        StringRef name) {
   Type idb = InstanceDbType::get(builder.getContext(), name);
-  SmallVector<Type, 1> inputs = { idb };
+  Type selfType = AddressType::get(idb);
+  SmallVector<Type, 1> inputs = { selfType };
   SmallVector<Type, 0> results = {};
   FunctionType func_type = builder.getFunctionType(inputs, results);
 
