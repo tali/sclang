@@ -117,7 +117,7 @@ def FunctionOp : TopLevelOp<"function", [
   let verifier = [{ return success(); }];
 
   let builders = [
-    OpBuilderDAG<(ins "StringRef":$name, "FunctionType":$type)>
+    OpBuilder<(ins "StringRef":$name, "FunctionType":$type)>
   ];
 
   let extraClassDeclaration = [{
@@ -170,7 +170,7 @@ def FunctionBlockOp : TopLevelOp<"function_block", [
   let verifier = [{ return success(); }];
 
   let builders = [
-    OpBuilderDAG<(ins "StringRef":$name)>
+    OpBuilder<(ins "StringRef":$name)>
   ];
 
   let extraClassDeclaration = [{
@@ -214,7 +214,7 @@ def VariableOp : SCL_Op<"var", [Symbol]> {
   let assemblyFormat = "(`input` $input^)? (`output` $output^)? $sym_name attr-dict `:` $type";
 
   let builders = [
-    OpBuilderDAG<(ins "Type":$type, "bool":$isInput, "bool":$isOutput, "StringRef":$name)>
+    OpBuilder<(ins "Type":$type, "bool":$isInput, "bool":$isOutput, "StringRef":$name)>
   ];
 }
 
@@ -272,7 +272,7 @@ def GetElementOp : SCL_Op<"getelement",
   let assemblyFormat = "attr-dict $name `from` $addr `:` type($addr) `->` type($element)";
 
   let builders = [
-    OpBuilderDAG<(ins "Value":$address, "StringRef":$name), [{
+    OpBuilder<(ins "Value":$address, "StringRef":$name), [{
       auto structType = address.getType().cast<AddressType>().getElementType();
       auto elementType = structType.cast<StructType>().getElementType(name);
       auto resultType = AddressType::get(elementType);
@@ -292,7 +292,7 @@ def LoadOp : SCL_Op<"load", [/*SameOperandsAndResultElementType*/]> {
   let assemblyFormat = "$address `:` type($address) attr-dict `:` type($result)";
 
   let builders = [
-    OpBuilderDAG<(ins "Value":$address), [{
+    OpBuilder<(ins "Value":$address), [{
       auto elementType = address.getType().cast<AddressType>().getElementType();
       build($_builder, $_state, elementType, address);
     }]>
