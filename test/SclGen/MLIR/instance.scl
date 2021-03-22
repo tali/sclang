@@ -1,0 +1,69 @@
+// RUN: sclang-gen --emit=mlir %s | FileCheck %s
+
+// CHECK-LABEL: scl.function_block @fb1
+// CHECK: (%arg0: !scl.address<!scl.idb<fb1>>)
+function_block fb1
+
+// CHECK: scl.var input "in" : !scl.int
+var_input
+  in : int;
+end_var;
+
+// CHECK: scl.var output "out" : !scl.int
+var_output
+  out : int;
+end_var
+
+// CHECK: scl.var "state" : !scl.int
+var
+  state : int := 0;
+end_var
+
+begin
+// CHECK: %out = scl.getelement "out" from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.int>
+// CHECK: %state = scl.getelement "state" from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.int>
+// CHECK: %0 = scl.load %state : !scl.address<!scl.int> : !scl.int
+// CHECK: scl.store %out : !scl.address<!scl.int> = %0 : !scl.int
+  out := state;
+
+// CHECK: %state_0 = scl.getelement "state" from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.int>
+// CHECK: %in = scl.getelement "in" from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.int>
+// CHECK: %1 = scl.load %in : !scl.address<!scl.int> : !scl.int
+// CHECK: scl.store %state_0 : !scl.address<!scl.int> = %1 : !scl.int
+  state := in;
+
+// CHECK: scl.return
+end_function_block
+
+
+///////////////////
+
+
+// CHECK-LABEL: scl.db "db1"
+data_block db1
+
+// CHECK: !scl.idb<fb1>
+  fb1
+
+begin
+end_data_block
+
+
+///////////////////
+
+
+// CHECK: scl.function @fc1() -> !scl.int {
+function fc1 : int
+
+begin
+
+
+//  "db1".in := 1;
+
+// CHECK: %db1 = scl.getglobal @db1 : !scl.address<!scl.idb<fb1>>
+// CHECK: scl.call.fb @fb1(%db1 : !scl.address<!scl.idb<fb1>>)
+  fb1."db1"();
+
+//  fc1 := "db1".out;
+
+end_function
