@@ -27,6 +27,7 @@
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
@@ -446,11 +447,15 @@ private:
 
   DataBlockOp mlirGen(const DataBlockAST *db) {
     auto location = loc(db->loc());
+    auto context = builder.getContext();
+
     StringRef name = db->getIdentifier();
     mlir::Type type = getType(db->getType());
     if (!type) return nullptr;
     mlir::TypeAttr typeAttr = mlir::TypeAttr::get(type);
-    return builder.create<DataBlockOp>(location, typeAttr, name);
+    mlir::StringAttr nameAttr = mlir::StringAttr::get(context, name);
+
+    return builder.create<DataBlockOp>(location, typeAttr, nameAttr);
   }
 
   mlir::FuncOp mlirGen(const UserDefinedTypeAST *udt) {

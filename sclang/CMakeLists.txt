@@ -38,11 +38,10 @@ target_link_libraries(sclang
     MLIRCastInterfaces
     MLIRExecutionEngine
     MLIRIR
-    MLIRLLVMIR
     MLIRParser
     MLIRPass
     MLIRSideEffectInterfaces
     MLIRSupport
-    MLIRTargetLLVMIR
+    MLIRTargetLLVMIRExport
     MLIRTransforms
 )
