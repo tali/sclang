@@ -742,14 +742,14 @@ private:
     .Case<BinaryExpressionAST>([&](auto callee) {
       if (callee->getOp() != tok_dot)
         return mlir::failure();
-      auto idbVar = dyn_cast<SimpleVariableAST>(callee->getLhs());
-      if (!idbVar) {
-        emitError(location, "invalid instance db in function call");
-        return mlir::failure();
-      }
-      auto fbVar = dyn_cast<SimpleVariableAST>(callee->getRhs());
+      auto fbVar = dyn_cast<SimpleVariableAST>(callee->getLhs());
       if (!fbVar) {
         emitError(location, "invalid fb in function call");
+        return mlir::failure();
+      }
+      auto idbVar = dyn_cast<SimpleVariableAST>(callee->getRhs());
+      if (!idbVar) {
+        emitError(location, "invalid instance db in function call");
         return mlir::failure();
       }
       if (failed(mlirGenFbCall(expr, idbVar->getName(), fbVar->getName()))) {
