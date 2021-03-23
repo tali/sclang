@@ -42,10 +42,11 @@ struct SclToLLVMLoweringPass
 } // end anonymous namespace
 
 void SclToLLVMLoweringPass::runOnOperation() {
+  MLIRContext * context = &getContext();
   // The first thing to define is the conversion target. This will define the
   // final target for this lowering. For this lowering, we are only targeting
   // the LLVM dialect.
-  LLVMConversionTarget target(getContext());
+  LLVMConversionTarget target(*context);
   target.addLegalOp<ModuleOp, ModuleTerminatorOp>();
 
   // During this lowering, we will also be lowering the MemRef types, that are
@@ -53,7 +54,7 @@ void SclToLLVMLoweringPass::runOnOperation() {
   // conversion we use a TypeConverter as part of the lowering. This converter
   // details how one type maps to another. This is necessary now that we will be
   // doing more complicated lowerings, involving loop region arguments.
-  LLVMTypeConverter typeConverter(&getContext());
+  LLVMTypeConverter typeConverter(context);
 
   // Now that the conversion target has been defined, we need to provide the
   // patterns used for lowering. At this point of the compilation process, we
@@ -63,8 +64,8 @@ void SclToLLVMLoweringPass::runOnOperation() {
   // lowerings. Transitive lowering, or A->B->C lowering, is when multiple
   // patterns must be applied to fully transform an illegal operation into a
   // set of legal ones.
-  OwningRewritePatternList patterns;
-  populateLoopToStdConversionPatterns(patterns, &getContext());
+  OwningRewritePatternList patterns(context);
+  populateLoopToStdConversionPatterns(patterns);
   populateStdToLLVMConversionPatterns(typeConverter, patterns);
 
   // We want to completely lower to LLVM, so we use a `FullConversion`. This

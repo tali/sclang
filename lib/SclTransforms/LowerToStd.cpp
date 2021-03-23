@@ -440,7 +440,9 @@ struct SclToStdLoweringPass
 } // end anonymous namespace.
 
 void SclToStdLoweringPass::runOnOperation() {
-  ConversionTarget target(getContext());
+  MLIRContext * context = &getContext();
+
+  ConversionTarget target(*context);
   target.addLegalDialect<scf::SCFDialect>();
   target.addLegalDialect<StandardOpsDialect>();
   target.addLegalOp<FuncOp>();
@@ -450,7 +452,7 @@ void SclToStdLoweringPass::runOnOperation() {
 
   SclTypeConverter converter{};
 
-  OwningRewritePatternList patterns;
+  OwningRewritePatternList patterns(context);
   patterns.insert<
       AddOpLowering, AndOpLowering, CallFcOpLowering, ConstantOpLowering,
       DialectCastOpLowering, DivOpLowering, EndOpLowering, EqualLowering,
@@ -459,7 +461,7 @@ void SclToStdLoweringPass::runOnOperation() {
       ModOpLowering, MulOpLowering, NotEqualLowering, OrOpLowering,
       ReturnOpLowering, ReturnValueOpLowering, SubOpLowering, StoreOpLowering,
       TempVariableOpLowering, UnaryMinusOpLowering, UnaryNotOpLowering,
-      XOrOpLowering>(converter, &getContext());
+      XOrOpLowering>(converter, context);
 
   if (failed(applyPartialConversion(getOperation(), target,
                                     std::move(patterns))))
