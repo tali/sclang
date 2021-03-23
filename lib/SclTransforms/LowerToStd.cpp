@@ -15,6 +15,7 @@
 #include "sclang/SclDialect/Dialect.h"
 #include "sclang/SclTransforms/Passes.h"
 
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Pass/Pass.h"
@@ -255,7 +256,7 @@ struct LoadOpLowering : public OpConversionPattern<scl::LoadOp> {
                   ConversionPatternRewriter &rewriter) const final {
     scl::LoadOp::Adaptor transformed(operands);
 
-    rewriter.replaceOpWithNewOp<LoadOp>(op, transformed.address());
+    rewriter.replaceOpWithNewOp<memref::LoadOp>(op, transformed.address());
     return success();
   }
 };
@@ -336,7 +337,7 @@ struct ReturnValueOpLowering : public OpConversionPattern<scl::ReturnValueOp> {
                   ConversionPatternRewriter &rewriter) const final {
     scl::ReturnValueOp::Adaptor transformed(operands);
 
-    auto retval = rewriter.create<LoadOp>(op.getLoc(), transformed.value());
+    auto retval = rewriter.create<memref::LoadOp>(op.getLoc(), transformed.value());
 
     rewriter.replaceOpWithNewOp<ReturnOp>(op, retval.getResult());
     return success();
@@ -353,7 +354,7 @@ struct StoreOpLowering : public OpConversionPattern<scl::StoreOp> {
                   ConversionPatternRewriter &rewriter) const final {
     scl::StoreOp::Adaptor transformed(operands);
 
-    rewriter.replaceOpWithNewOp<StoreOp>(op, transformed.rhs(),
+    rewriter.replaceOpWithNewOp<memref::StoreOp>(op, transformed.rhs(),
                                          transformed.lhs());
     return success();
   }
@@ -371,7 +372,7 @@ struct TempVariableOpLowering
     auto resultType = getTypeConverter()->convertType(op.result().getType());
     auto memref = resultType.dyn_cast<MemRefType>();
 
-    rewriter.replaceOpWithNewOp<AllocaOp>(op, memref);
+    rewriter.replaceOpWithNewOp<memref::AllocaOp>(op, memref);
     return success();
   }
 };
@@ -433,6 +434,7 @@ struct SclToStdLoweringPass
     : public PassWrapper<SclToStdLoweringPass, OperationPass<ModuleOp>> {
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<scf::SCFDialect>();
+    registry.insert<memref::MemRefDialect>();
     registry.insert<StandardOpsDialect>();
   }
   void runOnOperation() final;
@@ -444,6 +446,7 @@ void SclToStdLoweringPass::runOnOperation() {
 
   ConversionTarget target(*context);
   target.addLegalDialect<scf::SCFDialect>();
+  target.addLegalDialect<memref::MemRefDialect>();
   target.addLegalDialect<StandardOpsDialect>();
   target.addLegalOp<FuncOp>();
 

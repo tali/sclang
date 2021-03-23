@@ -10,38 +10,38 @@ end_var;
 begin
 
 // CHECK: [[C0:%[_a-z0-9]+]] = constant 0 : i16
-// CHECK: store %arg0, [[INVAR:%[0-9]+]][] : memref<i16>
+// CHECK: memref.store %arg0, [[INVAR:%[0-9]+]][] : memref<i16>
 
-// CHECK: [[IN:%[0-9]+]] = load [[INVAR]]
+// CHECK: [[IN:%[0-9]+]] = memref.load [[INVAR]]
 // CHECK: [[LT:%[0-9]+]] = cmpi slt, [[IN]], [[C0]]
 // CHECK: scf.if [[LT]] {
   if in < int#0 then
 
-// CHECK:   [[IN:%[0-9]+]] = load [[INVAR]]
+// CHECK:   [[IN:%[0-9]+]] = memref.load [[INVAR]]
 // CHECK:   [[NEG:%[0-9]+]] = subi [[C0]], [[IN]] : i16
-// CHECK:   store [[NEG]], [[ABS:%[0-9]+]][] : memref<i16>
+// CHECK:   memref.store [[NEG]], [[ABS:%[0-9]+]][] : memref<i16>
     abs := -in;
 
 // CHECK: } else {
-// CHECK:   [[IN:%[0-9]+]] = load [[INVAR]]
+// CHECK:   [[IN:%[0-9]+]] = memref.load [[INVAR]]
 // CHECK:   [[GT:%[0-9]+]] = cmpi sgt, [[IN]], [[C0]]
 // CHECK:   scf.if [[GT]] {
   elsif in > int#0 then
 
-// CHECK:     [[IN:%[0-9]+]] = load [[INVAR]]
-// CHECK:     store [[IN]], [[ABS]][] : memref<i16>
+// CHECK:     [[IN:%[0-9]+]] = memref.load [[INVAR]]
+// CHECK:     memref.store [[IN]], [[ABS]][] : memref<i16>
     abs := in;
 
 // CHECK:   } else {
   else
 
-// CHECK: store [[C0]], [[ABS]][] : memref<i16>
+// CHECK: memref.store [[C0]], [[ABS]][] : memref<i16>
     abs := int#0;
 
 // CHECK:   }
 // CHECK: }
   end_if;
 
-// CHECK: [[RET:%[0-9]+]] = load [[ABS]][] : memref<i16>
+// CHECK: [[RET:%[0-9]+]] = memref.load [[ABS]][] : memref<i16>
 // CHECK: return [[RET]]
 end_function
