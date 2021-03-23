@@ -339,7 +339,7 @@ void VariableOp::build(OpBuilder &builder, OperationState &state,
   auto nameAttr = builder.getStringAttr(name);
 
   build(builder, state, typeAttr, inAttr, outAttr, nameAttr);
-};
+}
 
 
 //===----------------------------------------------------------------------===//
