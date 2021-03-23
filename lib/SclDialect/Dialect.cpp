@@ -40,13 +40,7 @@ SclDialect::SclDialect(mlir::MLIRContext *ctx)
 #define GET_OP_LIST
 #include "sclang/SclDialect/SclOps.cpp.inc"
       >();
-  addTypes<AddressType>();
-  addTypes<ArrayType>();
-  addTypes<InstanceDbType>();
-  addTypes<IntegerType>();
-  addTypes<LogicalType>();
-  addTypes<RealType>();
-  addTypes<StructType>();
+  registerTypes();
 }
 
 mlir::Operation *SclDialect::materializeConstant(mlir::OpBuilder &builder,

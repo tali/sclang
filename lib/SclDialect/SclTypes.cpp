@@ -605,3 +605,15 @@ void SclDialect::printType(mlir::Type type,
       .Case<RealType>([&](RealType) { printer << "real"; })
       .Default([&](Type) { llvm_unreachable("Unhandled SCL type"); });
 }
+
+// MARK: SclDialect
+
+void SclDialect::registerTypes() {
+  addTypes<AddressType>();
+  addTypes<ArrayType>();
+  addTypes<InstanceDbType>();
+  addTypes<IntegerType>();
+  addTypes<LogicalType>();
+  addTypes<RealType>();
+  addTypes<StructType>();
+}
