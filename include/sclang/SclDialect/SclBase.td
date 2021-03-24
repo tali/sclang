@@ -33,10 +33,17 @@ class AssemblyFormat<string format> {
 
 // Provide a definition of the 'scl' dialect in the ODS framework so that we
 // can define our operations.
-def SCL_Dialect : Dialect {
+def Scl_Dialect : Dialect {
   let name = "scl";
   let cppNamespace = "::mlir::scl";
   let hasConstantMaterializer = 1;
+  let extraClassDeclaration = [{
+    mlir::Type parseType(mlir::DialectAsmParser &parser) const override;
+    void printType(mlir::Type type,
+                   mlir::DialectAsmPrinter &printer) const override;
+
+    void registerTypes();
+  }];
 }
 
 def Scl_AddressType : Type<CPred<"$_self.isa<scl::AddressType>()">, "AddressType">;
@@ -68,16 +75,16 @@ def Scl_NumericType : AnyTypeOf<[Scl_IntegerType, Scl_RealType]>;
 //   * The parent dialect of the operation.
 //   * The mnemonic for the operation, or the name without the dialect prefix.
 //   * A list of traits for the operation.
-class SCL_Op<string mnemonic, list<OpTrait> traits = []> :
-    Op<SCL_Dialect, mnemonic, traits>;
+class SclOp<string mnemonic, list<OpTrait> traits = []> :
+    Op<Scl_Dialect, mnemonic, traits>;
 
 class ArithmeticOp<string mnemonic, list<OpTrait> traits = []> :
-    SCL_Op<mnemonic, !listconcat(traits, [SameOperandsAndResultType])>,
+    SclOp<mnemonic, !listconcat(traits, [SameOperandsAndResultType])>,
     Arguments<(ins AnyType:$lhs, AnyType:$rhs)>,
     Results<(outs AnyType:$result)>,
     AssemblyFormat<"attr-dict $lhs `,` $rhs `:` type($rhs)">;
 class CompareOp<string mnemonic, list<OpTrait> traits = []> :
-    SCL_Op<mnemonic, !listconcat(traits, [SameTypeOperands])>,
+    SclOp<mnemonic, !listconcat(traits, [SameTypeOperands])>,
     Arguments<(ins AnyType:$lhs, AnyType:$rhs)>,
     Results<(outs Scl_Bool:$result)>,
     AssemblyFormat<"attr-dict $lhs `,` $rhs `:` type($rhs)"> {
@@ -87,7 +94,7 @@ class CompareOp<string mnemonic, list<OpTrait> traits = []> :
       }]>];
     }
 class UnaryArithmeticOp<string mnemonic, list<OpTrait> traits = []> :
-    SCL_Op<mnemonic, !listconcat(traits, [SameOperandsAndResultType])>,
+    SclOp<mnemonic, !listconcat(traits, [SameOperandsAndResultType])>,
     Arguments<(ins AnyType:$rhs)>,
     Results<(outs AnyType:$result)>,
     AssemblyFormat<"attr-dict $rhs `:` type($rhs)">;
@@ -100,10 +107,10 @@ def InModuleScope : PredOpTrait<
 CPred<"true">>;
 
 class TopLevelOp<string mnemonic, list<OpTrait> traits = []> :
-  SCL_Op<mnemonic, !listconcat(traits, [InModuleScope])>;
+  SclOp<mnemonic, !listconcat(traits, [InModuleScope])>;
 
 class FuncTerminatorOp<string mnemonic, list<OpTrait> traits = []> :
-    SCL_Op<mnemonic, !listconcat(traits, [NoSideEffect, Terminator])>;
+    SclOp<mnemonic, !listconcat(traits, [NoSideEffect, Terminator])>;
 
 
 #endif // SCL_BASE

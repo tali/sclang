@@ -32,10 +32,9 @@ using namespace mlir::scl;
 // MARK: SclDialect
 //===----------------------------------------------------------------------===//
 
-/// Dialect creation, the instance will be owned by the context. This is the
-/// point of registration of custom types and operations for the dialect.
-SclDialect::SclDialect(mlir::MLIRContext *ctx)
-    : mlir::Dialect(getDialectNamespace(), ctx, TypeID::get<SclDialect>()) {
+/// Dialect initialization, the instance will be owned by the context. This is
+/// the point of registration of types and operations for the dialect.
+void SclDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
 #include "sclang/SclDialect/SclOps.cpp.inc"

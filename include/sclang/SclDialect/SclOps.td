@@ -30,7 +30,7 @@ include "mlir/Interfaces/CastInterfaces.td"
 
 // MARK: data block
 
-def DataBlockOp : SCL_Op<"db", [Symbol]> {
+def DataBlockOp : SclOp<"db", [Symbol]> {
   let summary = "Define a data block";
 
   let arguments = (ins
@@ -47,7 +47,7 @@ def DataBlockOp : SCL_Op<"db", [Symbol]> {
 // MARK: functions / function blocks
 //
 
-def CallFbOp : SCL_Op<"call.fb", [
+def CallFbOp : SclOp<"call.fb", [
     //TBD, InFunctionScope,
     DeclareOpInterfaceMethods<CallOpInterface>]> {
   let summary = "Call a function block";
@@ -66,7 +66,7 @@ def CallFbOp : SCL_Op<"call.fb", [
   let hasCanonicalizer = 1;
 }
 
-def CallFcOp : SCL_Op<"call.fc", [
+def CallFcOp : SclOp<"call.fc", [
     //TBD, InFunctionScope,
     DeclareOpInterfaceMethods<CallOpInterface>]> {
   let summary = "Call a function";
@@ -200,7 +200,7 @@ def FunctionBlockOp : TopLevelOp<"function_block", [
 // MARK: variable handling
 //
 
-def VariableOp : SCL_Op<"var", [Symbol]> {
+def VariableOp : SclOp<"var", [Symbol]> {
   let summary = "declare a static/input/output variable in a FB";
 
   let arguments = (ins
@@ -218,7 +218,7 @@ def VariableOp : SCL_Op<"var", [Symbol]> {
   ];
 }
 
-def TempVariableOp : SCL_Op<"tmpvar",
+def TempVariableOp : SclOp<"tmpvar",
     [DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
   let summary = "allocate stack memory for a temporary variable";
   let description = [{ TBD }];
@@ -227,28 +227,28 @@ def TempVariableOp : SCL_Op<"tmpvar",
   let assemblyFormat = "$name attr-dict `:` type($result)";
 }
 
-def BitCastOp : SCL_Op<"bit.cast", [DeclareOpInterfaceMethods<CastOpInterface>, NoSideEffect]> {
+def BitCastOp : SclOp<"bit.cast", [DeclareOpInterfaceMethods<CastOpInterface>, NoSideEffect]> {
   let summary = "Type cast between different representations of the same bits";
   let arguments = (ins AnyType:$value);
   let results = (outs AnyType:$result);
   let assemblyFormat = "attr-dict $value `:` type($value) `to` type($result)";
 }
 
-def DialectCastOp : SCL_Op<"mlir.cast", [DeclareOpInterfaceMethods<CastOpInterface>, NoSideEffect]> {
+def DialectCastOp : SclOp<"mlir.cast", [DeclareOpInterfaceMethods<CastOpInterface>, NoSideEffect]> {
   let summary = "Type cast between SCL and Standard dialect";
   let arguments = (ins AnyType:$value);
   let results = (outs AnyType:$result);
   let assemblyFormat = "attr-dict $value `:` type($value) `to` type($result)";
 }
 
-def IntegerCastOp : SCL_Op<"int.cast", [DeclareOpInterfaceMethods<CastOpInterface>, NoSideEffect]> {
+def IntegerCastOp : SclOp<"int.cast", [DeclareOpInterfaceMethods<CastOpInterface>, NoSideEffect]> {
   let summary = "Type cast between integers with different bitwidths";
   let arguments = (ins Scl_IntegerType:$value);
   let results = (outs Scl_IntegerType:$result);
   let assemblyFormat = "attr-dict $value `:` type($value) `to` type($result)";
 }
 
-def ConstantOp : SCL_Op<"constant",
+def ConstantOp : SclOp<"constant",
     [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
   let summary = "literal constant";
   let arguments = (ins AnyAttr:$value);
@@ -257,14 +257,14 @@ def ConstantOp : SCL_Op<"constant",
   let hasFolder = 1;
 }
 
-def GetGlobalOp : SCL_Op<"getglobal",
+def GetGlobalOp : SclOp<"getglobal",
     [NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
   let arguments = (ins FlatSymbolRefAttr:$name);
   let results = (outs Scl_AddressType:$element);
   let assemblyFormat = "attr-dict $name `:` type($element)";
 }
 
-def GetElementOp : SCL_Op<"getelement",
+def GetElementOp : SclOp<"getelement",
     [NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
   let summary = "get the address of a struct element";
   let arguments = (ins Scl_AddressType:$addr, StrAttr:$name);
@@ -281,7 +281,7 @@ def GetElementOp : SCL_Op<"getelement",
   ];
 }
 
-def LoadOp : SCL_Op<"load", [/*SameOperandsAndResultElementType*/]> {
+def LoadOp : SclOp<"load", [/*SameOperandsAndResultElementType*/]> {
   let summary = "load a value from memory";
   let description = [{
     The "load" operation reads a value from a data block.
@@ -299,7 +299,7 @@ def LoadOp : SCL_Op<"load", [/*SameOperandsAndResultElementType*/]> {
   ];
 }
 
-def StoreOp : SCL_Op<"store", [/*SameOperandsElementType]*/]> {
+def StoreOp : SclOp<"store", [/*SameOperandsElementType]*/]> {
   let summary = "store a value to memory";
   let description = [{
     The "store" operation writes a value to a data block.
@@ -314,11 +314,11 @@ def StoreOp : SCL_Op<"store", [/*SameOperandsElementType]*/]> {
 // MARK: control flow
 //
 
-def EndOp : SCL_Op<"end", [NoSideEffect, Terminator]> {
+def EndOp : SclOp<"end", [NoSideEffect, Terminator]> {
   let assemblyFormat = "attr-dict";
 }
 
-def IfThenElseOp : SCL_Op<"if">, SingleBlockImplicitTerminator<"terminator"> {
+def IfThenElseOp : SclOp<"if">, SingleBlockImplicitTerminator<"terminator"> {
   let summary = "if-then-else operation";
   let description = [{
     Example:
@@ -338,7 +338,7 @@ def IfThenElseOp : SCL_Op<"if">, SingleBlockImplicitTerminator<"terminator"> {
 // MARK: terminator operations
 //
 
-def ContinueOp : SCL_Op<"continue", [Terminator]> {
+def ContinueOp : SclOp<"continue", [Terminator]> {
   let summary = "continue operation";
   let description = [{
     A CONTINUE statement is used to terminate the execution of the current
@@ -374,7 +374,7 @@ def ReturnValueOp : FuncTerminatorOp<"return.value"> {
   }];
 }
 
-def ExitOp : SCL_Op<"exit", [Terminator]> {
+def ExitOp : SclOp<"exit", [Terminator]> {
   let summary = "exit operation";
   let description = [{
     An EXIT statement is used to exit a loop (FOR, WHILE or REPEAT loop) at

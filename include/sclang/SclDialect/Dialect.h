@@ -30,35 +30,8 @@
 #include "mlir/Interfaces/CastInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
-namespace mlir {
-namespace scl {
-
-/// This is the definition of the Toy dialect. A dialect inherits from
-/// mlir::Dialect and registers custom attributes, operations, and types (in its
-/// constructor). It can also override some general behavior exposed via virtual
-/// methods.
-class SclDialect : public mlir::Dialect {
-public:
-  explicit SclDialect(mlir::MLIRContext *ctx);
-
-  /// Provide a utility accessor to the dialect namespace. This is used by
-  /// several utilities for casting between dialects.
-  static llvm::StringRef getDialectNamespace() { return "scl"; }
-
-  /// A hook used to materialize constant values with the given type.
-  Operation *materializeConstant(OpBuilder &builder, Attribute value, Type type,
-                                 Location loc) override;
-
-  mlir::Type parseType(mlir::DialectAsmParser &parser) const override;
-  void printType(mlir::Type type,
-                 mlir::DialectAsmPrinter &printer) const override;
-
-private:
-  void registerTypes();
-};
-
-} // end namespace scl
-} // end namespace mlir
+/// Include the auto-generated header file containing the declaration of the SCL dialect.
+#include "sclang/SclDialect/Dialect.h.inc"
 
 /// Include the auto-generated header file containing the declarations of the
 /// toy operations.
