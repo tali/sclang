@@ -41,7 +41,8 @@ def Scl_Dialect : Dialect {
     mlir::Type parseType(mlir::DialectAsmParser &parser) const override;
     void printType(mlir::Type type,
                    mlir::DialectAsmPrinter &printer) const override;
-
+  private:
+    void registerOps();
     void registerTypes();
   }];
 }

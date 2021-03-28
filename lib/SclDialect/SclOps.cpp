@@ -348,3 +348,10 @@ void VariableOp::build(OpBuilder &builder, OperationState &state,
 
 #define GET_OP_CLASSES
 #include "sclang/SclDialect/SclOps.cpp.inc"
+
+void SclDialect::registerOps() {
+  addOperations<
+#define GET_OP_LIST
+#include "sclang/SclDialect/SclOps.cpp.inc"
+  >();
+}

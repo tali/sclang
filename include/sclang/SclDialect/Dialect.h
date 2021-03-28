@@ -34,7 +34,7 @@
 #include "sclang/SclDialect/Dialect.h.inc"
 
 /// Include the auto-generated header file containing the declarations of the
-/// toy operations.
+/// SCL operations.
 #define GET_OP_CLASSES
 #include "sclang/SclDialect/SclOps.h.inc"
 
