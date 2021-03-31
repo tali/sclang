@@ -248,7 +248,7 @@ void FunctionBlockOp::build(OpBuilder &builder, OperationState &state,
   SmallVector<Type, 0> results = {};
   FunctionType func_type = builder.getFunctionType(inputs, results);
 
-  state.addAttribute(SymbolTable::getSymbolAttrName(),
+  state.addAttribute(mlir::SymbolTable::getSymbolAttrName(),
                      builder.getStringAttr(name));
   state.addAttribute(getTypeAttrName(), TypeAttr::get(func_type));
 
@@ -286,13 +286,6 @@ CallInterfaceCallable CallFcOp::getCallableForCallee() {
 Operation::operand_range CallFcOp::getArgOperands() { return arguments(); }
 
 
-// MARK: GetGlobalOp
-
-void GetGlobalOp::getAsmResultNames(
-    function_ref<void(Value, StringRef)> setNameFn) {
-  setNameFn(getResult(), name());
-}
-
 // MARK: GetElementOp
 
 void GetElementOp::getAsmResultNames(
@@ -300,6 +293,19 @@ void GetElementOp::getAsmResultNames(
   setNameFn(getResult(), name());
 }
 
+// MARK: GetGlobalOp
+
+void GetGlobalOp::getAsmResultNames(
+    function_ref<void(Value, StringRef)> setNameFn) {
+  setNameFn(getResult(), name());
+}
+
+// MARK: GetVariableOp
+
+void GetVariableOp::getAsmResultNames(
+    function_ref<void(Value, StringRef)> setNameFn) {
+  setNameFn(getResult(), sym_name());
+}
 
 // MARK: IntegerCastOp
 

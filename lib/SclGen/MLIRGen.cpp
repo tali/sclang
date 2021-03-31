@@ -533,18 +533,14 @@ private:
 
   mlir::Value mlirGenLValue(const ExpressionAST *expr) {
     auto location = loc(expr->loc());
+    mlir::Value address = mlirGen(expr);
 
-    return TypeSwitch<const ExpressionAST *, mlir::Value>(expr)
-        .Case<SimpleVariableAST>([&](auto expr) { return mlirGenLValue(expr); })
-        .Case<IndexedVariableAST>([&](auto expr) {
-          emitError(loc(expr->loc()))
-              << "IndexedVariable not implemented"; // TODO: TBD
-          return nullptr;
-        })
-        .Default([&](auto expr) {
-          emitError(location) << "not a lvalue, kind " << (int)expr->getKind();
-          return nullptr;
-        });
+    if (!address.getType().isa<AddressType>()) {
+      emitError(location) << "not a lvalue, type " << address.getType();
+      return nullptr;
+    }
+
+    return address;
   }
 
   mlir::Value mlirGen(const ExpressionAST *expr) {
@@ -595,16 +591,13 @@ private:
     return nullptr;
   }
 
-  mlir::Value mlirGen(const SimpleVariableAST *expr) {
-    auto location = loc(expr->loc());
-    auto name = llvm::cast<SimpleVariableAST>(expr)->getName();
-
+  mlir::Value mlirGenVariable(mlir::Location location, StringRef name) {
     auto variable = symbolTable.lookup(name);
     if (variable.isElement()) {
       auto type = AddressType::get(variable.getType());
       auto self = symbolTable.lookup("$self").getValue();
       assert(self);
-      return builder.create<GetElementOp>(location, type, self, name);
+      return builder.create<GetVariableOp>(location, type, self, name);
     }
     if (variable.isAddress())
       return variable.getValue();
@@ -614,20 +607,69 @@ private:
     return nullptr;
   }
 
-  mlir::Value mlirGenLValue(const SimpleVariableAST *expr) {
-    auto location = loc(expr->loc());
-    auto name = llvm::cast<SimpleVariableAST>(expr)->getName();
-    auto variable = symbolTable.lookup(name);
-    if (variable.isElement()) {
-      auto type = AddressType::get(variable.getType());
-      auto self = symbolTable.lookup("$self").getValue();
-      assert(self);
-      return builder.create<GetElementOp>(location, type, self, name);
+  mlir::Value mlirGenSymbol(mlir::Location location, StringRef name) {
+    DataBlockOp db =
+        mlir::SymbolTable::lookupNearestSymbolFrom<DataBlockOp>(theModule, name);
+    if (!db) {
+      emitError(location) << "unknown symbol '" << name << "'";
+      return nullptr;
     }
-    if (variable.isAddress())
-      return variable.getValue();
-    emitError(location) << "not a lvalue, variable " << name;
-    return nullptr;
+    mlir::Type type = db.type();
+    mlir::Type address = AddressType::get(type);
+    return builder.create<GetGlobalOp>(location, address, name);
+  }
+
+  StructType mlirGenIdbStruct(mlir::Location location, FunctionBlockOp fb) {
+    SmallVector<mlir::Identifier, 4> names;
+    SmallVector<mlir::Type, 4> types;
+
+    return StructType::get(names, types);
+  }
+
+  mlir::Value mlirGenElement(mlir::Location location,
+                             mlir::Value address, StringRef name) {
+    mlir::Type baseType = address.getType().cast<AddressType>().getElementType();
+
+    return mlir::TypeSwitch<mlir::Type, mlir::Value>(baseType)
+    .Case<InstanceDbType>([&](auto idbType) -> GetVariableOp {
+      StringRef fbName = idbType.getFbSymbol();
+      auto fb = mlir::SymbolTable::lookupNearestSymbolFrom<FunctionBlockOp>(
+        theModule, fbName);
+      if (!fb) {
+        emitError(location) << "unknown FB '" << fbName << "'";
+        return nullptr;
+      }
+      auto var = mlir::dyn_cast_or_null<VariableOp>(mlir::SymbolTable::lookupSymbolIn(fb, name));
+      if (!var) {
+        emitError(location) << "unknown variable '" << name << "' in FB '" << fbName << "'";
+        return nullptr;
+      }
+      mlir::Type elementType = var.type();
+      mlir::Type resultType = AddressType::get(elementType);
+
+      return builder.create<GetVariableOp>(location, resultType, address, name);
+    })
+    .Case<StructType>([&](auto structType) -> GetElementOp {
+      mlir::Type elementType = structType.getElementType(name);
+      mlir::Type resultType = AddressType::get(elementType);
+
+      return builder.create<GetElementOp>(location, resultType, address, name);
+    })
+    .Default([&](auto baseType) {
+      emitError(location) << "unsupported base type " << baseType << " for element '" << name << "'";
+      return nullptr;
+    });
+  }
+
+  mlir::Value mlirGen(const SimpleVariableAST *expr) {
+    auto location = loc(expr->loc());
+    auto name = expr->getName();
+
+    if (expr->isSymbol()) {
+      return mlirGenSymbol(location, name);
+    } else {
+      return mlirGenVariable(location, name);
+    }
   }
 
   mlir::Value mlirGen(const IndexedVariableAST *expr) {
@@ -659,7 +701,7 @@ private:
         return nullptr;
       }
       auto name = llvm::cast<SimpleVariableAST>(expr->getRhs())->getName();
-      return builder.create<GetElementOp>(location, lhs, name);
+      return mlirGenElement(location, lhs, name);
     }
     lhs = mlirGenRValue(lhs);
     mlir::Value rhs = mlirGenRValue(expr->getRhs());
@@ -844,7 +886,7 @@ private:
     }
 
     if (failed(mlirGenCallParameters(expr, [&] (StringRef name, mlir::Value value) {
-      auto elem = builder.create<GetElementOp>(location, idbRef, name);
+      auto elem = mlirGenElement(location, idbRef, name);
       builder.create<StoreOp>(location, elem, value);
       return mlir::success();
     })))

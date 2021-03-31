@@ -144,7 +144,7 @@ def FunctionOp : TopLevelOp<"function", [
 
 def FunctionBlockOp : TopLevelOp<"function_block", [
     AutomaticAllocationScope, DeclareOpInterfaceMethods<CallableOpInterface>,
-    FunctionLike, IsolatedFromAbove, Symbol
+    FunctionLike, IsolatedFromAbove, Symbol, SymbolTable
   ]> {
   let summary = "Declare or define a function block";
 
@@ -257,6 +257,14 @@ def ConstantOp : SclOp<"constant",
   let hasFolder = 1;
 }
 
+def GetElementOp : SclOp<"getelement",
+    [NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
+  let summary = "get the address of a struct element";
+  let arguments = (ins Scl_AddressType:$addr, StrAttr:$name);
+  let results = (outs Scl_AddressType:$element);
+  let assemblyFormat = "attr-dict $name `from` $addr `:` type($addr) `->` type($element)";
+}
+
 def GetGlobalOp : SclOp<"getglobal",
     [NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
   let arguments = (ins FlatSymbolRefAttr:$name);
@@ -264,21 +272,12 @@ def GetGlobalOp : SclOp<"getglobal",
   let assemblyFormat = "attr-dict $name `:` type($element)";
 }
 
-def GetElementOp : SclOp<"getelement",
+def GetVariableOp : SclOp<"getvariable",
     [NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
-  let summary = "get the address of a struct element";
-  let arguments = (ins Scl_AddressType:$addr, StrAttr:$name);
+  let summary = "get the address of a FB variable";
+  let arguments = (ins Scl_AddressType:$addr, FlatSymbolRefAttr:$sym_name);
   let results = (outs Scl_AddressType:$element);
-  let assemblyFormat = "attr-dict $name `from` $addr `:` type($addr) `->` type($element)";
-
-  let builders = [
-    OpBuilder<(ins "Value":$address, "StringRef":$name), [{
-      auto structType = address.getType().cast<AddressType>().getElementType();
-      auto elementType = structType.cast<StructType>().getElementType(name);
-      auto resultType = AddressType::get(elementType);
-      build($_builder, $_state, resultType, address, name);
-    }]>
-  ];
+  let assemblyFormat = "attr-dict $sym_name `from` $addr `:` type($addr) `->` type($element)";
 }
 
 def LoadOp : SclOp<"load", [/*SameOperandsAndResultElementType*/]> {
