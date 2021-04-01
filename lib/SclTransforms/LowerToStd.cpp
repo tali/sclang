@@ -100,20 +100,22 @@ struct CallFcOpLowering : public OpConversionPattern<scl::CallFcOp> {
 /// Lower to either a floating point or an integer comparision, depending on the
 /// type.
 template <typename CompareOp, CmpFPredicate predF, CmpIPredicate predI>
-struct CompareOpLowering : public ConversionPattern {
-  CompareOpLowering(TypeConverter &typeConverter, MLIRContext *ctx)
-      : ConversionPattern(CompareOp::getOperationName(), 1, typeConverter,
-                          ctx) {}
+struct CompareOpLowering : public OpConversionPattern<CompareOp> {
+  using OpConversionPattern<CompareOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+  matchAndRewrite(CompareOp op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
+    typename CompareOp::Adaptor transformed(operands);
+
     if (all_of_type<FloatType>(operands)) {
-      rewriter.replaceOpWithNewOp<CmpFOp>(op, predF, operands[0], operands[1]);
+      rewriter.replaceOpWithNewOp<CmpFOp>(op, predF, transformed.lhs(),
+                                          transformed.rhs());
       return success();
     }
     if (all_of_type<IntegerType>(operands)) {
-      rewriter.replaceOpWithNewOp<CmpIOp>(op, predI, operands[0], operands[1]);
+      rewriter.replaceOpWithNewOp<CmpIOp>(op, predI, transformed.lhs(),
+                                          transformed.rhs());
       return success();
     }
     return failure();
@@ -266,12 +268,11 @@ struct LoadOpLowering : public OpConversionPattern<scl::LoadOp> {
 /// Lower to either a floating point or an integer operation, depending on the
 /// type.
 template <typename SclOp, typename LoweredOp>
-struct LogicalOpLowering : public ConversionPattern {
-  LogicalOpLowering(TypeConverter &typeConverter, MLIRContext *ctx)
-      : ConversionPattern(SclOp::getOperationName(), 1, typeConverter, ctx) {}
+struct LogicalOpLowering : public OpConversionPattern<SclOp> {
+  using OpConversionPattern<SclOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+  matchAndRewrite(SclOp op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
     llvm::SmallVector<mlir::NamedAttribute, 0> attrs;
 
@@ -288,12 +289,11 @@ using XOrOpLowering = LogicalOpLowering<scl::XOrOp, XOrOp>;
 /// Lower to either a floating point or an integer operation, depending on the
 /// type.
 template <typename SclOp, typename LoweredFloatOp, typename LoweredIntegerOp>
-struct NumericOpLowering : public ConversionPattern {
-  NumericOpLowering(TypeConverter &typeConverter, MLIRContext *ctx)
-      : ConversionPattern(SclOp::getOperationName(), 1, typeConverter, ctx) {}
+struct NumericOpLowering : public OpConversionPattern<SclOp> {
+  using OpConversionPattern<SclOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+  matchAndRewrite(SclOp op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
     llvm::SmallVector<mlir::NamedAttribute, 0> attrs;
 
@@ -355,7 +355,7 @@ struct StoreOpLowering : public OpConversionPattern<scl::StoreOp> {
     scl::StoreOp::Adaptor transformed(operands);
 
     rewriter.replaceOpWithNewOp<memref::StoreOp>(op, transformed.rhs(),
-                                         transformed.lhs());
+                                                 transformed.lhs());
     return success();
   }
 };
@@ -379,28 +379,31 @@ struct TempVariableOpLowering
 
 // MARK: UnaryMinusOpLowering
 
-struct UnaryMinusOpLowering : public ConversionPattern {
-  UnaryMinusOpLowering(TypeConverter &typeConverter, MLIRContext *ctx)
-      : ConversionPattern(scl::UnaryMinusOp::getOperationName(), 1,
-                          typeConverter, ctx) {}
+struct UnaryMinusOpLowering : public OpConversionPattern<scl::UnaryMinusOp> {
+  using OpConversionPattern<scl::UnaryMinusOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+  matchAndRewrite(scl::UnaryMinusOp op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
-    auto elementType = operands[0].getType();
+    scl::UnaryMinusOp::Adaptor transformed(operands);
+
+    auto elementType = transformed.rhs().getType();
     return TypeSwitch<Type, LogicalResult>(elementType)
         .Case<FloatType>([&](auto elementType) {
-          rewriter.replaceOpWithNewOp<NegFOp>(op, operands[0]);
+          rewriter.replaceOpWithNewOp<NegFOp>(op, transformed.rhs());
           return success();
         })
         .Case<IntegerType>([&](auto elementType) {
-          auto loc = op->getLoc();
+          auto loc = op.getLoc();
           auto zero =
               rewriter.create<ConstantIntOp>(loc, 0, elementType.getWidth());
-          rewriter.replaceOpWithNewOp<SubIOp>(op, zero, operands[0]);
+          rewriter.replaceOpWithNewOp<SubIOp>(op, zero, transformed.rhs());
           return success();
         })
-        .Default([&](auto elementType) { return failure(); });
+        .Default([&](auto elementType) {
+          emitError(op.getLoc()) << "invalid type" << elementType << "for UnaryMinusOp";
+          return failure();
+        });
   }
 };
 
