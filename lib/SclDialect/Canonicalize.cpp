@@ -35,8 +35,8 @@ using llvm::SmallBitVector;
 
 
 void scl::CallFbOp::getCanonicalizationPatterns(
-                    OwningRewritePatternList &results, MLIRContext *context) {
-  //TODO: TBD results.insert<CanonicalizeCallArguments>(context);
+                    RewritePatternSet &results, MLIRContext *context) {
+  //TODO: TBD results.add<CanonicalizeCallArguments>(context);
 }
 
 
@@ -154,7 +154,7 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
 };
 
 void scl::CallFcOp::getCanonicalizationPatterns(
-                    OwningRewritePatternList &results, MLIRContext *context) {
-  results.insert<CanonicalizeCallArguments>(context);
+                    RewritePatternSet &results, MLIRContext *context) {
+  results.add<CanonicalizeCallArguments>(context);
 }
 

@@ -455,8 +455,8 @@ void SclToStdLoweringPass::runOnOperation() {
 
   SclTypeConverter converter{};
 
-  OwningRewritePatternList patterns(context);
-  patterns.insert<
+  RewritePatternSet patterns(context);
+  patterns.add<
       AddOpLowering, AndOpLowering, CallFcOpLowering, ConstantOpLowering,
       DialectCastOpLowering, DivOpLowering, EndOpLowering, EqualLowering,
       FunctionOpLowering, GreaterEqualLowering, GreaterThanLowering,
