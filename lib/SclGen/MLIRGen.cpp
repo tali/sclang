@@ -200,6 +200,50 @@ private:
     return mlir::success();
   }
 
+  mlir::LogicalResult mlirGenTempVar(const VariableDeclarationSubsectionAST *decls) {
+    for (const auto &decl : decls->getValues()) {
+      auto type = getType(decl->getDataType());
+      auto addressType = AddressType::get(type);
+      auto init = decl->getInitializer();
+      for (const auto &var : decl->getVars()) {
+        auto location = loc(var->loc());
+        StringRef name = var->getIdentifier();
+        mlir::StringAttr nameAttr = builder.getStringAttr(name);
+        auto varStorage = builder.create<TempVariableOp>(location, addressType,
+                                                         nameAttr);
+        if (!varStorage)
+          return mlir::failure();
+        if (failed(declare(location, name, addressType, varStorage)))
+          return mlir::failure();
+        if (init) {
+          auto value = mlirGen(init.getValue());
+          builder.create<StoreOp>(location, varStorage, value);
+        }
+      }
+    }
+
+    return mlir::success();
+  }
+
+  mlir::LogicalResult mlirGen(const DeclarationSubsectionAST *decl) {
+    return TypeSwitch<const DeclarationSubsectionAST*, mlir::LogicalResult>(decl)
+    .Case<VariableDeclarationSubsectionAST>([&](auto decl) {
+      switch (decl->getKind()) {
+      case VariableDeclarationSubsectionAST::VarInput:
+        return mlirGen(decl, /*isInput=*/true, /*isOutput=*/false);
+      case VariableDeclarationSubsectionAST::VarOutput:
+        return mlirGen(decl, /*isInput=*/false, /*isOutput=*/true);
+        break;
+      case VariableDeclarationSubsectionAST::VarInOut:
+        return mlirGen(decl, /*isInput=*/true, /*isOutput=*/true);
+      case VariableDeclarationSubsectionAST::Var:
+        return mlirGen(decl, /*isInput=*/false, /*isOutput=*/false);
+      case VariableDeclarationSubsectionAST::VarTemp:
+        return mlirGenTempVar(decl);
+      }
+    });
+  }
+
   mlir::FuncOp mlirGen(const OrganizationBlockAST *ob) {
     emitError(loc(ob->loc())) << "TBD not implemented";
     return nullptr;
@@ -297,23 +341,8 @@ private:
 
     // prologue: stack space for temporary variables
     for (const auto subsection : tempvar) {
-      for (const auto &decl : subsection->getValues()) {
-        auto type = getType(decl->getDataType());
-        auto addressType = AddressType::get(type);
-        auto init = decl->getInitializer();
-        for (const auto &var : decl->getVars()) {
-          auto location = loc(var->loc());
-          auto varStorage = builder.create<TempVariableOp>(
-              location, addressType,
-              builder.getStringAttr(var->getIdentifier()));
-          if (failed(declare(location, var->getIdentifier(), addressType, varStorage)))
-              return nullptr;
-          if (init) {
-            builder.create<StoreOp>(location, varStorage,
-                                    mlirGen(init.getValue()));
-          }
-        }
-      }
+      if (failed(mlirGenTempVar(subsection)))
+        return nullptr;
     }
 
     // Declare all the function outputs in the symbol table.
@@ -384,51 +413,11 @@ private:
     if (failed(declare(location, "$self", selfType, entryBlock.getArgument(0))))
       return nullptr;
 
-
     // Parse the declaration subsections
     const auto &declarations = fb->getDeclarations()->getDecls();
     for (const auto &decl : declarations) {
-      TypeSwitch<DeclarationSubsectionAST*>(decl.get())
-      .Case<VariableDeclarationSubsectionAST>([&](auto decl) {
-        switch (decl->getKind()) {
-        case VariableDeclarationSubsectionAST::VarInput:
-          mlirGen(decl, /*isInput=*/true, /*isOutput=*/false);
-          break;
-        case VariableDeclarationSubsectionAST::VarOutput:
-          mlirGen(decl, /*isInput=*/false, /*isOutput=*/true);
-          break;
-        case VariableDeclarationSubsectionAST::VarInOut:
-          mlirGen(decl, /*isInput=*/true, /*isOutput=*/true);
-          break;
-        case VariableDeclarationSubsectionAST::Var:
-          mlirGen(decl, /*isInput=*/false, /*isOutput=*/false);
-          break;
-        case VariableDeclarationSubsectionAST::VarTemp:
-          tempvar.push_back(decl);
-          break;
-        }
-      });
-    }
-
-    // prologue: stack space for temporary variables
-    for (const auto subsection : tempvar) {
-      for (const auto &decl : subsection->getValues()) {
-        auto type = getType(decl->getDataType());
-        auto memRefType = AddressType::get(type);
-        auto init = decl->getInitializer();
-        for (const auto &var : decl->getVars()) {
-          auto location = loc(var->loc());
-          auto varStorage = builder.create<TempVariableOp>(
-              location, memRefType,
-              builder.getStringAttr(var->getIdentifier()));
-          if (failed(declare(location, var->getIdentifier(), type, varStorage)))
-            return nullptr;
-          if (init) {
-            builder.create<StoreOp>(location, varStorage,
-                                    mlirGen(init.getValue()));
-          }
-        }
-      }
+      if (failed(mlirGen(decl.get())))
+        return nullptr;
     }
 
     // Emit the body of the function.
