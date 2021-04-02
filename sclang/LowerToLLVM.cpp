@@ -47,7 +47,7 @@ void SclToLLVMLoweringPass::runOnOperation() {
   // final target for this lowering. For this lowering, we are only targeting
   // the LLVM dialect.
   LLVMConversionTarget target(*context);
-  target.addLegalOp<ModuleOp, ModuleTerminatorOp>();
+  target.addLegalOp<ModuleOp>();
 
   // During this lowering, we will also be lowering the MemRef types, that are
   // currently being operated on, to a representation in LLVM. To perform this
