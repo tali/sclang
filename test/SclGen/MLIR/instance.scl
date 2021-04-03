@@ -1,4 +1,4 @@
-// RUN: sclang-gen --emit=mlir %s | FileCheck %s
+// RUN: sclang-gen --emit=mlir %s --opt | FileCheck %s
 
 // CHECK-LABEL: scl.function_block @fb1
 // CHECK: (%arg0: !scl.address<!scl.idb<fb1>>)
@@ -26,10 +26,9 @@ begin
 // CHECK: scl.store %out : !scl.address<!scl.int> = %0 : !scl.int
   out := state;
 
-// CHECK: %state_0 = scl.getvariable @state from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.int>
 // CHECK: %in = scl.getvariable @in from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.int>
 // CHECK: %1 = scl.load %in : !scl.address<!scl.int> : !scl.int
-// CHECK: scl.store %state_0 : !scl.address<!scl.int> = %1 : !scl.int
+// CHECK: scl.store %state : !scl.address<!scl.int> = %1 : !scl.int
   state := in;
 
 // CHECK: scl.return
@@ -63,12 +62,10 @@ begin
 // CHECK: scl.store %in : !scl.address<!scl.int> = %c1 : !scl.int
   "db1".in := 1;
 
-// CHECK: %db1_0 = scl.getglobal @db1 : !scl.address<!scl.idb<fb1>>
-// CHECK: scl.call.fb @fb1(%db1_0 : !scl.address<!scl.idb<fb1>>)
+// CHECK: scl.call.fb @fb1(%db1 : !scl.address<!scl.idb<fb1>>)
   fb1."db1"();
 
-// CHECK: %db1_1 = scl.getglobal @db1 : !scl.address<!scl.idb<fb1>>
-// CHECK: %out = scl.getvariable @out from %db1_1 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.int>
+// CHECK: %out = scl.getvariable @out from %db1 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.int>
 // CHECK: %0 = scl.load %out : !scl.address<!scl.int>
 // CHECK: scl.store %fc1 : !scl.address<!scl.int> = %0 : !scl.int
   fc1 := "db1".out;

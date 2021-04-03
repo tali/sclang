@@ -122,10 +122,18 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
   mlir::PassManager pm(&context);
   // Apply any generic pass manager command line options and run the pipeline.
   applyPassManagerCLOptions(pm);
-  pm.addNestedPass<mlir::scl::FunctionOp>(mlir::createCanonicalizerPass());
 
   // Check to see what granularity of MLIR we are compiling to.
   bool isLoweringToStd = emitAction >= Action::DumpMLIRStd;
+
+  if (enableOpt || isLoweringToStd) {
+    mlir::OpPassManager &optFC = pm.nest<mlir::scl::FunctionOp>();
+    optFC.addPass(mlir::createCanonicalizerPass());
+    optFC.addPass(mlir::createCSEPass());
+    mlir::OpPassManager &optFB = pm.nest<mlir::scl::FunctionBlockOp>();
+    optFB.addPass(mlir::createCanonicalizerPass());
+    optFB.addPass(mlir::createCSEPass());
+ }
 
   if (isLoweringToStd) {
     // Partially lower the SCL dialect with a few cleanups afterwards.

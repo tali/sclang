@@ -144,6 +144,15 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
   bool isLoweringToStd = emitAction >= Action::DumpMLIRStd;
   bool isLoweringToLLVM = emitAction >= Action::DumpMLIRLLVM;
 
+  if (enableOpt || isLoweringToStd) {
+    mlir::OpPassManager &optFC = pm.nest<mlir::scl::FunctionOp>();
+    optFC.addPass(mlir::createCanonicalizerPass());
+    optFC.addPass(mlir::createCSEPass());
+    mlir::OpPassManager &optFB = pm.nest<mlir::scl::FunctionBlockOp>();
+    optFB.addPass(mlir::createCanonicalizerPass());
+    optFB.addPass(mlir::createCSEPass());
+ }
+
   if (isLoweringToStd) {
     // Partially lower the SCL dialect with a few cleanups afterwards.
     pm.addPass(mlir::sclang::createLowerToStdPass());
