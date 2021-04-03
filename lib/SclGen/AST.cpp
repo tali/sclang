@@ -658,13 +658,16 @@ void ASTDumper::dump(const ForDoAST *node) {
   INDENT();
   outs << "For\n";
   dump(node->getAssignment());
+  indent();
   outs << "To\n";
   dump(node->getLast());
   auto increment = node->getIncrement();
   if (increment.hasValue()) {
+    indent();
     outs << "By\n";
     dump(increment.getValue());
   }
+  indent();
   outs << "Do\n";
   dump(node->getCode());
 }
