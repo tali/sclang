@@ -225,6 +225,32 @@ private:
     return mlir::success();
   }
 
+  mlir::LogicalResult mlirGen(const ConstantDeclarationSubsectionAST *decls) {
+    for (const auto &decl : decls->getValues()) {
+      auto location = loc(decl->loc());
+
+      StringRef name = decl->getName();
+      mlir::Value value = mlirGen(decl->getValue());
+      mlir::Type type = value.getType();
+
+      if (failed(declare(location, name, type, value)))
+        return mlir::failure();
+    }
+
+    return mlir::success();
+  }
+
+  mlir::LogicalResult mlirGen(const JumpLabelDeclarationSubsectionAST *decls) {
+    for (const auto &decl : decls->getValues()) {
+      auto location = loc(decl->loc());
+
+      emitError(location) << "LABEL not supported"; // TODO: TBD
+      return mlir::failure();
+    }
+
+    return mlir::success();
+  }
+
   mlir::LogicalResult mlirGen(const DeclarationSubsectionAST *decl) {
     return TypeSwitch<const DeclarationSubsectionAST*, mlir::LogicalResult>(decl)
     .Case<VariableDeclarationSubsectionAST>([&](auto decl) {
@@ -241,6 +267,12 @@ private:
       case VariableDeclarationSubsectionAST::VarTemp:
         return mlirGenTempVar(decl);
       }
+    })
+    .Case<ConstantDeclarationSubsectionAST>([&](auto decl) {
+      return mlirGen(decl);
+    })
+    .Case<JumpLabelDeclarationSubsectionAST>([&](auto decl) {
+      return mlirGen(decl);
     });
   }
 
