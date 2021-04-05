@@ -61,18 +61,24 @@ class VariableSymbol {
   llvm::Optional<mlir::Location> loc;
   mlir::Type type;
   mlir::Value value;
+  llvm::Optional<const ExpressionAST *> constValue;
 
 public:
   VariableSymbol() : loc(), type(), value() {}
   VariableSymbol(mlir::Location loc, mlir::Type type, mlir::Value value)
-      : loc(loc), type(type), value(value) {}
+      : loc(loc), type(type), value(value), constValue() {}
+  VariableSymbol(mlir::Location loc, mlir::Type type, mlir::Value value,
+                 const ExpressionAST *constValue)
+      : loc(loc), type(type), value(value), constValue(constValue) {}
 
   mlir::Location getLocation() const { return loc.getValue(); }
   mlir::Type getType() const { return type; }
   mlir::Value getValue() const { return value; }
+  const ExpressionAST* getConstValue() const { return constValue.getValue(); }
   bool isAddress() const { return type && type.isa<AddressType>(); }
   bool isDirect() const { return value != nullptr; }
   bool isElement() const { return type && value == nullptr; }
+  bool isConst() const { return constValue.hasValue(); }
 };
 
 /// Implementation of a simple MLIR emission from the SCL AST.
@@ -146,6 +152,20 @@ private:
       return mlir::failure();
     }
     symbolTable.insert(var, VariableSymbol(loc, type, value));
+    return mlir::success();
+  }
+
+  mlir::LogicalResult declare(mlir::Location loc, llvm::StringRef name,
+                              const ExpressionAST *constValue) {
+    mlir::Value value = mlirGen(constValue);
+    mlir::Type type = value.getType();
+
+    assert(!name.empty());
+    if (symbolTable.count(name)) {
+      emitError(loc) << "symbol already declared: " << name;
+      return mlir::failure();
+    }
+    symbolTable.insert(name, VariableSymbol(loc, type, value, constValue));
     return mlir::success();
   }
 
@@ -230,10 +250,9 @@ private:
       auto location = loc(decl->loc());
 
       StringRef name = decl->getName();
-      mlir::Value value = mlirGen(decl->getValue());
-      mlir::Type type = value.getType();
+      const ExpressionAST *constValue = decl->getValue();
 
-      if (failed(declare(location, name, type, value)))
+      if (failed(declare(location, name, constValue)))
         return mlir::failure();
     }
 
@@ -971,14 +990,25 @@ private:
   mlir::LogicalResult getConstantInteger(const ExpressionAST *expr,
                                          int &value) {
     return TypeSwitch<const ExpressionAST *, mlir::LogicalResult>(expr)
-        .Case<IntegerConstantAST>([&](auto expr) {
-          value = expr->getValue();
-          return mlir::success();
-        })
-        .Default([&](auto expr) {
-          emitError(loc(expr->loc())) << "constant integer expected";
-          return mlir::failure();
-        });
+    .Case<IntegerConstantAST>([&](auto expr) {
+      value = expr->getValue();
+      return mlir::success();
+    })
+    .Case<SimpleVariableAST>([&](auto expr) {
+      auto location = loc(expr->loc());
+      auto constName = expr->getName();
+      auto constSymbol = symbolTable.lookup(constName);
+      if (!constSymbol.isConst()) {
+        emitError(location) << "not a constant: " << constName;
+        return mlir::failure();
+      }
+
+      return getConstantInteger(constSymbol.getConstValue(), value);
+    })
+    .Default([&](auto expr) {
+      emitError(loc(expr->loc())) << "constant integer expected";
+      return mlir::failure();
+    });
   }
 
   mlir::Type getType(const ArrayDataTypeSpecAST *type) {

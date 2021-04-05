@@ -1,0 +1,56 @@
+// RUN: sclang-gen --emit=mlir %s --opt | FileCheck %s
+
+// CHECK-LABEL: scl.function_block @fb1
+// CHECK: (%arg0: !scl.address<!scl.idb<fb1>>)
+function_block fb1
+
+// CHECK: [[CI1:%c[0-9_a-z]+]] = scl.constant 1 : i16 -> !scl.int
+// CHECK: [[CI2:%c[0-9_a-z]+]] = scl.constant 2 : i16 -> !scl.int
+// CHECK: [[CR1:%c[0-9_a-z]+]] = scl.constant 1.000000e+00 : f32 -> !scl.real
+// CHECK: [[CR2:%c[0-9_a-z]+]] = scl.constant 2.000000e+00 : f32 -> !scl.real
+// CHECK: [[CR3:%c[0-9_a-z]+]] = scl.constant 3.000000e+00 : f32 -> !scl.real
+const
+  ci1 := 1;
+  ci2 := int#2;
+  cr1 := 1.0;
+  cr2 := real#2.0;
+  cr3 := real#3e0;
+end_const;
+
+// CHECK: scl.var output "i1" : !scl.int
+// CHECK: scl.var output "i2" : !scl.int
+// CHECK: scl.var output "r1" : !scl.real
+// CHECK: scl.var output "r2" : !scl.real
+// CHECK: scl.var output "r3" : !scl.real
+var_output
+  i1 : int;
+  i2 : int;
+  r1 : real;
+  r2 : real;
+  r3 : real;
+end_var
+
+
+begin
+// CHECK: %i1 = scl.getvariable @i1 from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.int>
+// CHECK: scl.store %i1 : !scl.address<!scl.int> = [[CI1]] : !scl.int
+  i1 := ci1;
+
+// CHECK: %i2 = scl.getvariable @i2 from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.int>
+// CHECK: scl.store %i2 : !scl.address<!scl.int> = [[CI2]] : !scl.int
+  i2 := ci2;
+
+// CHECK: %r1 = scl.getvariable @r1 from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.real>
+// CHECK: scl.store %r1 : !scl.address<!scl.real> = [[CR1]] : !scl.real
+  r1 := cr1;
+
+// CHECK: %r2 = scl.getvariable @r2 from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.real>
+// CHECK: scl.store %r2 : !scl.address<!scl.real> = [[CR2]] : !scl.real
+  r2 := cr2;
+
+// CHECK: %r3 = scl.getvariable @r3 from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.real>
+// CHECK: scl.store %r3 : !scl.address<!scl.real> = [[CR3]] : !scl.real
+  r3 := cr3;
+
+// CHECK: scl.return
+end_function_block
