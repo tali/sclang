@@ -538,7 +538,7 @@ private:
     case tok_real:
       lastChar = Token(getNextChar());
       if (getNumberLiteralTok() != tok_real_number_literal)
-        return tok_error_integer;
+        return tok_error_real;
       return tok_real_number_literal;
     case tok_date:
       lastChar = Token(getNextChar());
