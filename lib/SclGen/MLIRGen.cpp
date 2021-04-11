@@ -530,6 +530,9 @@ private:
           builder.create<ContinueOp>(location);
           return mlir::success();
         })
+        .Case<ForDoAST>([&](auto forDo) {
+          return mlirGen(forDo);
+        })
         .Case<IfThenElseAST>(
             [&](auto ifThenElse) { return mlirGen(ifThenElse); })
         .Case<ReturnAST>([&](auto instr) {
@@ -1068,6 +1071,36 @@ private:
 
   // MARK: C.7 Control Statements
 
+  mlir::LogicalResult mlirGen(const ForDoAST *forDo) {
+    auto location = loc(forDo->loc());
+
+    auto assign = llvm::cast<BinaryExpressionAST>(forDo->getAssignment());
+    if (!assign || assign->getOp() != tok_assignment) {
+      emitError(location) << "expected assignment";
+      return mlir::failure();
+    }
+
+    mlir::Value var = mlirGen(assign->getLhs());
+    mlir::Value start = mlirGenRValue(assign->getRhs());
+    mlir::Value last = mlirGenRValue(forDo->getLast());
+    mlir::Value incr = nullptr;
+    if (forDo->getIncrement().hasValue())
+      incr = mlirGenRValue(forDo->getIncrement().getValue());
+
+    auto forDoOp = builder.create<ForDoOp>(location, var, start, last, incr);
+
+    auto old = builder.saveInsertionPoint();
+
+    builder.createBlock(&forDoOp.doBody());
+    if (failed(mlirGen(forDo->getCode())))
+      return mlir::failure();
+
+    builder.create<EndOp>(location);
+    builder.restoreInsertionPoint(old);
+
+    return mlir::success();
+  }
+
   /// Codegen an if-then-else block
   mlir::LogicalResult mlirGen(const IfThenElseAST *ifThenElse) {
     mlir::Value condition;
@@ -1105,6 +1138,7 @@ private:
 
     return mlir::success();
   }
+
 };
 
 } // namespace

@@ -317,6 +317,17 @@ def EndOp : SclOp<"end", [NoSideEffect, Terminator]> {
   let assemblyFormat = "attr-dict";
 }
 
+def ForDoOp : SclOp<"for"> {
+  let arguments = (
+    ins Scl_AddressType:$var,
+    Scl_NumericType:$init,
+    Scl_NumericType:$to,
+    Optional<Scl_NumericType>:$by
+  );
+  let regions = (region AnyRegion:$doBody);
+  let assemblyFormat = "attr-dict $var `:` type($var) `=` $init `:` type($init) `to` $to `:` type($to) (`by` $by^ `:` type($by))? `do` $doBody";
+}
+
 def IfThenElseOp : SclOp<"if">, SingleBlockImplicitTerminator<"terminator"> {
   let summary = "if-then-else operation";
   let description = [{

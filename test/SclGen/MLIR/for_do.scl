@@ -1,0 +1,27 @@
+// RUN: sclang-gen --emit=mlir %s | sclang-gen -x mlir --emit=mlir --opt | FileCheck %s
+
+// CHECK-LABEL: scl.function @test
+function test : int
+
+// CHECK: %a = scl.tmpvar "a" : !scl.address<!scl.int>
+var_input
+  a : int;
+end_var
+
+// CHECK: %i = scl.tmpvar "i" : !scl.address<!scl.int>
+var
+  i : int;
+end_var
+
+begin
+
+// CHECK: %0 = scl.load %a : !scl.address<!scl.int>
+// CHECK: scl.for %i : !scl.address<!scl.int> = %c1 : !scl.int to %0 : !scl.int by %c2 : !scl.int do {
+// CHECK:   %1 = scl.load %i : !scl.address<!scl.int> : !scl.int
+// CHECK:   scl.store %test : !scl.address<!scl.int> = %1 : !scl.int
+  for i := 1 to a by 2 do
+    test := i;
+  end_for;
+
+end_function
+
