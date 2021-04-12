@@ -779,7 +779,7 @@ class RepeatUntilAST : public InstructionAST {
 public:
   RepeatUntilAST(Location loc, std::unique_ptr<ExpressionAST> condition,
                  std::unique_ptr<CodeSectionAST> code)
-      : InstructionAST(std::move(loc), Instr_WhileDo),
+      : InstructionAST(std::move(loc), Instr_RepeatUntil),
         condition(std::move(condition)), code(std::move(code)) {}
 
   const ExpressionAST *getCondition() const { return condition.get(); }

@@ -1521,6 +1521,10 @@ private:
     if (!code)
       return parseError<WhileDoAST>("code section", "while loop");
 
+    if (lexer.getCurToken() != tok_end_while)
+      return parseError<WhileDoAST>(tok_end_while, "end of while loop");
+    lexer.consume(tok_end_while);
+
     return std::make_unique<WhileDoAST>(std::move(loc), std::move(condition),
                                         std::move(code));
   }

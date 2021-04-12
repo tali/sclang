@@ -313,6 +313,11 @@ def StoreOp : SclOp<"store", [/*SameOperandsElementType]*/]> {
 // MARK: control flow
 //
 
+def ConditionOp : SclOp<"condition", [NoSideEffect, Terminator]> {
+  let arguments = (ins Scl_Bool:$cond);
+  let assemblyFormat = "attr-dict $cond `:` type($cond)";
+}
+
 def EndOp : SclOp<"end", [NoSideEffect, Terminator]> {
   let assemblyFormat = "attr-dict";
 }
@@ -343,6 +348,22 @@ def IfThenElseOp : SclOp<"if">, SingleBlockImplicitTerminator<"terminator"> {
   let regions = (region SizedRegion<1>:$thenBody, AnyRegion:$elseBody);
   let assemblyFormat = "attr-dict $cond `:` type($cond) $thenBody `else` $elseBody";
 }
+
+def WhileDoOp : SclOp<"while"> {
+  let regions = (region AnyRegion:$whileBody, AnyRegion:$doBody);
+  let assemblyFormat = "$whileBody attr-dict `do` $doBody";
+}
+
+def RepeatOp : SclOp<"repeat"> {
+  let regions = (region AnyRegion:$repeatBody);
+  let assemblyFormat = "$repeatBody attr-dict";
+}
+
+def UntilOp : SclOp<"until", [NoSideEffect, Terminator]> {
+  let arguments = (ins Scl_Bool:$cond);
+  let assemblyFormat = "attr-dict $cond `:` type($cond)";
+}
+
 
 //
 // MARK: terminator operations

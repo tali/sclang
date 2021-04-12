@@ -543,6 +543,12 @@ private:
           builder.create<ExitOp>(location);
           return mlir::success();
         })
+        .Case<RepeatUntilAST>([&](auto repeatUntil) {
+          return mlirGen(repeatUntil);
+        })
+        .Case<WhileDoAST>([&](auto whileDo) {
+          return mlirGen(whileDo);
+        })
         .Default([&](auto instr) {
           emitError(loc(instr->loc()))
               << "MLIR codegen encountered an unhandled instruction kind '"
@@ -1136,6 +1142,43 @@ private:
 
     builder.restoreInsertionPoint(old);
 
+    return mlir::success();
+  }
+
+  mlir::LogicalResult mlirGen(const WhileDoAST *whileDo) {
+    auto location = loc(whileDo->loc());
+
+    auto whileDoOp = builder.create<WhileDoOp>(location);
+
+    auto old = builder.saveInsertionPoint();
+
+    builder.createBlock(&whileDoOp.whileBody());
+    auto condition = mlirGen(whileDo->getCondition());
+    builder.create<ConditionOp>(location, condition);
+
+    builder.createBlock(&whileDoOp.doBody());
+    if (failed(mlirGen(whileDo->getCode())))
+      return mlir::failure();
+    builder.create<EndOp>(location);
+
+    builder.restoreInsertionPoint(old);
+    return mlir::success();
+  }
+
+  mlir::LogicalResult mlirGen(const RepeatUntilAST *repeatUntil) {
+    auto location = loc(repeatUntil->loc());
+
+    auto repeatOp = builder.create<RepeatOp>(location);
+    auto old = builder.saveInsertionPoint();
+
+    builder.createBlock(&repeatOp.repeatBody());
+    if (failed(mlirGen(repeatUntil->getCode())))
+      return mlir::failure();
+
+    auto until = mlirGen(repeatUntil->getCondition());
+    builder.create<UntilOp>(location, until);
+
+    builder.restoreInsertionPoint(old);
     return mlir::success();
   }
 
