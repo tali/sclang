@@ -598,6 +598,7 @@ private:
         .Case<RealConstantAST>([&](auto expr) { return mlirGen(expr); })
         .Case<StringConstantAST>([&](auto expr) { return mlirGen(expr); })
         .Case<SimpleVariableAST>([&](auto expr) { return mlirGen(expr); })
+        .Case<IndexedVariableAST>([&](auto expr) { return mlirGen(expr); })
         .Case<BinaryExpressionAST>([&](auto expr) { return mlirGen(expr); })
         .Case<UnaryExpressionAST>([&](auto expr) { return mlirGen(expr); })
         .Case<FunctionCallAST>([&](auto expr) { return mlirGen(expr); })
@@ -722,8 +723,17 @@ private:
   }
 
   mlir::Value mlirGen(const IndexedVariableAST *expr) {
-    emitError(loc(expr->loc())) << "IndexedVariableAST not implemented";
-    return nullptr;
+    auto location = loc(expr->loc());
+
+    mlir::Value base = mlirGen(expr->getBase());
+    mlir::Type arrayType = base.getType().cast<AddressType>().getElementType();
+    mlir::Type elementType = arrayType.cast<ArrayType>().getElementType();
+    mlir::Type resultType = AddressType::get(elementType);
+    SmallVector<mlir::Value, 1> indices;
+    for (const auto & index : expr->getIndices()) {
+      indices.push_back(mlirGenRValue(index.get()));
+    }
+    return builder.create<GetIndexOp>(location, resultType, base, indices);
   }
 
   mlir::Value mlirGen(const BinaryExpressionAST *expr) {

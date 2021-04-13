@@ -272,6 +272,13 @@ def GetGlobalOp : SclOp<"getglobal",
   let assemblyFormat = "attr-dict $name `:` type($element)";
 }
 
+def GetIndexOp : SclOp<"getindex", [NoSideEffect]> {
+  let summary = "get the address of an indexed element";
+  let arguments = (ins Scl_AddressType:$addr, Variadic<Scl_IntegerType>:$indices);
+  let results = (outs Scl_AddressType:$element);
+  let assemblyFormat = "attr-dict $indices `:` type($indices) `from` $addr `:` type($addr) `->` type($element)";
+}
+
 def GetVariableOp : SclOp<"getvariable",
     [NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
   let summary = "get the address of a FB variable";

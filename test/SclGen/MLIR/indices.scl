@@ -1,0 +1,39 @@
+// RUN: sclang-gen --emit=mlir %s | sclang-gen -x mlir --emit=mlir --opt | FileCheck %s
+
+// CHECK-LABEL: scl.function_block @test
+function_block test
+
+// CHECK: scl.var output "a" : !scl.array<!scl.int, 1:2, 1:3>
+var_output
+  a : array[1..2, 1..3] of int;
+end_var
+
+// CHECK-DAG: %i = scl.tmpvar "i" : !scl.address<!scl.int>
+// CHECK-DAG: %j = scl.tmpvar "j" : !scl.address<!scl.int>
+var_temp
+  i : int;
+  j : int;
+end_var
+
+begin
+
+// CHECK:      scl.for %i : !scl.address<!scl.int> = %c1 : !scl.int to %c2 : !scl.int do {
+// CHECK:        scl.for %j : !scl.address<!scl.int> = %c1 : !scl.int to %c3 : !scl.int do {
+// CHECK-DAG:      [[A:%[a-z]+]] = scl.getvariable @a from %arg0
+// CHECK-DAG:      [[I:%[0-9]+]] = scl.load %i : !scl.address<!scl.int>
+// CHECK-DAG:      [[J:%[0-9]+]] = scl.load %j : !scl.address<!scl.int>
+// CHECK-DAG:      [[E:%[0-9]+]] = scl.getindex [[I]], [[J]] : !scl.int, !scl.int from [[A]]
+// CHECK-DAG:      [[I:%[0-9]+]] = scl.load %i : !scl.address<!scl.int>
+// CHECK-DAG:      [[J:%[0-9]+]] = scl.load %j : !scl.address<!scl.int>
+// CHECK-DAG:      [[X:%[0-9]+]] = scl.mul [[I]], [[J]]
+// CHECK:          scl.store [[E]] : !scl.address<!scl.int> = [[X]] : !scl.int
+// CHECK:        }
+// CHECK:      }
+
+  for i := 1 to 2 do
+    for j := 1 to 3 do
+      a[i, j] := i * j;
+    end_for;
+  end_for;
+
+end_function_block
