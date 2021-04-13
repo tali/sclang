@@ -29,6 +29,8 @@ end_function
 // CHECK-LABEL: scl.function @callee_2
 function callee_2 : int
 
+// CHECK: %a = scl.tmpvar "a" : !scl.address<!scl.int>
+// CHECK: %b = scl.tmpvar "b" : !scl.address<!scl.int>
 var_input
   a : int;
   b : int;
@@ -36,7 +38,12 @@ end_var
 
 begin
 
-  callee_2 := a * 2 + b;
+// CHECK-DAG: [[A:%[0-9]+]] = scl.load %a
+// CHECK-DAG: [[B:%[0-9]+]] = scl.load %b
+// CHECK-DAG: [[X:%[0-9]+]] = scl.call.fc @callee_1([[B]]) {argNames = ["a"]} : (!scl.int) -> !scl.int
+// CHECK-DAG: [[Y:%[0-9]+]] = scl.add [[A]], [[X]]
+// CHECK-DAG: scl.store %callee_2 : !scl.address<!scl.int> = [[Y]]
+  callee_2 := a + callee_1(a:=b);
 
 end_function
 

@@ -879,7 +879,7 @@ private:
           emitError(loc(lhs->loc()), "invalid parameter name");
           return mlir::failure();
         }
-        mlir::Value value = mlirGen(binary->getRhs());
+        mlir::Value value = mlirGenRValue(binary->getRhs());
         fN(name->getName(), value);
       } else {
         if (!fNN) {
@@ -890,7 +890,7 @@ private:
           emitError(loc(arg->loc()), "parameter without name");
           return mlir::failure();
         }
-        fNN(mlirGen(arg.get()));
+        fNN(mlirGenRValue(arg.get()));
       }
     }
     return mlir::success();
