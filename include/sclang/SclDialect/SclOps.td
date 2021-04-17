@@ -30,7 +30,7 @@ include "mlir/Interfaces/CastInterfaces.td"
 
 // MARK: data block
 
-def DataBlockOp : SclOp<"db", [Symbol]> {
+def DataBlockOp : TopLevelOp<"db", [Symbol]> {
   let summary = "Define a data block";
 
   let arguments = (ins
@@ -200,7 +200,7 @@ def FunctionBlockOp : TopLevelOp<"function_block", [
 // MARK: variable handling
 //
 
-def VariableOp : SclOp<"var", [Symbol]> {
+def VariableOp : SclOp<"var", [Symbol, HasParent<"FunctionBlockOp">]> {
   let summary = "declare a static/input/output variable in a FB";
 
   let arguments = (ins
@@ -320,7 +320,8 @@ def StoreOp : SclOp<"store", [/*SameOperandsElementType]*/]> {
 // MARK: control flow
 //
 
-def ConditionOp : SclOp<"condition", [NoSideEffect, Terminator]> {
+def ConditionOp : SclOp<"condition",
+    [NoSideEffect, HasParent<"WhileDoOp">, Terminator]> {
   let arguments = (ins Scl_Bool:$cond);
   let assemblyFormat = "attr-dict $cond `:` type($cond)";
 }
@@ -366,7 +367,7 @@ def RepeatOp : SclOp<"repeat"> {
   let assemblyFormat = "$repeatBody attr-dict";
 }
 
-def UntilOp : SclOp<"until", [NoSideEffect, Terminator]> {
+def UntilOp : SclOp<"until", [NoSideEffect, HasParent<"RepeatOp">, Terminator]> {
   let arguments = (ins Scl_Bool:$cond);
   let assemblyFormat = "attr-dict $cond `:` type($cond)";
 }
