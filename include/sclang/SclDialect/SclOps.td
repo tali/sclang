@@ -322,15 +322,18 @@ def StoreOp : SclOp<"store", [/*SameOperandsElementType]*/]> {
 
 def ConditionOp : SclOp<"condition",
     [NoSideEffect, HasParent<"WhileDoOp">, Terminator]> {
+  let summary = "condition for WhileDoOp";
   let arguments = (ins Scl_Bool:$cond);
   let assemblyFormat = "attr-dict $cond `:` type($cond)";
 }
 
 def EndOp : SclOp<"end", [NoSideEffect, Terminator]> {
+  let summary = "implicit terminator for blocks";
   let assemblyFormat = "attr-dict";
 }
 
 def ForDoOp : SclOp<"for"> {
+  let summary = "for-do loop";
   let arguments = (
     ins Scl_AddressType:$var,
     Scl_NumericType:$init,
@@ -358,16 +361,19 @@ def IfThenElseOp : SclOp<"if">, SingleBlockImplicitTerminator<"terminator"> {
 }
 
 def WhileDoOp : SclOp<"while"> {
+  let summary = "while-do loop";
   let regions = (region AnyRegion:$whileBody, AnyRegion:$doBody);
   let assemblyFormat = "$whileBody attr-dict `do` $doBody";
 }
 
 def RepeatOp : SclOp<"repeat"> {
+  let summary = "repeat-until loop";
   let regions = (region AnyRegion:$repeatBody);
   let assemblyFormat = "$repeatBody attr-dict";
 }
 
 def UntilOp : SclOp<"until", [NoSideEffect, HasParent<"RepeatOp">, Terminator]> {
+  let summary = "condition for RepeatOp";
   let arguments = (ins Scl_Bool:$cond);
   let assemblyFormat = "attr-dict $cond `:` type($cond)";
 }
