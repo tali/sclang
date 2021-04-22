@@ -68,6 +68,18 @@ public:
   mlir::Type getElementType();
 };
 
+class DateType
+    : public mlir::Type::TypeBase<DateType, mlir::Type, mlir::TypeStorage> {
+public:
+  using Base::Base;
+};
+
+class DateAndTimeType
+    : public mlir::Type::TypeBase<DateAndTimeType, mlir::Type, mlir::TypeStorage> {
+public:
+  using Base::Base;
+};
+
 /// This class defines the SCL type for an instance DB
 class InstanceDbType : public mlir::Type::TypeBase<InstanceDbType, mlir::Type,detail::InstanceDbTypeStorage> {
 public:
@@ -137,6 +149,24 @@ public:
 
   /// Returns the number of elements held by this struct.
   size_t getNumElements() { return getElementTypes().size(); }
+};
+
+class S5TimeType
+    : public mlir::Type::TypeBase<S5TimeType, mlir::Type, mlir::TypeStorage> {
+public:
+  using Base::Base;
+};
+
+class TimeType
+    : public mlir::Type::TypeBase<TimeType, mlir::Type, mlir::TypeStorage> {
+public:
+  using Base::Base;
+};
+
+class TimeOfDayType
+    : public mlir::Type::TypeBase<TimeOfDayType, mlir::Type, mlir::TypeStorage> {
+public:
+  using Base::Base;
 };
 
 } // end namespace scl

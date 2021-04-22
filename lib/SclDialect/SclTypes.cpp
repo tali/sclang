@@ -558,6 +558,17 @@ mlir::Type SclDialect::parseType(mlir::DialectAsmParser &parser) const {
   if (keyword == "real")
     return RealType::get(getContext());
 
+  if (keyword == "date")
+    return DateType::get(getContext());
+  if (keyword == "date_and_time")
+    return DateAndTimeType::get(getContext());
+  if (keyword == "s5time")
+    return S5TimeType::get(getContext());
+  if (keyword == "time")
+    return TimeType::get(getContext());
+  if (keyword == "time_of_day")
+    return TimeOfDayType::get(getContext());
+
   parser.emitError(parser.getNameLoc(), "unknown SCL type: ") << keyword;
   return Type();
 }
@@ -568,8 +579,9 @@ void SclDialect::printType(mlir::Type type,
   TypeSwitch<Type>(type)
       .Case<AddressType>([&](AddressType type) { print(type, printer); })
       .Case<ArrayType>([&](ArrayType type) { print(type, printer); })
+      .Case<DateType>([&](DateType) { printer << "date"; })
+      .Case<DateAndTimeType>([&](DateAndTimeType) { printer << "date_and_time"; })
       .Case<InstanceDbType>([&](InstanceDbType type) { print(type, printer); })
-      .Case<StructType>([&](StructType type) { print(type, printer); })
       .Case<IntegerType>([&](IntegerType type) {
         switch (type.getWidth()) {
         default:
@@ -603,6 +615,10 @@ void SclDialect::printType(mlir::Type type,
         }
       })
       .Case<RealType>([&](RealType) { printer << "real"; })
+      .Case<StructType>([&](StructType type) { print(type, printer); })
+      .Case<S5TimeType>([&](S5TimeType) { printer << "s5time"; })
+      .Case<TimeType>([&](TimeType) { printer << "time"; })
+      .Case<TimeOfDayType>([&](TimeOfDayType) { printer << "time_of_day"; })
       .Default([&](Type) { llvm_unreachable("Unhandled SCL type"); });
 }
 
@@ -611,9 +627,13 @@ void SclDialect::printType(mlir::Type type,
 void SclDialect::registerTypes() {
   addTypes<AddressType>();
   addTypes<ArrayType>();
+  addTypes<DateType>();
   addTypes<InstanceDbType>();
   addTypes<IntegerType>();
   addTypes<LogicalType>();
   addTypes<RealType>();
   addTypes<StructType>();
+  addTypes<S5TimeType>();
+  addTypes<TimeType>();
+  addTypes<TimeOfDayType>();
 }

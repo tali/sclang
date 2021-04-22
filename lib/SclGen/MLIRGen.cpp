@@ -975,6 +975,16 @@ private:
       return IntegerType::get(builder.getContext(), 32);
     case tok_real:
       return RealType::get(builder.getContext());
+    case tok_date:
+      return DateType::get(builder.getContext());
+    case tok_date_and_time:
+      return DateAndTimeType::get(builder.getContext());
+    case tok_s5time:
+      return S5TimeType::get(builder.getContext());
+    case tok_time:
+      return TimeType::get(builder.getContext());
+    case tok_time_of_day:
+      return TimeOfDayType::get(builder.getContext());
     }
   }
   mlir::Type getType(const ElementaryDataTypeAST *type) {
@@ -997,6 +1007,16 @@ private:
       return getType(tok_dint);
     case ElementaryDataTypeAST::Type_Real:
       return getType(tok_real);
+    case ElementaryDataTypeAST::Type_Date:
+      return getType(tok_date);
+    case ElementaryDataTypeAST::Type_DateAndTime:
+      return getType(tok_date_and_time);
+    case ElementaryDataTypeAST::Type_S5Time:
+      return getType(tok_s5time);
+    case ElementaryDataTypeAST::Type_Time:
+      return getType(tok_time);
+    case ElementaryDataTypeAST::Type_TimeOfDay:
+      return getType(tok_time_of_day);
     // TODO: TBD more types
     default:
       emitError(loc(type->loc()))

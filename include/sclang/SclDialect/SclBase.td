@@ -49,11 +49,15 @@ def Scl_Dialect : Dialect {
 
 def Scl_AddressType : Type<CPred<"$_self.isa<scl::AddressType>()">, "AddressType">;
 def Scl_ArrayType : Type<CPred<"$_self.isa<scl::ArrayType>()">, "ArrayType">;
+def Scl_DateType : Type<CPred<"$_self.isa<scl::DateType>()">, "DateType">;
 def Scl_InstanceDbType : Type<CPred<"$_self.isa<scl::InstanceDbType>()">, "IDB">;
 def Scl_IntegerType : Type<CPred<"$_self.isa<scl::IntegerType>()">, "IntegerType">;
 def Scl_LogicalType : Type<CPred<"$_self.isa<scl::LogicalType>()">, "LogicalType">;
 def Scl_RealType : Type<CPred<"$_self.isa<scl::RealType>()">, "RealType">;
 def Scl_StructType : Type<CPred<"$_self.isa<scl::StructType>()">, "StructType">;
+def Scl_S5TimeType : Type<CPred<"$_self.isa<scl::S5TimeType>()">, "S5TimeType">;
+def Scl_TimeType : Type<CPred<"$_self.isa<scl::TimeType>()">, "TimeType">;
+def Scl_TimeOfDayType : Type<CPred<"$_self.isa<scl::TimeOfDayType>()">, "TimeOfDayType">;
 
 def Scl_Bool :
   Type<CPred<"$_self.isa<::LogicalType>() && $_self.cast<::LogicalType>().getWidth() == 1">, "bool">,
@@ -62,11 +66,15 @@ def Scl_Bool :
 // Any SCL type which can be used for function arguments
 def Scl_Type : AnyTypeOf<[
   Scl_ArrayType,
+  Scl_DateType,
   Scl_InstanceDbType,
   Scl_IntegerType,
   Scl_LogicalType,
   Scl_RealType,
-  Scl_StructType
+  Scl_StructType,
+  Scl_S5TimeType,
+  Scl_TimeType,
+  Scl_TimeOfDayType
 ]>;
 def Scl_NumericType : AnyTypeOf<[Scl_IntegerType, Scl_RealType]>;
 
