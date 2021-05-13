@@ -684,7 +684,6 @@ private:
       elementaryType = ElementaryDataTypeAST::Type_TimeOfDay;
       break;
     case tok_date:
-      lexer.consume(tok_word);
       elementaryType = ElementaryDataTypeAST::Type_Date;
       break;
     // String data type
