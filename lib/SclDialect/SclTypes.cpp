@@ -628,6 +628,7 @@ void SclDialect::registerTypes() {
   addTypes<AddressType>();
   addTypes<ArrayType>();
   addTypes<DateType>();
+  addTypes<DateAndTimeType>();
   addTypes<InstanceDbType>();
   addTypes<IntegerType>();
   addTypes<LogicalType>();

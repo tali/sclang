@@ -503,6 +503,8 @@ private:
         return tok_date;
       if (lower == "l")
         return tok_dint;
+      if (lower == "s5t")
+        return tok_s5time;
       if (lower == "dt")
         return tok_date_and_time;
       if (lower == "dw")
@@ -546,6 +548,7 @@ private:
     case tok_date_and_time:
       lastChar = Token(getNextChar());
       return getDateAndTimeLiteralTok();
+    case tok_s5time:
     case tok_time:
       lastChar = Token(getNextChar());
       return getTimeLiteralTok();

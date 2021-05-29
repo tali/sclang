@@ -22,6 +22,8 @@
 
 #include "sclang/SclDialect/Dialect.h"
 
+#include <ctime>
+
 #include "llvm/ADT/TypeSwitch.h"
 
 #include "mlir/IR/Builders.h"
@@ -33,6 +35,129 @@
 
 using namespace mlir;
 using namespace mlir::scl;
+
+
+// MARK: helper functions
+
+namespace {
+void printTimeLiteral(raw_ostream &name, int t) {
+  if (!t) {
+    name << "0s";
+    return;
+  }
+  int tt = t / (24 * 60 * 60 * 1000);
+  if (tt) {
+    name << tt << 'd';
+    t = t % (24 * 60 * 60 * 1000);
+    if (t)
+      name << '_';
+  }
+  tt = t / (60 * 60 * 1000);
+  if (tt) {
+    name << tt << 'h';
+    t = t % (60 * 60 * 1000);
+    if (t)
+      name << '_';
+  }
+  tt = t / (60 * 1000);
+  if (tt) {
+    name << tt << 'm';
+    t = t % (60 * 1000);
+    if (t)
+      name << '_';
+  }
+  tt = t / (1000);
+  if (tt) {
+    name << tt << 's';
+    t = t % (1000);
+    if (t)
+      name << '_';
+  }
+  if (t) {
+    name << t << "ms";
+  }
+}
+
+const int DAYS_FROM_EPOCH_TO_1990 = (1990-1970) * 365 + 5; // 5 leap years
+
+int32_t getDaysSince1990(int year, int month, int day) {
+  struct tm tm;
+  tm.tm_year = year - 1900;
+  tm.tm_mon = month - 1;
+  tm.tm_mday = day;
+  tm.tm_hour = tm.tm_min = tm.tm_sec = 0;
+  tm.tm_isdst = tm.tm_gmtoff = 0;
+  time_t time = mktime(&tm) - timezone;
+  assert(time >= 0);
+
+  time_t days_from_epoch = time / (time_t)(24*3600);
+  return days_from_epoch - DAYS_FROM_EPOCH_TO_1990;
+}
+
+void getDateFromDaysSince1990(int32_t days, int *year, int *month, int *day) {
+  struct tm tm;
+  time_t days_from_epoch = days + DAYS_FROM_EPOCH_TO_1990;
+  time_t time = days_from_epoch * (24*3600);
+  gmtime_r(&time, &tm);
+  *year = tm.tm_year + 1900;
+  *month = tm.tm_mon + 1;
+  *day = tm.tm_mday;
+}
+
+uint64_t to_bcd2(int offset, int value) {
+  uint64_t bcd = 0;
+  bcd += (value / 10 % 10) << 4;
+  bcd += (value % 10);
+  bcd <<= offset;
+  return bcd;
+}
+uint64_t to_bcd3(int offset, int value) {
+  uint64_t bcd = to_bcd2(4, value / 10);
+  bcd += (value % 10);
+  bcd <<= offset;
+  return bcd;
+}
+
+uint64_t to_datetime(int year, int month, int day,
+                     int hour, int min, int sec, int msec) {
+  uint64_t value = 0;
+  value += to_bcd2(56, year % 100);
+  value += to_bcd2(48, month);
+  value += to_bcd2(40, day);
+  value += to_bcd2(32, hour);
+  value += to_bcd2(24, min);
+  value += to_bcd2(16, sec);
+  value += to_bcd3( 4, msec);
+  return value;
+}
+
+int from_bcd2(int offset, uint64_t bcd) {
+  bcd >>= offset;
+  bcd &= 0xff;
+  return (bcd >> 4) * 10 + (bcd & 0x0f);
+}
+int from_bcd3(int offset, uint64_t bcd) {
+  bcd >>= offset;
+  return from_bcd2(4, bcd) * 10 + (bcd & 0x0f);
+}
+
+void from_datetime(uint64_t value, int *year, int *month, int *day,
+                   int *hour, int *min, int *sec, int *msec) {
+  int y = from_bcd2(56, value);
+  if (y >= 90)
+    *year = 1900 + y;
+  else
+    *year = 2000 + y;
+  *month = from_bcd2(48, value);
+  *day   = from_bcd2(40, value);
+  *hour  = from_bcd2(32, value);
+  *min   = from_bcd2(24, value);
+  *sec   = from_bcd2(16, value);
+  *msec  = from_bcd3( 4, value);
+}
+} // namespace
+
+
 
 //===----------------------------------------------------------------------===//
 // MARK: ConstantOp
@@ -70,6 +195,324 @@ void ConstantOp::getAsmResultNames(
     setNameFn(getResult(), "cst");
   }
 }
+
+//===----------------------------------------------------------------------===//
+// MARK: ConstantS5TimeOp
+//===----------------------------------------------------------------------===//
+// time as BCD coded floating point
+// first digit (bits 15..12): scale factor (10ms..10s)
+// next three digits (bits 11..0): significant
+
+namespace {
+uint16_t getS5TimeBcdCoded(unsigned int timeMS)
+{
+  uint16_t scale;
+  unsigned time;
+
+  // determine best time base, round up time according to that base
+  if (timeMS >= 1000000) {
+    // time base 10s
+    time = (timeMS+9999) / 10000;
+    scale = 0x3000;
+  } else if (timeMS >= 100000) {
+    // time base 1s
+    time = (timeMS+999) / 1000;
+    scale = 0x2000;
+  } else if (timeMS >= 10000) {
+    // time base 100ms
+    time = (timeMS+99) / 100;
+    scale = 0x1000;
+  } else {
+    // time base 10ms
+    time = (timeMS+9) / 10;
+    scale = 0x0000;
+  }
+  if (time > 999) {
+    // TBD error too large
+    time = 999;
+  }
+
+  return scale + to_bcd3(0, time);
+}
+} // namespace
+
+
+OpFoldResult ConstantS5TimeOp::fold(ArrayRef<Attribute> operands) {
+  return valueAttr();
+}
+
+void ConstantS5TimeOp::build(OpBuilder &builder, OperationState &state,
+                             unsigned int timeMS) {
+
+  Type type = S5TimeType::get(builder.getContext());
+  build(builder, state, type, getS5TimeBcdCoded(timeMS));
+}
+
+unsigned ConstantS5TimeOp::getTimeMS() {
+  unsigned v = value();
+  unsigned scale = v & 0x3000;
+  unsigned t = from_bcd3(0, v);
+
+  switch (scale) {
+  case 0x0000: return 10 * t;
+  case 0x1000: return 100 * t;
+  case 0x2000: return 1000 * t;
+  case 0x3000: return 10000 * t;
+  }
+  assert(false);
+}
+
+static mlir::ParseResult parseConstantS5TimeOp(mlir::OpAsmParser &parser,
+                                               mlir::OperationState &result) {
+  uint64_t secs, msecs;
+  if (parser.parseOptionalAttrDict(result.attributes) ||
+      parser.parseInteger(secs) || parser.parseKeyword("s") ||
+      parser.parseInteger(msecs))
+    return failure();
+
+  auto builder = parser.getBuilder();
+  auto s5t = getS5TimeBcdCoded(secs * 1000 + msecs);
+  auto attr = IntegerAttr::get(builder.getIntegerType(16, /*isSigned=*/false),
+                               APInt(16, s5t, /*isSigned=*/false));
+  result.attributes.append("value", attr);
+  result.addTypes(S5TimeType::get(builder.getContext()));
+  return success();
+}
+
+static void print(mlir::OpAsmPrinter &printer, ConstantS5TimeOp op) {
+  printer << "scl.constant.s5time ";
+  printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
+  unsigned t = op.getTimeMS();
+  int secs = t / 1000;
+  int msecs = t % 1000;
+  printer << secs << " s " << msecs;
+}
+
+void ConstantS5TimeOp::getAsmResultNames(
+    function_ref<void(Value, StringRef)> setNameFn) {
+  SmallString<32> buffer;
+  llvm::raw_svector_ostream name(buffer);
+  name << "s5t_";
+  printTimeLiteral(name, getTimeMS());
+
+  setNameFn(getResult(), name.str());
+}
+
+//===----------------------------------------------------------------------===//
+// MARK: ConstantTimeOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ConstantTimeOp::fold(ArrayRef<Attribute> operands) {
+  return valueAttr();
+}
+
+void ConstantTimeOp::build(OpBuilder &builder, OperationState &state,
+                           int timeMS) {
+  Type type = TimeType::get(builder.getContext());
+  build(builder, state, type, timeMS);
+}
+
+static mlir::ParseResult parseConstantTimeOp(mlir::OpAsmParser &parser,
+                                             mlir::OperationState &result) {
+  uint64_t secs, msecs;
+  if (parser.parseOptionalAttrDict(result.attributes) ||
+      parser.parseInteger(secs) || parser.parseKeyword("s") ||
+      parser.parseInteger(msecs))
+    return failure();
+
+  auto builder = parser.getBuilder();
+  auto value = builder.getSI32IntegerAttr(secs * 1000 + msecs);
+  result.attributes.append("value", value);
+  result.addTypes(TimeType::get(builder.getContext()));
+  return success();
+}
+
+static void print(mlir::OpAsmPrinter &printer, ConstantTimeOp op) {
+  printer << "scl.constant.time ";
+  printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
+  int32_t t = op.value();
+  int secs = t / 1000;
+  int msecs = t % 1000;
+  printer << secs << " s " << msecs;
+}
+
+void ConstantTimeOp::getAsmResultNames(
+    function_ref<void(Value, StringRef)> setNameFn) {
+  SmallString<32> buffer;
+  llvm::raw_svector_ostream name(buffer);
+  name << "t_";
+  printTimeLiteral(name, value());
+
+  setNameFn(getResult(), name.str());
+}
+
+
+//===----------------------------------------------------------------------===//
+// MARK: ConstantDateOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ConstantDateOp::fold(ArrayRef<Attribute> operands) {
+  return valueAttr();
+}
+
+void ConstantDateOp::build(OpBuilder &builder, OperationState &state,
+                           int year, int month, int day) {
+  Type type = DateType::get(builder.getContext());
+  int days = getDaysSince1990(year, month, day);
+  assert(days >= 0 && days < 65535);
+  build(builder, state, type, days);
+}
+
+static mlir::ParseResult parseConstantDateOp(mlir::OpAsmParser &parser,
+                                             mlir::OperationState &result) {
+  int year, month, day;
+  if (parser.parseOptionalAttrDict(result.attributes) ||
+      parser.parseInteger(year) ||
+      parser.parseInteger(month) ||
+      parser.parseInteger(day))
+    return failure();
+
+  int date = getDaysSince1990(year, month, day);
+  if (date < 0 || date > 65535)
+    return failure();
+  auto builder = parser.getBuilder();
+  auto attr = IntegerAttr::get(builder.getIntegerType(16, /*isSigned=*/false),
+                               APInt(16, date, /*isSigned=*/false));
+  if (!attr)
+    return failure();
+  result.attributes.append("value", attr);
+  result.addTypes(DateType::get(builder.getContext()));
+  return success();
+}
+
+static void print(mlir::OpAsmPrinter &printer, ConstantDateOp op) {
+  printer << "scl.constant.date ";
+  printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
+  int year, month, day;
+  getDateFromDaysSince1990(op.value(), &year, &month, &day);
+  printer << year << " " << month << " " << day;
+}
+
+void ConstantDateOp::getAsmResultNames(
+    function_ref<void(Value, StringRef)> setNameFn) {
+  SmallString<32> buffer;
+  llvm::raw_svector_ostream name(buffer);
+
+  int year, month, day;
+  getDateFromDaysSince1990(value(), &year, &month, &day);
+  name << "d_" << year << '_' << month << '_' << day;
+
+  setNameFn(getResult(), name.str());
+}
+
+
+//===----------------------------------------------------------------------===//
+// MARK: ConstantTimeOfDayOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ConstantTimeOfDayOp::fold(ArrayRef<Attribute> operands) {
+  return valueAttr();
+}
+
+void ConstantTimeOfDayOp::build(OpBuilder &builder, OperationState &state,
+                                uint32_t timeMS) {
+  Type type = TimeOfDayType::get(builder.getContext());
+  build(builder, state, type, timeMS);
+}
+
+static mlir::ParseResult parseConstantTimeOfDayOp(mlir::OpAsmParser &parser,
+                                               mlir::OperationState &result) {
+  uint64_t secs, msecs;
+  if (parser.parseOptionalAttrDict(result.attributes) ||
+      parser.parseInteger(secs) || parser.parseKeyword("s") ||
+      parser.parseInteger(msecs))
+    return failure();
+
+  auto builder = parser.getBuilder();
+  auto value = builder.getUI32IntegerAttr(secs * 1000 + msecs);
+  result.attributes.append("value", value);
+  result.addTypes(TimeOfDayType::get(builder.getContext()));
+  return success();
+}
+
+static void print(mlir::OpAsmPrinter &printer, ConstantTimeOfDayOp op) {
+  printer << "scl.constant.tod ";
+  printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
+  int32_t t = op.value();
+  int secs = t / 1000;
+  int msecs = t % 1000;
+  printer << secs << " s " << msecs;
+}
+
+void ConstantTimeOfDayOp::getAsmResultNames(
+    function_ref<void(Value, StringRef)> setNameFn) {
+  SmallString<32> buffer;
+  llvm::raw_svector_ostream name(buffer);
+  name << "tod_";
+  printTimeLiteral(name, value());
+
+  setNameFn(getResult(), name.str());
+}
+
+
+//===----------------------------------------------------------------------===//
+// MARK: ConstantDateAndTimeOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ConstantDateAndTimeOp::fold(ArrayRef<Attribute> operands) {
+  return valueAttr();
+}
+
+void ConstantDateAndTimeOp::build(OpBuilder &builder, OperationState &state,
+          int year, int month, int day, int hour, int min, int sec, int msec) {
+  Type type = DateAndTimeType::get(builder.getContext());
+  uint64_t value = to_datetime(year, month, day, hour, min, sec, msec);
+  build(builder, state, type, value);
+}
+
+static mlir::ParseResult parseConstantDateAndTimeOp(mlir::OpAsmParser &parser,
+                                               mlir::OperationState &result) {
+  int year, month, day, hour, min, sec, msec;
+  if (parser.parseOptionalAttrDict(result.attributes) ||
+      parser.parseInteger(year) || parser.parseColon() ||
+      parser.parseInteger(month) || parser.parseColon() ||
+      parser.parseInteger(day) ||
+      parser.parseInteger(hour) || parser.parseColon() ||
+      parser.parseInteger(min) || parser.parseColon() ||
+      parser.parseInteger(sec) ||
+      parser.parseInteger(msec))
+     return failure();
+  uint64_t bcd = to_datetime(year, month, day, hour, min, sec, msec);
+  auto builder = parser.getBuilder();
+  auto attr = IntegerAttr::get(builder.getIntegerType(64, /*isSigned=*/false),
+                               APInt(64, bcd, /*isSigned=*/false));
+  result.attributes.append("value", attr);
+  result.addTypes(DateAndTimeType::get(builder.getContext()));
+  return success();
+}
+
+static void print(mlir::OpAsmPrinter &printer, ConstantDateAndTimeOp op) {
+  printer << "scl.constant.dt ";
+  printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
+
+  int year, month, day, hour, min, sec, msec;
+  from_datetime(op.value(), &year, &month, &day, &hour, &min, &sec, &msec);
+  printer << year << ':' << month << ':' << day << ' ';
+  printer << hour << ':' << min << ':' << sec << ' ' << msec;
+}
+
+void ConstantDateAndTimeOp::getAsmResultNames(
+    function_ref<void(Value, StringRef)> setNameFn) {
+  SmallString<32> buffer;
+  llvm::raw_svector_ostream name(buffer);
+  int year, month, day, hour, min, sec, msec;
+  from_datetime(value(), &year, &month, &day, &hour, &min, &sec, &msec);
+  name << "dt_" << year << '-' << month << '-' << day << '_';
+  name << hour << '-' << min << '-' << sec << '_' << msec;
+
+  setNameFn(getResult(), name.str());
+}
+
 
 //===----------------------------------------------------------------------===//
 // MARK: BitCastOp
@@ -134,7 +577,7 @@ static ParseResult parseFunctionOp(OpAsmParser &parser, OperationState &state) {
                                          buildFuncType);
 }
 
-static void print(FunctionOp fnOp, OpAsmPrinter &printer) {
+static void print(OpAsmPrinter &printer, FunctionOp fnOp) {
   FunctionType fnType = fnOp.getType();
   mlir::impl::printFunctionLikeOp(printer, fnOp, fnType.getInputs(),
                                   /*isVariadic=*/false, fnType.getResults());
@@ -208,7 +651,7 @@ static ParseResult parseFunctionBlockOp(OpAsmParser &parser, OperationState &sta
                                          buildFuncType);
 }
 
-static void print(FunctionBlockOp fnOp, OpAsmPrinter &printer) {
+static void print(OpAsmPrinter &printer, FunctionBlockOp fnOp) {
   FunctionType fnType = fnOp.getType();
   mlir::impl::printFunctionLikeOp(printer, fnOp, fnType.getInputs(),
                                   /*isVariadic=*/false, fnType.getResults());

@@ -597,6 +597,7 @@ private:
         .Case<IntegerConstantAST>([&](auto expr) { return mlirGen(expr); })
         .Case<RealConstantAST>([&](auto expr) { return mlirGen(expr); })
         .Case<StringConstantAST>([&](auto expr) { return mlirGen(expr); })
+        .Case<TimeConstantAST>([&](auto expr) { return mlirGen(expr); })
         .Case<SimpleVariableAST>([&](auto expr) { return mlirGen(expr); })
         .Case<IndexedVariableAST>([&](auto expr) { return mlirGen(expr); })
         .Case<BinaryExpressionAST>([&](auto expr) { return mlirGen(expr); })
@@ -639,6 +640,61 @@ private:
   mlir::Value mlirGen(const StringConstantAST *expr) {
     emitError(loc(expr->loc())) << "StringConstantAST not implemented";
     return nullptr;
+  }
+
+  unsigned int getTimeMS(const TimeConstantAST *expr) {
+    unsigned int time = 0;
+    time += expr->getDay();
+    time *= 24;
+    time += expr->getHour();
+    time *= 60;
+    time += expr->getMinute();
+    time *= 60;
+    time += expr->getSec();
+    time *= 1000;
+    time += expr->getMSec();
+
+    return time;
+  }
+
+  mlir::Value mlirGen(const TimeConstantAST *expr) {
+    auto location = loc(expr->loc());
+    int year = expr->getYear();
+    int month = expr->getMonth();
+    int day = expr->getDay();
+
+    unsigned int time = 0;
+    time += expr->getDay();
+    time *= 24;
+    time += expr->getHour();
+    time *= 60;
+    time += expr->getMinute();
+    time *= 60;
+    time += expr->getSec();
+    time *= 1000;
+    time += expr->getMSec();
+
+    switch (expr->getType()) {
+    default:
+      assert(false);
+    case tok_date:
+      if (year >= 1990 && year <= 2168 &&
+          month >= 1 && month <= 12 &&
+          day >= 1 && day <= 31)
+        return builder.create<ConstantDateOp>(location, year, month, day);
+      emitError(location) << "invalid date " <<
+                             year << '-' << month << '-' << day;
+      return nullptr;
+
+    case tok_date_and_time:
+      return builder.create<ConstantDateAndTimeOp>(location, year, month, day,
+           expr->getHour(), expr->getMinute(), expr->getSec(), expr->getMSec());
+    case tok_s5time:
+      return builder.create<ConstantS5TimeOp>(location, time);
+    case tok_time:
+      return builder.create<ConstantTimeOp>(location, time);
+    case tok_time_of_day:
+      return builder.create<ConstantTimeOfDayOp>(location, time);    }
   }
 
   mlir::Value mlirGenVariable(mlir::Location location, StringRef name) {

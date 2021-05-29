@@ -50,6 +50,7 @@ def Scl_Dialect : Dialect {
 def Scl_AddressType : Type<CPred<"$_self.isa<scl::AddressType>()">, "AddressType">;
 def Scl_ArrayType : Type<CPred<"$_self.isa<scl::ArrayType>()">, "ArrayType">;
 def Scl_DateType : Type<CPred<"$_self.isa<scl::DateType>()">, "DateType">;
+def Scl_DateAndTimeType : Type<CPred<"$_self.isa<scl::DateAndTimeType>()">, "DateAndTimeType">;
 def Scl_InstanceDbType : Type<CPred<"$_self.isa<scl::InstanceDbType>()">, "IDB">;
 def Scl_IntegerType : Type<CPred<"$_self.isa<scl::IntegerType>()">, "IntegerType">;
 def Scl_LogicalType : Type<CPred<"$_self.isa<scl::LogicalType>()">, "LogicalType">;
@@ -67,6 +68,7 @@ def Scl_Bool :
 def Scl_Type : AnyTypeOf<[
   Scl_ArrayType,
   Scl_DateType,
+  Scl_DateAndTimeType,
   Scl_InstanceDbType,
   Scl_IntegerType,
   Scl_LogicalType,

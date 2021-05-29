@@ -1,0 +1,161 @@
+// RUN: sclang-gen --emit=mlir %s | sclang-gen -x mlir --emit=mlir | FileCheck %s
+
+// CHECK-LABEL: @time_literals
+function_block time_literals
+
+var
+// CHECK: scl.var "d0" : !scl.date
+  d0 : date;
+  d1 : date;
+  d2 : date;
+  d3 : date;
+
+// CHECK: scl.var "s5t0" : !scl.s5time
+  s5t0 : s5time;
+  s5t1 : s5time;
+  s5t2 : s5time;
+  s5t3 : s5time;
+  s5t4 : s5time;
+  s5t5 : s5time;
+  s5t6 : s5time;
+  s5t7 : s5time;
+  s5t8 : s5time;
+  s5t9 : s5time;
+
+// CHECK: scl.var "t0" : !scl.time
+  t0 : time;
+  t1 : time;
+  t2 : time;
+  t3 : time;
+  t4 : time;
+  t5 : time;
+  t6 : time;
+  t7 : time;
+  t8 : time;
+
+// CHECK: scl.var "tod0" : !scl.time_of_day
+  tod0 : time_of_day;
+  tod1 : time_of_day;
+  tod2 : time_of_day;
+  tod3 : time_of_day;
+
+// CHECK: scl.var "dt0" : !scl.date_and_time
+  dt0 : date_and_time;
+  dt1 : date_and_time;
+  dt2 : date_and_time;
+  dt3 : date_and_time;
+end_var
+
+begin
+
+// CHECK: %d_1990_1_1 = scl.constant.date 1990 1 1
+// CHECK: scl.store %d0 : !scl.address<!scl.date> = %d_1990_1_1 : !scl.date
+  d0 := D#1990-01-01;
+
+// CHECK: %d_1990_1_2 = scl.constant.date 1990 1 2
+// CHECK: scl.store %d1 : !scl.address<!scl.date> = %d_1990_1_2 : !scl.date
+  d1 := D#1990-01-02;
+
+// CHECK: %d_2010_1_2 = scl.constant.date 2010 1 2
+// CHECK: scl.store %d2 : !scl.address<!scl.date> = %d_2010_1_2 : !scl.date
+  d2 := DATE#2010-01-02;
+
+// CHECK: %d_2168_12_31 = scl.constant.date 2168 12 31
+// CHECK: scl.store %d3 : !scl.address<!scl.date> = %d_2168_12_31 : !scl.date
+  d3 := DATE#2168-12-31;
+
+// CHECK: %s5t_0s = scl.constant.s5time 0 s 0
+// CHECK: scl.store %s5t0 : !scl.address<!scl.s5time> = %s5t_0s : !scl.s5time
+  s5t0 := s5t#0s;
+
+// CHECK: %s5t_10ms = scl.constant.s5time 0 s 10
+// CHECK: scl.store %s5t1 : !scl.address<!scl.s5time> = %s5t_10ms : !scl.s5time
+  s5t1 := s5t#10ms;
+
+// CHECK: %s5t_9s_990ms = scl.constant.s5time 9 s 990
+// CHECK: scl.store %s5t2 : !scl.address<!scl.s5time> = %s5t_9s_990ms : !scl.s5time
+  s5t2 := s5t#9s990ms;
+
+// CHECK: %s5t_10s = scl.constant.s5time 10 s 0
+// CHECK: scl.store %s5t3 : !scl.address<!scl.s5time> = %s5t_10s : !scl.s5time
+  s5t3 := s5t#10s;
+
+// CHECK: %s5t_1m_39s_900ms = scl.constant.s5time 99 s 900
+// CHECK: scl.store %s5t4 : !scl.address<!scl.s5time> = %s5t_1m_39s_900ms : !scl.s5time
+  s5t4 := s5t#99s_900ms;
+
+// CHECK: %s5t_1m_40s = scl.constant.s5time 100 s 0
+// CHECK: scl.store %s5t5 : !scl.address<!scl.s5time> = %s5t_1m_40s : !scl.s5time
+  s5t5 := s5t#100s;
+
+// CHECK: %s5t_16m_39s = scl.constant.s5time 999 s 0
+// CHECK: scl.store %s5t6 : !scl.address<!scl.s5time> = %s5t_16m_39s : !scl.s5time
+  s5t6 := s5t#999s;
+
+// CHECK: %s5t_16m_40s = scl.constant.s5time 1000 s 0
+// CHECK: scl.store %s5t7 : !scl.address<!scl.s5time> = %s5t_16m_40s : !scl.s5time
+  s5t7 := s5t#1000s;
+
+// CHECK: %s5t_2h_46m_30s = scl.constant.s5time 9990 s 0
+// CHECK: scl.store %s5t8 : !scl.address<!scl.s5time> = %s5t_2h_46m_30s : !scl.s5time
+  s5t8 := s5t#9990s;
+
+//  s5t := s5t#10000s; TBD: overflow?
+
+// CHECK: %s5t_1h_30m_40s = scl.constant.s5time 5440 s 0
+// CHECK: scl.store %s5t9 : !scl.address<!scl.s5time> = %s5t_1h_30m_40s : !scl.s5time
+  s5t9 := s5t#1h30m40s;
+
+// CHECK: %t_0s = scl.constant.time 0 s 0
+// CHECK: scl.store %t0 : !scl.address<!scl.time> = %t_0s : !scl.time
+  t0 := T#0s;
+
+// CHECK: %t_500ms = scl.constant.time 0 s 500
+// CHECK: scl.store %t1 : !scl.address<!scl.time> = %t_500ms : !scl.time
+  t1 := T#500ms;
+
+// CHECK: %t_1s = scl.constant.time 1 s 0
+// CHECK: scl.store %t2 : !scl.address<!scl.time> = %t_1s : !scl.time
+  t2 := T#1s;
+
+  t3 := -T#1s; // TBD parse as negative literal?
+
+// CHECK: %t_1m = scl.constant.time 60 s 0
+// CHECK: scl.store %t4 : !scl.address<!scl.time> = %t_1m : !scl.time
+  t4 := TIME#1m;
+
+// CHECK: %t_1h = scl.constant.time 3600 s 0
+// CHECK: scl.store %t5 : !scl.address<!scl.time> = %t_1h : !scl.time
+  t5 := TIME#1h;
+
+// CHECK: %t_1d = scl.constant.time 86400 s 0
+// CHECK: scl.store %t6 : !scl.address<!scl.time> = %t_1d : !scl.time
+  t6 := TIME#1d;
+
+// CHECK: %t_1h_2m_3s = scl.constant.time 3723 s 0
+// CHECK: scl.store %t7 : !scl.address<!scl.time> = %t_1h_2m_3s : !scl.time
+  t7 := TIME#1h2m3s;
+
+// CHECK: %t_24d_20h_31m_23s_647ms = scl.constant.time 2147483 s 647
+// CHECK: scl.store %t8 : !scl.address<!scl.time> = %t_24d_20h_31m_23s_647ms : !scl.time
+  t8 := TIME#24D_20H_31M_23S_647MS;
+
+
+  tod0 := TOD#1:2:3;
+
+  tod1 := TIME_OF_DAY#11:55:00;
+
+  tod2 := TIME_OF_DAY#00:00:00;
+
+  tod3 := TIME_OF_DAY#23:59:59.999;
+
+
+  dt0 := DT#1990-01-01-00:00:00;
+
+  dt1 := DATE_AND_TIME#1999-12-31-23:59:59;
+
+  dt2 := DATE_AND_TIME#2000-01-02-03:04:05.678;
+
+  dt3 := DATE_AND_TIME#2089-12-31-24:59:59.999;
+
+end_function_block
