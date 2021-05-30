@@ -32,7 +32,6 @@ begin
 // CHECK:       scl.store %a : !scl.address<!scl.int> = [[mul5]] : !scl.int
 
   else
-// CHECK:       scl.end
 // CHECK:     } else  {
 
     b := 2 + 3 * a;
@@ -42,7 +41,6 @@ begin
 // CHECK:       scl.store %b : !scl.address<!scl.int> = [[add2]] : !scl.int
 
   end_if;
-// CHECK:   scl.end
 // CHECK:     }
 
   return;

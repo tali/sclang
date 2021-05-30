@@ -22,7 +22,7 @@ begin
 // CHECK:       scl.store %abs : !scl.address<!scl.real> = [[NEG]]
     abs := -in;
 
-// CHECK:       scl.end
+// CHECK:       } else {
 // CHECK-DAG:   [[IN:%[0-9]+]] = scl.load %in
 // CHECK:       [[GT:%[0-9]+]] = scl.cmpgt [[IN]], [[C0]]
 // CHECK:       scl.if [[GT]]
@@ -32,13 +32,12 @@ begin
 // CHECK:       scl.store %abs : !scl.address<!scl.real> = [[IN]]
     abs := in;
 
-// CHECK:       scl.end
+// CHECK:       } else {
   else
 
 // CHECK:       scl.store %abs : !scl.address<!scl.real> = [[C0]]
     abs := 0.0;
 
-// CHECK:       scl.end
   end_if;
 
 // CHECK:       scl.return.value %abs : !scl.address<!scl.real>

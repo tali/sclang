@@ -407,7 +407,7 @@ def ForDoOp : SclOp<"for"> {
   let assemblyFormat = "attr-dict $var `:` type($var) `=` $init `:` type($init) `to` $to `:` type($to) (`by` $by^ `:` type($by))? `do` $doBody";
 }
 
-def IfThenElseOp : SclOp<"if">, SingleBlockImplicitTerminator<"terminator"> {
+def IfThenElseOp : SclOp<"if", [SingleBlockImplicitTerminator<"scl::EndOp">]> {
   let summary = "if-then-else operation";
   let description = [{
     Example:
