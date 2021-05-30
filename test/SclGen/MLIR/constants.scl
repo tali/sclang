@@ -4,11 +4,11 @@
 // CHECK: (%arg0: !scl.address<!scl.idb<fb1>>)
 function_block fb1
 
-// CHECK: [[CI1:%c[0-9_a-z]+]] = scl.constant 1 : i16 -> !scl.int
-// CHECK: [[CI2:%c[0-9_a-z]+]] = scl.constant 2 : i16 -> !scl.int
-// CHECK: [[CR1:%c[0-9_a-z]+]] = scl.constant 1.000000e+00 : f32 -> !scl.real
-// CHECK: [[CR2:%c[0-9_a-z]+]] = scl.constant 2.000000e+00 : f32 -> !scl.real
-// CHECK: [[CR3:%c[0-9_a-z]+]] = scl.constant 3.000000e+00 : f32 -> !scl.real
+// CHECK-DAG: [[CI1:%c[0-9_a-z]+]] = scl.constant 1 : i16 -> !scl.int
+// CHECK-DAG: [[CI2:%c[0-9_a-z]+]] = scl.constant 2 : i16 -> !scl.int
+// CHECK-DAG: [[CR1:%c[0-9_a-z]+]] = scl.constant 1.000000e+00 : f32 -> !scl.real
+// CHECK-DAG: [[CR2:%c[0-9_a-z]+]] = scl.constant 2.000000e+00 : f32 -> !scl.real
+// CHECK-DAG: [[CR3:%c[0-9_a-z]+]] = scl.constant 3.000000e+00 : f32 -> !scl.real
 const
   ci1 := 1;
   ci2 := int#2;
