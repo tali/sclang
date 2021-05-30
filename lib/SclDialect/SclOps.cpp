@@ -568,18 +568,18 @@ bool DialectCastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
 
 static ParseResult parseFunctionOp(OpAsmParser &parser, OperationState &state) {
   auto buildFuncType = [](Builder &builder, ArrayRef<Type> argTypes,
-                          ArrayRef<Type> results, impl::VariadicFlag,
+                          ArrayRef<Type> results, function_like_impl::VariadicFlag,
                           std::string &) {
     return builder.getFunctionType(argTypes, results);
   };
 
-  return mlir::impl::parseFunctionLikeOp(parser, state, /*allowVariadic=*/false,
+  return function_like_impl::parseFunctionLikeOp(parser, state, /*allowVariadic=*/false,
                                          buildFuncType);
 }
 
 static void print(OpAsmPrinter &printer, FunctionOp fnOp) {
   FunctionType fnType = fnOp.getType();
-  mlir::impl::printFunctionLikeOp(printer, fnOp, fnType.getInputs(),
+  function_like_impl::printFunctionLikeOp(printer, fnOp, fnType.getInputs(),
                                   /*isVariadic=*/false, fnType.getResults());
 }
 
@@ -642,18 +642,18 @@ ArrayRef<Type> FunctionOp::getCallableResults() {
 
 static ParseResult parseFunctionBlockOp(OpAsmParser &parser, OperationState &state) {
   auto buildFuncType = [](Builder &builder, ArrayRef<Type> argTypes,
-                          ArrayRef<Type> results, impl::VariadicFlag,
+                          ArrayRef<Type> results, function_like_impl::VariadicFlag,
                           std::string &) {
     return builder.getFunctionType(argTypes, results);
   };
 
-  return mlir::impl::parseFunctionLikeOp(parser, state, /*allowVariadic=*/false,
+  return function_like_impl::parseFunctionLikeOp(parser, state, /*allowVariadic=*/false,
                                          buildFuncType);
 }
 
 static void print(OpAsmPrinter &printer, FunctionBlockOp fnOp) {
   FunctionType fnType = fnOp.getType();
-  mlir::impl::printFunctionLikeOp(printer, fnOp, fnType.getInputs(),
+  function_like_impl::printFunctionLikeOp(printer, fnOp, fnType.getInputs(),
                                   /*isVariadic=*/false, fnType.getResults());
 }
 
