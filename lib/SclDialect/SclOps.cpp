@@ -778,7 +778,7 @@ void TempVariableOp::getAsmResultNames(
 // MARK: VariableOp
 
 void VariableOp::build(OpBuilder &builder, OperationState &state,
-                       Type type, bool isInput, bool isOutput, StringRef name) {
+                       Type type, bool isInput, bool isOutput, StringRef name, Value init) {
   auto typeAttr = mlir::TypeAttr::get(type);
   UnitAttr inAttr, outAttr;
   if (isInput)
@@ -787,7 +787,11 @@ void VariableOp::build(OpBuilder &builder, OperationState &state,
     outAttr = builder.getUnitAttr();
   auto nameAttr = builder.getStringAttr(name);
 
-  build(builder, state, typeAttr, inAttr, outAttr, nameAttr);
+  build(builder, state, typeAttr, inAttr, outAttr, nameAttr, init);
+}
+void VariableOp::build(OpBuilder &builder, OperationState &state,
+                       Type type, bool isInput, bool isOutput, StringRef name) {
+  build(builder, state, type, isInput, isOutput, name, nullptr);
 }
 
 

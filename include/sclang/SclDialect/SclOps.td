@@ -207,14 +207,16 @@ def VariableOp : SclOp<"var", [Symbol, HasParent<"FunctionBlockOp">]> {
     TypeAttr:$type,
     OptionalAttr<UnitAttr>:$input,
     OptionalAttr<UnitAttr>:$output,
-    StrAttr:$sym_name
+    StrAttr:$sym_name,
+    Optional<AnyType>:$init
   );
   let results = (outs);
 
-  let assemblyFormat = "(`input` $input^)? (`output` $output^)? $sym_name attr-dict `:` $type";
+  let assemblyFormat = "(`input` $input^)? (`output` $output^)? $sym_name attr-dict `:` $type (`=` $init^ `:` type($init))?";
 
   let builders = [
-    OpBuilder<(ins "Type":$type, "bool":$isInput, "bool":$isOutput, "StringRef":$name)>
+    OpBuilder<(ins "Type":$type, "bool":$isInput, "bool":$isOutput, "StringRef":$name)>,
+    OpBuilder<(ins "Type":$type, "bool":$isInput, "bool":$isOutput, "StringRef":$name, "Value":$init)>
   ];
 }
 

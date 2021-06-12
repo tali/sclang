@@ -208,13 +208,18 @@ private:
                               bool isInput, bool isOutput) {
     for (const auto &decl : decls->getValues()) {
       auto type = getType(decl->getDataType());
-      // TODO: initializer
+      mlir::Value init = nullptr;
+      if (decl->getInitializer().hasValue()) {
+        init = mlirGen(decl->getInitializer().getValue());
+        if (!init)
+          return mlir::failure();
+      }
       for (const auto &var : decl->getVars()) {
         auto location = loc(var->loc());
         auto name = var->getIdentifier();
         if (failed(declare(location, name, type, nullptr)))
           return mlir::failure();
-        builder.create<VariableOp>(location, type, isInput, isOutput, name);
+        builder.create<VariableOp>(location, type, isInput, isOutput, name, init);
       }
     }
     return mlir::success();
@@ -278,7 +283,6 @@ private:
         return mlirGen(decl, /*isInput=*/true, /*isOutput=*/false);
       case VariableDeclarationSubsectionAST::VarOutput:
         return mlirGen(decl, /*isInput=*/false, /*isOutput=*/true);
-        break;
       case VariableDeclarationSubsectionAST::VarInOut:
         return mlirGen(decl, /*isInput=*/true, /*isOutput=*/true);
       case VariableDeclarationSubsectionAST::Var:

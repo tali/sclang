@@ -3,14 +3,14 @@
 // CHECK-LABEL: scl.function_block @fb_1
 function_block fb_1
 
-// CHECK: scl.var input "a" : !scl.int
+// CHECK: scl.var input "a" : !scl.int = %c1 : !scl.int
 var_input
-  a : int;
+  a : int := 1;
 end_var;
 
-// CHECK: scl.var output "b" : !scl.int
+// CHECK: scl.var output "b" : !scl.int = %c2 : !scl.int
 var_output
-  b : int;
+  b : int := 2;
 end_var;
 
 begin
