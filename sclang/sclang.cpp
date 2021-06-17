@@ -26,6 +26,7 @@
 #include "sclang/SclTransforms/Passes.h"
 #include <memory>
 
+#include "mlir/Dialect/Affine/Passes.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
 #include "mlir/ExecutionEngine/OptUtils.h"
 #include "mlir/IR/MLIRContext.h"
@@ -164,7 +165,7 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
     // Add optimizations if enabled.
     if (enableOpt) {
       optPM.addPass(mlir::createLoopFusionPass());
-      optPM.addPass(mlir::createMemRefDataFlowOptPass());
+      optPM.addPass(mlir::createAffineScalarReplacementPass());
     }
   }
 
