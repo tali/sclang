@@ -1,0 +1,40 @@
+package(
+    default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
+    licenses = ["notice"],
+)
+
+cc_binary(
+    name = "sclang",
+    srcs = [
+        "LowerToLLVM.cpp",
+        "sclang.cpp",
+    ],
+    includes = ["include"],
+    deps = [
+        "//:SclDialect",
+        "//:SclGen",
+        "//:SclTransforms",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//llvm:ir_headers",
+        "@llvm-project//mlir:AffineTransforms",
+        "@llvm-project//mlir:AllPassesAndDialects",
+        "@llvm-project//mlir:Analysis",
+        "@llvm-project//mlir:CastOpInterfaces",
+        "@llvm-project//mlir:Dialect",
+        "@llvm-project//mlir:ExecutionEngine",
+        "@llvm-project//mlir:ExecutionEngineUtils",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:LLVMDialect",
+        "@llvm-project//mlir:MemRefDialect",
+        "@llvm-project//mlir:Parser",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:SCFDialect",
+        "@llvm-project//mlir:SCFToStandard",
+        "@llvm-project//mlir:SideEffectInterfaces",
+        "@llvm-project//mlir:StandardOps",
+        "@llvm-project//mlir:StandardToLLVM",
+        "@llvm-project//mlir:ToLLVMIRTranslation",
+        "@llvm-project//mlir:Transforms",
+    ],
+)
