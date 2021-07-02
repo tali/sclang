@@ -30,6 +30,8 @@
 using namespace mlir;
 using namespace mlir::scl;
 
+#include "sclang/SclDialect/Dialect.cpp.inc"
+
 //===----------------------------------------------------------------------===//
 // MARK: SclDialect
 //===----------------------------------------------------------------------===//

@@ -30,6 +30,10 @@ gentbl_cc_library(
             "include/sclang/SclDialect/Dialect.h.inc",
         ),
         (
+            ["-gen-dialect-defs"],
+            "include/sclang/SclDialect/Dialect.cpp.inc",
+        ),
+        (
             ["-gen-op-decls"],
             "include/sclang/SclDialect/SclOps.h.inc",
         ),
