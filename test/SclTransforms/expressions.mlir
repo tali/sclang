@@ -465,9 +465,8 @@ scl.function @xor(%arg0: !scl.bool, %arg1: !scl.bool) -> !scl.bool {
 // MARK: scl.not
 
 // CHECK-LABEL: func @not
-// CHECK-DAG:       [[FALSE:%[a-z_0-9]+]] = constant false
 // CHECK-DAG:       [[TRUE:%[a-z_0-9]+]] = constant true
-// CHECK:       select %arg0, [[FALSE]], [[TRUE]] : i1
+// CHECK:       xor %arg0, [[TRUE]] : i1
 scl.function @not(%arg0: !scl.bool) -> !scl.bool {
   %res = scl.not %arg0 : !scl.bool
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
