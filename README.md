@@ -4,17 +4,35 @@
 
 # BUILDING
 
+In order to build Sclang, you need a recent MLIR.
+Using the instructions below, you can first build a compatible version of LLVM and MLIR, then use that to build Sclang.
+
+## Check out sources
+
+```sh
+git clone --recursive https://github.com/tali/sclang
+cd sclang
 ```
-git clone https://github.com/tali/llvm-project
-cd llvm-project
-git clone https://github.com/tali/sclang
-mkdir build
-cd build
-cmake -G Ninja ../llvm \
-    -DLLVM_EXTERNAL_PROJECTS=sclang \
-    -DLLVM_ENABLE_PROJECTS="sclang;mlir" \
+
+## Build LLVM
+
+```sh
+cmake -G Ninja -B build.llvm -S third_party/llvm-project/llvm \
+    -DLLVM_ENABLE_PROJECTS="mlir" \
+    -DLLVM_TARGETS_TO_BUILD="X86" \
     -DLLVM_ENABLE_ASSERTIONS=ON \
-    -DCMAKE_BUILD_TYPE=Release
-cmake --build . --target check-sclang
+    -DCMAKE_BUILD_TYPE=DEBUG
+cmake --build build.llvm
+```
+
+## Build Sclang
+
+```sh
+cmake -G Ninja -B build.sclang \
+    -DMLIR_DIR=$PWD/build.llvm/lib/cmake/mlir \
+    -DLLVM_DIR=$PWD/build.llvm/lib/cmake/llvm \
+    -DLLVM_ENABLE_ASSERTIONS=ON \
+    -DCMAKE_BUILD_TYPE=DEBUG
+cmake --build build.sclang --target check-sclang
 ```
 

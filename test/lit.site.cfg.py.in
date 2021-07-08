@@ -2,6 +2,7 @@
 #
 config.llvm_tools_dir = "@LLVM_TOOLS_DIR@"
 config.mlir_tools_dir = "@MLIR_TOOLS_DIR@"
+config.sclang_tools_dir = "@SCLANG_TOOLS_DIR@"
 
 # test_exec_root: The root path where tests should be run.
 config.test_exec_root = "@SCLANG_BINARY_TEST_DIR@"

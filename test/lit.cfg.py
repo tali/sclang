@@ -29,7 +29,7 @@ llvm_config.use_default_substitutions()
 # directories.
 config.excludes = ['Inputs', 'CMakeLists.txt']
 
-tool_dirs = [config.mlir_tools_dir, config.llvm_tools_dir]
+tool_dirs = [config.sclang_tools_dir, config.mlir_tools_dir, config.llvm_tools_dir]
 tools = [
     'sclang-gen'
 ]
