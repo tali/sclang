@@ -1,0 +1,121 @@
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [assigned, opened, synchronize, reopened]
+  workflow_dispatch:
+
+jobs:
+  # Build and install LLVM, then build and test Sclang
+  build-using-cmake:
+    name: Build using CMake
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Install dependencies
+        run: sudo apt-get -yq --no-install-suggests --no-install-recommends install ninja-build
+
+      - name: Get Sclang
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 2
+          submodules: "true"
+
+      - name: Get LLVM Hash
+        id: get-llvm-hash
+        run: echo "::set-output name=hash::$(git rev-parse @:./third_party/llvm-project)"
+
+      - name: Get workflow spec hash
+        id: get-workflow-hash
+        run: echo "::set-output name=hash::$(md5sum $GITHUB_WORKSPACE/.github/workflows/build-and-test.yml)"
+
+      - name: Cache LLVM
+        id: cache-llvm
+        uses: actions/cache@v2
+        with:
+          path: build.llvm
+          key: ${{ runner.os }}-llvm-${{ steps.get-llvm-hash.outputs.hash }}-${{ steps.get-workflow-hash.outputs.hash }}
+
+      - name: Rebuild and Install LLVM
+        if: steps.cache-llvm.outputs.cache-hit != 'true'
+        run: |
+          cmake -G Ninja -B build.llvm -S third_party/llvm-project/llvm \
+              -DLLVM_ENABLE_PROJECTS="mlir" \
+              -DLLVM_TARGETS_TO_BUILD="X86" \
+              -DLLVM_ENABLE_ASSERTIONS=ON \
+              -DCMAKE_BUILD_TYPE=Release
+          cmake --build build.llvm
+
+      - name: Build Sclang
+        run: |
+          cmake -G Ninja -B build.sclang \
+              -DMLIR_DIR=$PWD/build.llvm/lib/cmake/mlir \
+              -DLLVM_DIR=$PWD/build.llvm/lib/cmake/llvm \
+              -DLLVM_ENABLE_ASSERTIONS=ON \
+              -DCMAKE_BUILD_TYPE=Release
+          cmake --build build.sclang --target sclang
+
+      - name: Test Sclang
+        run: |
+          cmake --build build.sclang --target check-sclang
+
+
+  # Configure Sclang using LLVM's build system ("Unified" build).
+  # We do not actually build this configuration since it isn't as easy to cache LLVM artifacts in this mode.
+  configure-cmake-unified:
+    name: Configure Unified Build
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Get Sclang
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 2
+          submodules: "true"
+
+      - name: Configure Unified Build
+        run: |
+          mkdir configure_unified
+          cd configure_unified
+          cmake ../third_party/llvm-project/llvm \
+            -DBUILD_SHARED_LIBS=ON \
+            -DLLVM_ENABLE_PROJECTS=mlir \
+            -DLLVM_TARGETS_TO_BUILD=host \
+            -DLLVM_ENABLE_ASSERTIONS=ON \
+            -DLLVM_EXTERNAL_PROJECTS=sclang \
+            -DLLVM_EXTERNAL_SCLANG_SOURCE_DIR=$PWD/..
+
+  # Build Sclang using Bazel
+  build-using-bazel:
+    name: Build using Bazel
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Get Sclang
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 2
+        submodules: "true"
+
+    - name: Mount bazel cache
+      uses: actions/cache@v1
+      with:
+        path: "/home/runner/.cache/bazel"
+        key: bazel
+
+    - name: Install bazelisk
+      run: |
+        curl -LO "https://github.com/bazelbuild/bazelisk/releases/download/v1.1.0/bazelisk-linux-amd64"
+        mkdir -p "${GITHUB_WORKSPACE}/bin/"
+        mv bazelisk-linux-amd64 "${GITHUB_WORKSPACE}/bin/bazel"
+        chmod +x "${GITHUB_WORKSPACE}/bin/bazel"
+
+    - name: Build
+      run: |
+        "${GITHUB_WORKSPACE}/bin/bazel" build --config generic_clang //...
+
+#    - name: Test
+#      run: |
+#        "${GITHUB_WORKSPACE}/bin/bazel" test --config generic_clang //...
