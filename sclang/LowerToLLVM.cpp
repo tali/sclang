@@ -15,6 +15,9 @@
 #include "sclang/SclDialect/Dialect.h"
 #include "sclang/SclTransforms/Passes.h"
 
+#include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
 #include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
 #include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
 #include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVMPass.h"
@@ -66,6 +69,7 @@ void SclToLLVMLoweringPass::runOnOperation() {
   // set of legal ones.
   RewritePatternSet patterns(context);
   populateLoopToStdConversionPatterns(patterns);
+  populateMemRefToLLVMConversionPatterns(typeConverter, patterns);
   populateStdToLLVMConversionPatterns(typeConverter, patterns);
 
   // We want to completely lower to LLVM, so we use a `FullConversion`. This
