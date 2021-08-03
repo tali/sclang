@@ -27,18 +27,16 @@ jobs:
         id: get-llvm-hash
         run: echo "::set-output name=hash::$(git rev-parse @:./third_party/llvm-project)"
 
-      - name: Get workflow spec hash
-        id: get-workflow-hash
-        run: echo "::set-output name=hash::$(md5sum $GITHUB_WORKSPACE/.github/workflows/build-and-test.yml)"
-
       - name: Cache LLVM
         id: cache-llvm
         uses: actions/cache@v2
         with:
           path: build.llvm
-          key: ${{ runner.os }}-llvm-${{ steps.get-llvm-hash.outputs.hash }}-${{ steps.get-workflow-hash.outputs.hash }}
+          key: ${{ runner.os }}-llvm-${{ steps.get-llvm-hash.outputs.hash }}
+          restore-keys: |
+            ${{ runner.os }}-llvm-
 
-      - name: Rebuild and Install LLVM
+      - name: Rebuild LLVM
         if: steps.cache-llvm.outputs.cache-hit != 'true'
         run: |
           cmake -G Ninja -B build.llvm -S third_party/llvm-project/llvm \
@@ -99,11 +97,17 @@ jobs:
         fetch-depth: 2
         submodules: "true"
 
+    - name: Get LLVM Hash
+      id: get-llvm-hash
+      run: echo "::set-output name=hash::$(git rev-parse @:./third_party/llvm-project)"
+
     - name: Mount bazel cache
       uses: actions/cache@v1
       with:
         path: "/home/runner/.cache/bazel"
-        key: bazel
+        key: ${{ runner.os }}-bazel-${{ steps.get-llvm-hash.outputs.hash }}
+        restore-keys: |
+          ${{ runner.os }}-bazel-
 
     - name: Install bazelisk
       run: |
