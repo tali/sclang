@@ -7,11 +7,21 @@ package(
 )
 
 test_suite(
+    name = "test-gen",
+    tests = [
+        "//test/SclGen/MLIR:lit",
+        "//test/SclGen/Parse:lit",
+        "//test/SclTransforms:lit",
+    ],
+)
+
+test_suite(
     name = "test",
     tests = [
         "//test/SclGen/MLIR:lit",
         "//test/SclGen/Parse:lit",
         "//test/SclTransforms:lit",
+        "//test/sclang:lit",
     ],
 )
 

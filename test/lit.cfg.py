@@ -31,6 +31,7 @@ config.excludes = ['Inputs', 'CMakeLists.txt']
 
 tool_dirs = [config.sclang_tools_dir, config.mlir_tools_dir, config.llvm_tools_dir]
 tools = [
-    'sclang-gen'
+    'sclang-gen',
+    'sclang'
 ]
 llvm_config.add_tool_substitutions(tools, tool_dirs)

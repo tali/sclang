@@ -1,0 +1,29 @@
+// RUN: sclang --opt --emit=llvm %s 2>&1 | FileCheck %s
+
+// CHECK: define i16 @abs(i16 [[IN:%[0-9]+]]) local_unnamed_addr #0
+// CHECK:   [[RET:%[0-9]+]] = tail call i16 @llvm.abs.i16(i16 [[IN]], i1 false)
+// CHECK:   ret i16 [[RET]]
+// CHECK: }
+function abs : int
+
+var_input
+ in : int;
+end_var;
+
+begin
+
+  if in < int#0 then
+
+    abs := -in;
+
+  elsif in > int#0 then
+
+    abs := in;
+
+  else
+
+    abs := int#0;
+
+  end_if;
+
+end_function
