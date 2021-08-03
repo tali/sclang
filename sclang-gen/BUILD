@@ -14,7 +14,6 @@ cc_binary(
         "//:SclTransforms",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:AffineTransforms",
-        "@llvm-project//mlir:AllPassesAndDialects",
         "@llvm-project//mlir:Analysis",
         "@llvm-project//mlir:CastOpInterfaces",
         "@llvm-project//mlir:Dialect",

@@ -18,7 +18,6 @@ cc_binary(
         "@llvm-project//llvm:Support",
         "@llvm-project//llvm:ir_headers",
         "@llvm-project//mlir:AffineTransforms",
-        "@llvm-project//mlir:AllPassesAndDialects",
         "@llvm-project//mlir:Analysis",
         "@llvm-project//mlir:CastOpInterfaces",
         "@llvm-project//mlir:Dialect",
