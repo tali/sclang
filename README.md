@@ -14,6 +14,16 @@ git clone --recursive https://github.com/tali/sclang
 cd sclang
 ```
 
+Note:
+The repository is set up so that git submodule update performs a shallow clone,
+meaning it downloads just enough of the LLVM repository to check out the currently specified commit.
+If you wish to work with the full history of the LLVM repository, you can manually "unshallow" the submodule:
+
+```sh
+cd third_party/llvm-project
+git fetch --unshallow
+```
+
 ## Build LLVM
 
 ```sh
