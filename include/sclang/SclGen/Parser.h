@@ -939,10 +939,12 @@ private:
       if (!instr)
         return parseError<CodeSectionAST>("instruction", "in code section");
 
-      if (lexer.getCurToken() != tok_semicolon)
-        return parseError<CodeSectionAST>(tok_semicolon,
-                                          "to end the instruction");
-      lexer.consume(tok_semicolon);
+      if (!llvm::isa<DebugPrintAST>(instr)) {
+        if (lexer.getCurToken() != tok_semicolon)
+          return parseError<CodeSectionAST>(tok_semicolon,
+                                            "to end the instruction");
+        lexer.consume(tok_semicolon);
+      }
 
       instructions.push_back(std::move(instr));
     }
@@ -973,6 +975,8 @@ private:
       return ParseExit();
     case tok_goto:
       return ParseGoto();
+    case tok_debugprint:
+      return ParseDebugPrint();
     }
   }
 
@@ -1577,6 +1581,14 @@ private:
     auto label = ParseIdentifier();
 
     return std::make_unique<GotoAST>(std::move(loc), label);
+  }
+
+  std::unique_ptr<DebugPrintAST> ParseDebugPrint() {
+    auto loc = lexer.getLastLocation();
+    std::string msg(lexer.getComment());
+    lexer.consume(tok_debugprint);
+
+    return std::make_unique<DebugPrintAST>(std::move(loc), std::move(msg));
   }
 
   /// Get the precedence of the pending binary operator token.

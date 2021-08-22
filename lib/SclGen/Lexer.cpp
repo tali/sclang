@@ -243,6 +243,8 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &s, Token token) {
     return s << "*)";
   case tok_linecomment:
     return s << "//";
+  case tok_debugprint:
+    return s << "DEBUG PRINT";
 
     // multi character operators
   case tok_assignment:

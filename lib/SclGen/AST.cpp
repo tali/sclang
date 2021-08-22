@@ -109,6 +109,7 @@ private:
   void dump(const ReturnAST *node);
   void dump(const ExitAST *node);
   void dump(const GotoAST *node);
+  void dump(const DebugPrintAST *node);
 
   void dump(std::string, const llvm::ArrayRef<std::unique_ptr<ExpressionAST>>);
 
@@ -461,6 +462,7 @@ void ASTDumper::dump(const InstructionAST *code) {
   dispatch(ReturnAST);
   dispatch(ExitAST);
   dispatch(GotoAST);
+  dispatch(DebugPrintAST);
 #undef dispatch
   // No match, fallback to a generic message
   INDENT();
@@ -706,6 +708,11 @@ void ASTDumper::dump(const ExitAST *node) {
 void ASTDumper::dump(const GotoAST *node) {
   INDENT();
   outs << "Goto " << node->getLabel() << "\n";
+}
+
+void ASTDumper::dump(const DebugPrintAST *node) {
+  INDENT();
+  outs << "DebugPrint " << node->getMsg() << "\n";
 }
 
 void ASTDumper::dump(

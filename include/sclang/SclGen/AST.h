@@ -483,6 +483,7 @@ public:
     Instr_Return,
     Instr_Exit,
     Instr_Goto,
+    Instr_DebugPrint,
   };
 
   InstructionAST(Location loc, InstrASTKind kind)
@@ -833,6 +834,21 @@ public:
   /// LLVM style RTTI
   static bool classof(const InstructionAST *i) {
     return i->getKind() == Instr_Goto;
+  }
+};
+
+class DebugPrintAST : public InstructionAST {
+  std::string msg;
+
+public:
+  DebugPrintAST(Location loc, std::string msg)
+      : InstructionAST(std::move(loc), Instr_DebugPrint), msg(std::move(msg)) {}
+
+  llvm::StringRef getMsg() const { return msg; }
+
+  /// LLVM style RTTI
+  static bool classof(const InstructionAST *i) {
+    return i->getKind() == Instr_DebugPrint;
   }
 };
 

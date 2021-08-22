@@ -554,6 +554,9 @@ private:
         .Case<WhileDoAST>([&](auto whileDo) {
           return mlirGen(whileDo);
         })
+        .Case<DebugPrintAST>([&](auto debugPrint) {
+          return mlirGen(debugPrint);
+        })
         .Default([&](auto instr) {
           emitError(loc(instr->loc()))
               << "MLIR codegen encountered an unhandled instruction kind '"
@@ -1270,6 +1273,13 @@ private:
     builder.create<UntilOp>(location, until);
 
     builder.restoreInsertionPoint(old);
+    return mlir::success();
+  }
+
+  mlir::LogicalResult mlirGen(const DebugPrintAST *debugPrint) {
+    auto location = loc(debugPrint->loc());
+
+    builder.create<DebugPrintOp>(location, debugPrint->getMsg());
     return mlir::success();
   }
 

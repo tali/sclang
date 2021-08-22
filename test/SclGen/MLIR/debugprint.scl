@@ -1,0 +1,12 @@
+// RUN: sclang-gen --emit=mlir %s 2>&1 | sclang-gen -x mlir --emit=mlir | FileCheck %s
+
+// CHECK-LABEL: scl.function @debug_print()
+// CHECK-NEXT:  scl.debug.print "abc"
+// CHECK-NEXT:  scl.debug.print "123"
+// CHECK-NEXT:  scl.return
+function debug_print : void
+begin
+  // DEBUG PRINT abc
+  // DEBUG PRINT 123
+  ;
+end_function

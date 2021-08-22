@@ -26,13 +26,104 @@
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
+
 #include "llvm/ADT/Sequence.h"
+#include "llvm/Support/FormatVariadic.h"
 
 using namespace mlir;
 
-//===----------------------------------------------------------------------===//
-// SclToLLVMLoweringPass
-//===----------------------------------------------------------------------===//
+// MARK: DebugPrintOpLowering
+
+/// Lowers `scl.debug.print` to a call to `printf`
+struct DebugPrintOpLowering : public OpConversionPattern<scl::DebugPrintOp> {
+  using OpConversionPattern<scl::DebugPrintOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scl::DebugPrintOp op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const final {
+    auto loc = op->getLoc();
+    ModuleOp parentModule = op->getParentOfType<ModuleOp>();
+
+    // Get a symbol reference to the printf function, inserting it if necessary.
+    auto printfRef = getOrInsertPrintf(rewriter, parentModule);
+    Type printfRetType = rewriter.getIntegerType(32);
+
+    Value formatSpecifierCst = getOrCreateGlobalString(loc, rewriter,
+        "_debug_print_fmt", StringRef("%s\n\0", 4), parentModule);
+
+    std::string msgGlobalName = std::string(llvm::formatv("_debug_msg_{0}", msgCounter++));
+    std::string msg = std::string(op.msg());
+    // Append `\0` to follow C style string given that LLVM::createGlobalString()
+    // won't handle this directly for us.
+    msg.push_back('\0');
+    Value msgCst = LLVM::createGlobalString(loc, rewriter, msgGlobalName, msg,
+        LLVM::Linkage::Internal);
+
+    // Generate call to `printf`.
+    SmallVector<Value, 2> printfArgs = {{ formatSpecifierCst, msgCst }};
+    rewriter.create<CallOp>(loc, printfRef, printfRetType, printfArgs);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+private:
+  /// Return a symbol reference to the printf function, inserting it into the
+  /// module if necessary.
+  static FlatSymbolRefAttr getOrInsertPrintf(PatternRewriter &rewriter,
+                                             ModuleOp module) {
+    auto *context = module.getContext();
+    if (module.lookupSymbol<LLVM::LLVMFuncOp>("printf"))
+      return SymbolRefAttr::get(context, "printf");
+
+    // Create a function declaration for printf, the signature is:
+    //   * `i32 (i8*, ...)`
+    auto llvmI32Ty = IntegerType::get(context, 32);
+    auto llvmI8PtrTy = LLVM::LLVMPointerType::get(IntegerType::get(context, 8));
+    auto llvmFnType = LLVM::LLVMFunctionType::get(llvmI32Ty, llvmI8PtrTy,
+                                                  /*isVarArg=*/true);
+
+    // Insert the printf function into the body of the parent module.
+    PatternRewriter::InsertionGuard insertGuard(rewriter);
+    rewriter.setInsertionPointToStart(module.getBody());
+    rewriter.create<LLVM::LLVMFuncOp>(module.getLoc(), "printf", llvmFnType);
+    return SymbolRefAttr::get(context, "printf");
+  }
+
+  static int msgCounter;
+
+  /// Return a value representing an access into a global string with the given
+  /// name, creating the string if necessary.
+  static Value getOrCreateGlobalString(Location loc, OpBuilder &builder,
+                                       StringRef name, StringRef value,
+                                       ModuleOp module) {
+    // Create the global at the entry of the module.
+    LLVM::GlobalOp global;
+    if (!(global = module.lookupSymbol<LLVM::GlobalOp>(name))) {
+      OpBuilder::InsertionGuard insertGuard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto type = LLVM::LLVMArrayType::get(
+          IntegerType::get(builder.getContext(), 8), value.size());
+      global = builder.create<LLVM::GlobalOp>(loc, type, /*isConstant=*/true,
+                                              LLVM::Linkage::Internal, name,
+                                              builder.getStringAttr(value),
+					      /*alignment=*/0);
+    }
+
+    // Get the pointer to the first character in the global string.
+    Value globalPtr = builder.create<LLVM::AddressOfOp>(loc, global);
+    Value cst0 = builder.create<LLVM::ConstantOp>(
+        loc, IntegerType::get(builder.getContext(), 64),
+        builder.getIntegerAttr(builder.getIndexType(), 0));
+    return builder.create<LLVM::GEPOp>(
+        loc,
+        LLVM::LLVMPointerType::get(IntegerType::get(builder.getContext(), 8)),
+        globalPtr, ArrayRef<Value>({cst0, cst0}));
+  }
+};
+int DebugPrintOpLowering::msgCounter = 0;
+
+// MARK: SclToLLVMLoweringPass
 
 namespace {
 struct SclToLLVMLoweringPass
@@ -71,6 +162,9 @@ void SclToLLVMLoweringPass::runOnOperation() {
   populateLoopToStdConversionPatterns(patterns);
   populateMemRefToLLVMConversionPatterns(typeConverter, patterns);
   populateStdToLLVMConversionPatterns(typeConverter, patterns);
+
+  // The only remaining operation to lower is the DebugPrintOp.
+  patterns.add<DebugPrintOpLowering>(&getContext());
 
   // We want to completely lower to LLVM, so we use a `FullConversion`. This
   // ensures that only legal operations will remain after the conversion.

@@ -252,7 +252,7 @@ int runJit(mlir::ModuleOp module) {
   // Invoke the JIT-compiled function.
   auto invocationResult = engine->invoke("OB1");
   if (invocationResult) {
-    llvm::errs() << "JIT invocation failed\n";
+    llvm::errs() << "JIT invocation failed\n" << invocationResult << "\n";
     return -1;
   }
 

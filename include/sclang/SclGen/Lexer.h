@@ -150,15 +150,16 @@ enum Token : int {
   tok_blockcomment_open = -85,  // (*
   tok_blockcomment_close = -86, // *)
   tok_linecomment = -87,        // //
+  tok_debugprint = -88,         // // DEBUG PRINT
 
   // multi character operators
-  tok_assignment = -88,    // :=
-  tok_exponent = -89,      // **
-  tok_range = -90,         // ..
-  tok_cmp_le = -91,        // <=
-  tok_cmp_ge = -92,        // >=
-  tok_cmp_ne = -93,        // <>
-  tok_assign_output = -94, // =>
+  tok_assignment = -90,    // :=
+  tok_exponent = -91,      // **
+  tok_range = -92,         // ..
+  tok_cmp_le = -93,        // <=
+  tok_cmp_ge = -94,        // >=
+  tok_cmp_ne = -95,        // <>
+  tok_assign_output = -96, // =>
 
   // names and literals
   tok_identifier = -100,
@@ -197,7 +198,17 @@ public:
   Token getCurToken() { return curTok; }
 
   /// Move to the next token in the stream and return it.
-  Token getNextToken() { return curTok = getTok(); }
+  /// Skips over comments.
+  Token getNextToken() {
+    do {
+      curTok = getTok();
+    } while (curTok == tok_linecomment);
+    return curTok;
+  }
+
+  /// Move to the next token in the stream and return it.
+  /// Even returns comment tokens
+  Token getNextTokenWithComments() { return curTok = getTok(); }
 
   /// Move to the next token in the stream, asserting on the current token
   /// matching the expectation.
@@ -249,6 +260,11 @@ public:
   /// Return the name of a symbol, when the current token is a symbol
   llvm::StringRef getSymbol() {
     assert(curTok == tok_symbol);
+    return stringValue;
+  }
+
+  llvm::StringRef getComment() {
+    assert(curTok == tok_linecomment || curTok == tok_debugprint);
     return stringValue;
   }
 
@@ -882,12 +898,20 @@ private:
     case '/':
       lastChar = Token(getNextChar());
       if (lastChar == '/') { // Comment until end of line.
+        stringValue = "";
         do {
           lastChar = Token(getNextChar());
           if (lastChar == EOF)
             return tok_eof;
+          stringValue += (char)lastChar;
         } while (lastChar != '\n' && lastChar != '\r');
-        return getTok();
+        std::string debugPrefix(" DEBUG PRINT ");
+        if (!stringValue.compare(0, debugPrefix.size(), debugPrefix)) {
+          stringValue = stringValue.substr(
+              debugPrefix.size(), stringValue.size() - debugPrefix.size() - 1);
+          return tok_debugprint;
+        }
+        return tok_linecomment;
       } else
         return Token('/');
     case '(':

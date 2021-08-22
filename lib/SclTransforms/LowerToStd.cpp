@@ -452,6 +452,7 @@ void SclToStdLoweringPass::runOnOperation() {
   target.addLegalDialect<memref::MemRefDialect>();
   target.addLegalDialect<StandardOpsDialect>();
   target.addLegalOp<FuncOp>();
+  target.addLegalOp<scl::DebugPrintOp>();
 
   // We want to lower all of SCL except for control flow:
   target.addIllegalDialect<scl::SclDialect>();

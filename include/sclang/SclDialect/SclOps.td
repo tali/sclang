@@ -587,4 +587,15 @@ def UnaryMinusOp : UnaryArithmeticOp<"negate"> {
     TBD
   }];
 }
+
+//
+// Debug helpers
+//
+
+def DebugPrintOp : SclOp<"debug.print"> {
+  let summary = "debug print";
+  let arguments = (ins StrAttr:$msg);
+  let assemblyFormat = "attr-dict $msg";
+}
+
 #endif // SCL_OPS
