@@ -5,7 +5,6 @@
 workspace(name = "sclang")
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
 
 SKYLIB_VERSION = "1.0.3"
 
@@ -18,34 +17,18 @@ http_archive(
     ],
 )
 
-maybe(
-    local_repository,
-    name = "llvm_bazel",
-    path = "third_party/llvm-project/utils/bazel",
+new_local_repository(
+    name = "llvm-raw",
+    build_file_content = "# empty",
+    path = "third_party/llvm-project",
 )
 
-load("@llvm_bazel//:zlib.bzl", "llvm_zlib_disable")
+load("@llvm-raw//utils/bazel:configure.bzl", "llvm_configure", "llvm_disable_optional_support_deps")
 
-maybe(
-    llvm_zlib_disable,
-    name = "llvm_zlib",
-)
+llvm_configure(name = "llvm-project")
 
-load("@llvm_bazel//:terminfo.bzl", "llvm_terminfo_disable")
-
-maybe(
-    llvm_terminfo_disable,
-    name = "llvm_terminfo",
-)
-
-load("@llvm_bazel//:configure.bzl", "llvm_configure")
-
-maybe(
-    llvm_configure,
-    name = "llvm-project",
-    src_path = "third_party/llvm-project",
-    src_workspace = "@sclang//:WORKSPACE",
-)
+# Disables optional dependencies for Support like zlib and terminfo.
+llvm_disable_optional_support_deps()
 
 http_archive(
     name = "bazel_toolchains",
