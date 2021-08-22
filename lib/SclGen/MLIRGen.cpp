@@ -290,6 +290,7 @@ private:
       case VariableDeclarationSubsectionAST::VarTemp:
         return mlirGenTempVar(decl);
       }
+      assert(false);
     })
     .Case<ConstantDeclarationSubsectionAST>([&](auto decl) {
       return mlirGen(decl);

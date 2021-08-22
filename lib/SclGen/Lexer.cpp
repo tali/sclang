@@ -288,6 +288,7 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &s, Token token) {
   case tok_error_time:
     return s << "<error time>";
   }
+  assert(false);
 }
 
 } // namespace sclang
