@@ -280,7 +280,7 @@ static mlir::ParseResult parseConstantS5TimeOp(mlir::OpAsmParser &parser,
 }
 
 static void print(mlir::OpAsmPrinter &printer, ConstantS5TimeOp op) {
-  printer << "scl.constant.s5time ";
+  printer << " ";
   printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
   unsigned t = op.getTimeMS();
   int secs = t / 1000;
@@ -328,7 +328,7 @@ static mlir::ParseResult parseConstantTimeOp(mlir::OpAsmParser &parser,
 }
 
 static void print(mlir::OpAsmPrinter &printer, ConstantTimeOp op) {
-  printer << "scl.constant.time ";
+  printer << " ";
   printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
   int32_t t = op.value();
   int secs = t / 1000;
@@ -386,7 +386,7 @@ static mlir::ParseResult parseConstantDateOp(mlir::OpAsmParser &parser,
 }
 
 static void print(mlir::OpAsmPrinter &printer, ConstantDateOp op) {
-  printer << "scl.constant.date ";
+  printer << " ";
   printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
   int year, month, day;
   getDateFromDaysSince1990(op.value(), &year, &month, &day);
@@ -436,7 +436,7 @@ static mlir::ParseResult parseConstantTimeOfDayOp(mlir::OpAsmParser &parser,
 }
 
 static void print(mlir::OpAsmPrinter &printer, ConstantTimeOfDayOp op) {
-  printer << "scl.constant.tod ";
+  printer << " ";
   printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
   int32_t t = op.value();
   int secs = t / 1000;
@@ -492,7 +492,7 @@ static mlir::ParseResult parseConstantDateAndTimeOp(mlir::OpAsmParser &parser,
 }
 
 static void print(mlir::OpAsmPrinter &printer, ConstantDateAndTimeOp op) {
-  printer << "scl.constant.dt ";
+  printer << " ";
   printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
 
   int year, month, day, hour, min, sec, msec;
