@@ -221,7 +221,7 @@ def VariableOp : SclOp<"var", [Symbol, HasParent<"FunctionBlockOp">]> {
 }
 
 def TempVariableOp : SclOp<"tmpvar",
-    [DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
+    [DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let summary = "allocate stack memory for a temporary variable";
   let description = [{ TBD }];
   let arguments = (ins StrAttr:$name);
@@ -251,7 +251,7 @@ def IntegerCastOp : SclOp<"int.cast", [DeclareOpInterfaceMethods<CastOpInterface
 }
 
 def ConstantOp : SclOp<"constant",
-    [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
+    [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let summary = "literal constant";
   let arguments = (ins AnyAttr:$value);
   let results = (outs AnyType:$result);
@@ -260,7 +260,7 @@ def ConstantOp : SclOp<"constant",
 }
 
 def ConstantS5TimeOp : SclOp<"constant.s5time",
-    [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
+    [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let summary = "literal time or date constant";
   let arguments = (ins UI16Attr:$value);
   let results = (outs Scl_S5TimeType:$result);
@@ -274,7 +274,7 @@ def ConstantS5TimeOp : SclOp<"constant.s5time",
 }
 
 def ConstantTimeOp : SclOp<"constant.time",
-    [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
+    [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let summary = "literal time constant";
   let arguments = (ins SI32Attr:$value);
   let results = (outs Scl_TimeType:$result);
@@ -285,7 +285,7 @@ def ConstantTimeOp : SclOp<"constant.time",
 }
 
 def ConstantDateOp : SclOp<"constant.date",
-    [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
+    [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let summary = "literal time constant";
   let arguments = (ins UI16Attr:$value);
   let results = (outs Scl_DateType:$result);
@@ -296,7 +296,7 @@ def ConstantDateOp : SclOp<"constant.date",
 }
 
 def ConstantTimeOfDayOp : SclOp<"constant.tod",
-    [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
+    [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let summary = "literal time constant";
   let arguments = (ins UI32Attr:$value);
   let results = (outs Scl_TimeOfDayType:$result);
@@ -307,7 +307,7 @@ def ConstantTimeOfDayOp : SclOp<"constant.tod",
 }
 
 def ConstantDateAndTimeOp : SclOp<"constant.dt",
-    [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
+    [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let summary = "literal time constant";
   let arguments = (ins UI64Attr:$value);
   let results = (outs Scl_DateAndTimeType:$result);
@@ -323,7 +323,7 @@ def ConstantDateAndTimeOp : SclOp<"constant.dt",
 }
 
 def GetElementOp : SclOp<"getelement",
-    [NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
+    [NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let summary = "get the address of a struct element";
   let arguments = (ins Scl_AddressType:$addr, StrAttr:$name);
   let results = (outs Scl_AddressType:$element);
@@ -331,7 +331,7 @@ def GetElementOp : SclOp<"getelement",
 }
 
 def GetGlobalOp : SclOp<"getglobal",
-    [NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
+    [NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let arguments = (ins FlatSymbolRefAttr:$name);
   let results = (outs Scl_AddressType:$element);
   let assemblyFormat = "attr-dict $name `:` type($element)";
@@ -345,7 +345,7 @@ def GetIndexOp : SclOp<"getindex", [NoSideEffect]> {
 }
 
 def GetVariableOp : SclOp<"getvariable",
-    [NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface>]> {
+    [NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let summary = "get the address of a FB variable";
   let arguments = (ins Scl_AddressType:$addr, FlatSymbolRefAttr:$sym_name);
   let results = (outs Scl_AddressType:$element);
