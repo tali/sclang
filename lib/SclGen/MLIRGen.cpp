@@ -722,8 +722,9 @@ private:
   }
 
   mlir::Value mlirGenSymbol(mlir::Location location, StringRef name) {
+    auto nameAttr = builder.getStringAttr(name);
     DataBlockOp db =
-        mlir::SymbolTable::lookupNearestSymbolFrom<DataBlockOp>(theModule, name);
+        mlir::SymbolTable::lookupNearestSymbolFrom<DataBlockOp>(theModule, nameAttr);
     if (!db) {
       emitError(location) << "unknown symbol '" << name << "'";
       return nullptr;
@@ -746,7 +747,7 @@ private:
 
     return mlir::TypeSwitch<mlir::Type, mlir::Value>(baseType)
     .Case<InstanceDbType>([&](auto idbType) -> GetVariableOp {
-      StringRef fbName = idbType.getFbSymbol();
+      auto fbName = builder.getStringAttr(idbType.getFbSymbol());
       auto fb = mlir::SymbolTable::lookupNearestSymbolFrom<FunctionBlockOp>(
         theModule, fbName);
       if (!fb) {

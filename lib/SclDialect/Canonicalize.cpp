@@ -139,7 +139,7 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
   matchAndRewrite(scl::CallFcOp op, PatternRewriter &rewriter) const override {
     scl::FunctionOp func =
         SymbolTable::lookupNearestSymbolFrom<scl::FunctionOp>(op->getParentOp(),
-                                                              op.callee());
+                                                              op.calleeAttr());
     assert(func && "cannot lookup FunctionOp");
 
     switch (func.getNumArguments()) {
