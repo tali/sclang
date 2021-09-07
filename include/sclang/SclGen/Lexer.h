@@ -644,7 +644,6 @@ private:
       if (!llvm::to_integer(stringValue, intVal))
         return tok_error_integer;
       return tok_integer_literal;
-
     case Binary:
       if (!llvm::to_integer(stringValue, intVal, 2))
         return tok_error_integer;
@@ -663,6 +662,7 @@ private:
         return tok_error_real;
       return tok_real_number_literal;
     }
+    assert(false);
   }
 
   // MARK: strings and symbols
