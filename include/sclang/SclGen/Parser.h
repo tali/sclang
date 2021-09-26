@@ -56,14 +56,12 @@ public:
 
     // Parse functions one at a time and accumulate in this vector.
     std::vector<std::unique_ptr<UnitAST>> units;
-    while (auto unit = ParseSCLProgramUnit()) {
+    while (lexer.getCurToken() != tok_eof) {
+      auto unit = ParseSCLProgramUnit();
+      if (!unit)
+        return parseError<ModuleAST>("program unit", "on module level");
       units.push_back(std::move(unit));
-      if (lexer.getCurToken() == tok_eof)
-        break;
     }
-    // If we didn't reach EOF, there was an error during parsing
-    if (lexer.getCurToken() != tok_eof)
-      return parseError<ModuleAST>("nothing", "at end of module");
 
     return std::make_unique<ModuleAST>(std::move(units));
   }
@@ -96,7 +94,7 @@ private:
     switch (lexer.getCurToken()) {
     default:
       llvm::errs() << "unknown token '" << lexer.getCurToken()
-                   << "' when expecting an expression\n";
+                   << "' when expecting a program unit\n";
       return nullptr;
     case tok_organization_block:
       return ParseOrganizationBlock();
@@ -547,12 +545,10 @@ private:
     while (lexer.getCurToken() != tok_end_var) {
       auto var = ParseVariableDeclaration();
       if (!var)
-        break;
+        return parseError<VariableDeclarationSubsectionAST>(
+          "variable name", "to start a new variable declaration");
       vars.push_back(std::move(var));
     }
-    if (lexer.getCurToken() != tok_end_var)
-      return parseError<VariableDeclarationSubsectionAST>(
-          tok_end_var, "to end variable declaration subsection");
     lexer.consume(tok_end_var);
 
     return std::make_unique<VariableDeclarationSubsectionAST>(loc, kind,
