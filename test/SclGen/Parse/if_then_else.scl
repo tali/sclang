@@ -1,0 +1,117 @@
+// RUN: sclang-gen --emit=ast %s | FileCheck %s
+
+// CHECK-LABEL: FunctionBlock if_then
+function_block if_then
+
+var_input
+  a : bool;
+end_var
+
+var_output
+  b : int;
+end_var
+
+// CHECK: CodeSection
+begin
+
+// CHECK-NEXT: ValueAssignment
+// CHECK-NEXT:   BinaryExpression :=
+// CHECK-NEXT:     SimpleVariable b
+// CHECK-NEXT:     IntegerConstant 1
+  b := 1;
+
+// CHECK-NEXT: IfThenElse
+// CHECK-NEXT:   IfThen
+// CHECK-NEXT:     SimpleVariable a
+// CHECK-NEXT:     CodeSection
+// CHECK-NEXT:       ValueAssignment
+// CHECK-NEXT:         BinaryExpression :=
+// CHECK-NEXT:           SimpleVariable b
+// CHECK-NEXT:           IntegerConstant 2
+  if a then
+    b := 2;
+  end_if;
+
+end_function_block
+
+
+// CHECK-LABEL: FunctionBlock if_then_else
+function_block if_then_else
+
+var_input
+  a : bool;
+end_var
+
+var_output
+  b : int;
+end_var
+
+// CHECK: CodeSection
+begin
+
+// CHECK-NEXT: IfThenElse
+// CHECK-NEXT:   IfThen
+// CHECK-NEXT:     SimpleVariable a
+// CHECK-NEXT:     CodeSection
+// CHECK-NEXT:       ValueAssignment
+// CHECK-NEXT:         BinaryExpression :=
+// CHECK-NEXT:           SimpleVariable b
+// CHECK-NEXT:           IntegerConstant 1
+// CHECK-NEXT:   Else
+// CHECK-NEXT:     CodeSection
+// CHECK-NEXT:       ValueAssignment
+// CHECK-NEXT:         BinaryExpression :=
+// CHECK-NEXT:           SimpleVariable b
+// CHECK-NEXT:           IntegerConstant 2
+  if a then
+    b := 1;
+  else
+    b := 2;
+  end_if;
+end_function_block
+
+// CHECK-LABEL: FunctionBlock if_then_elsif
+function_block if_then_elsif
+
+var_input
+  a1 : bool;
+  a2 : bool;
+end_var
+
+var_output
+  b : int;
+end_var
+
+// CHECK: CodeSection
+begin
+
+// CHECK-NEXT: IfThenElse
+// CHECK-NEXT:   IfThen
+// CHECK-NEXT:     SimpleVariable a1
+// CHECK-NEXT:     CodeSection
+// CHECK-NEXT:       ValueAssignment
+// CHECK-NEXT:         BinaryExpression :=
+// CHECK-NEXT:           SimpleVariable b
+// CHECK-NEXT:           IntegerConstant 1
+// CHECK-NEXT:   IfThen
+// CHECK-NEXT:     SimpleVariable a2
+// CHECK-NEXT:     CodeSection
+// CHECK-NEXT:       ValueAssignment
+// CHECK-NEXT:         BinaryExpression :=
+// CHECK-NEXT:           SimpleVariable b
+// CHECK-NEXT:           IntegerConstant 2
+// CHECK-NEXT:   Else
+// CHECK-NEXT:     CodeSection
+// CHECK-NEXT:       ValueAssignment
+// CHECK-NEXT:         BinaryExpression :=
+// CHECK-NEXT:           SimpleVariable b
+// CHECK-NEXT:           IntegerConstant 3
+  if a1 then
+    b := 1;
+  elsif a2 then
+    b := 2;
+  else
+    b := 3;
+  end_if;
+
+end_function_block

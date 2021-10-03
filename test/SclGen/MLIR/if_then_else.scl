@@ -1,0 +1,108 @@
+// RUN: sclang-gen --emit=mlir %s | sclang-gen -x mlir --emit=mlir --opt | FileCheck %s
+
+// CHECK-LABEL: scl.function_block @if_then
+function_block if_then
+
+
+// CHECK: scl.var input "a" : !scl.bool
+var_input
+  a : bool;
+end_var
+
+// CHECK: scl.var output "b" : !scl.int
+var_output
+  b : int;
+end_var
+
+begin
+
+// CHECK: %b = scl.getvariable @b from %arg0
+// CHECK: scl.store %b : !scl.address<!scl.int> = %c1 : !scl.int
+  b := 1;
+
+// CHECK: %a = scl.getvariable @a from %arg0
+// CHECK: %0 = scl.load %a : !scl.address<!scl.bool> : !scl.bool
+// CHECK: scl.if %0 : !scl.bool  {
+  if a then
+// CHECK:   scl.store %b : !scl.address<!scl.int> = %c2 : !scl.int
+    b := 2;
+  end_if;
+// CHECK: } else  {
+// CHECK: }
+
+end_function_block
+
+
+// CHECK-LABEL: scl.function_block @if_then_else
+function_block if_then_else
+
+// CHECK: scl.var input "a" : !scl.bool
+var_input
+  a : bool;
+end_var
+
+// CHECK: scl.var output "b" : !scl.int
+var_output
+  b : int;
+end_var
+
+begin
+
+// CHECK: %a = scl.getvariable @a from %arg0
+// CHECK: %0 = scl.load %a : !scl.address<!scl.bool> : !scl.bool
+// CHECK: scl.if %0 : !scl.bool  {
+  if a then
+// CHECK: %b = scl.getvariable @b from %arg0
+// CHECK: scl.store %b : !scl.address<!scl.int> = %c1 : !scl.int
+    b := 1;
+// CHECK: } else  {
+  else
+// CHECK: %b = scl.getvariable @b from %arg0
+// CHECK: scl.store %b : !scl.address<!scl.int> = %c2 : !scl.int
+    b := 2;
+// CHECK: }
+  end_if;
+end_function_block
+
+
+// CHECK-LABEL: scl.function_block @if_then_elsif
+function_block if_then_elsif
+
+// CHECK: scl.var input "a1" : !scl.bool
+// CHECK: scl.var input "a2" : !scl.bool
+var_input
+  a1 : bool;
+  a2 : bool;
+end_var
+
+// CHECK: scl.var output "b" : !scl.int
+var_output
+  b : int;
+end_var
+
+begin
+
+// CHECK: %a1 = scl.getvariable @a1 from %arg0
+// CHECK: %0 = scl.load %a1 : !scl.address<!scl.bool> : !scl.bool
+// CHECK: scl.if %0 : !scl.bool  {
+  if a1 then
+// CHECK: %b = scl.getvariable @b from %arg0
+// CHECK: scl.store %b : !scl.address<!scl.int> = %c1 : !scl.int
+    b := 1;
+// CHECK: } else  {
+// CHECK: %a2 = scl.getvariable @a2 from %arg0
+// CHECK: %1 = scl.load %a2 : !scl.address<!scl.bool> : !scl.bool
+// CHECK: scl.if %1 : !scl.bool  {
+  elsif a2 then
+// CHECK: %b = scl.getvariable @b from %arg0
+// CHECK: scl.store %b : !scl.address<!scl.int> = %c2 : !scl.int
+    b := 2;
+// CHECK: } else  {
+  else
+// CHECK: %b = scl.getvariable @b from %arg0
+// CHECK: scl.store %b : !scl.address<!scl.int> = %c3 : !scl.int
+    b := 3;
+// CHECK: }
+  end_if;
+
+end_function_block
