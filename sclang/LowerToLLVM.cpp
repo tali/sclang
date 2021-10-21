@@ -15,6 +15,7 @@
 #include "sclang/SclDialect/Dialect.h"
 #include "sclang/SclTransforms/Passes.h"
 
+#include "mlir/Conversion/ArithmeticToLLVM/ArithmeticToLLVM.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
@@ -36,9 +37,9 @@ using namespace mlir;
 
 /// Lowers `scl.debug.print` to a call to `printf`
 struct DebugPrintOpLowering : public OpConversionPattern<scl::DebugPrintOp> {
-  DebugPrintOpLowering(MLIRContext *context, SymbolTable &symbolTable) :
-    OpConversionPattern<scl::DebugPrintOp>::OpConversionPattern(context),
-    symbolTable(symbolTable) {}
+  DebugPrintOpLowering(MLIRContext *context, SymbolTable &symbolTable)
+      : OpConversionPattern<scl::DebugPrintOp>::OpConversionPattern(context),
+        symbolTable(symbolTable) {}
 
   LogicalResult
   matchAndRewrite(scl::DebugPrintOp op, ArrayRef<Value> operands,
@@ -50,18 +51,19 @@ struct DebugPrintOpLowering : public OpConversionPattern<scl::DebugPrintOp> {
     auto printfRef = getOrInsertPrintf(rewriter, parentModule);
     Type printfRetType = rewriter.getIntegerType(32);
 
-    Value formatSpecifierCst = getOrCreateGlobalString(loc, rewriter,
-        "_debug_print_fmt", StringRef("%s\n\0", 4), parentModule, /*reuse=*/true);
+    Value formatSpecifierCst = getOrCreateGlobalString(
+        loc, rewriter, "_debug_print_fmt", StringRef("%s\n\0", 4), parentModule,
+        /*reuse=*/true);
 
     std::string msg = std::string(op.msg());
-    // Append `\0` to follow C style string given that LLVM::createGlobalString()
-    // won't handle this directly for us.
+    // Append `\0` to follow C style string given that
+    // LLVM::createGlobalString() won't handle this directly for us.
     msg.push_back('\0');
     Value msgCst = getOrCreateGlobalString(loc, rewriter, "_debug_msg", msg,
-        parentModule, /*reuse=*/false);
+                                           parentModule, /*reuse=*/false);
 
     // Generate call to `printf`.
-    SmallVector<Value, 2> printfArgs = {{ formatSpecifierCst, msgCst }};
+    SmallVector<Value, 2> printfArgs = {{formatSpecifierCst, msgCst}};
     rewriter.create<CallOp>(loc, printfRef, printfRetType, printfArgs);
 
     rewriter.eraseOp(op);
@@ -96,8 +98,8 @@ private:
   /// Return a value representing an access into a global string with the given
   /// name, creating the string if necessary.
   Value getOrCreateGlobalString(Location loc, OpBuilder &builder,
-                                       StringRef name, StringRef value,
-                                       ModuleOp module, bool reuse) const {
+                                StringRef name, StringRef value,
+                                ModuleOp module, bool reuse) const {
     // Create the global at the entry of the module.
     LLVM::GlobalOp global = nullptr;
     if (reuse)
@@ -108,15 +110,15 @@ private:
       auto context = builder.getContext();
       OpBuilder globalBuilder(context);
 
-      auto type = LLVM::LLVMArrayType::get(
-          IntegerType::get(context, 8), value.size());
-      global = globalBuilder.create<LLVM::GlobalOp>(loc, type, /*isConstant=*/true,
-                                                    LLVM::Linkage::Internal, name,
-                                                    builder.getStringAttr(value),
-					            /*alignment=*/0);
+      auto type =
+          LLVM::LLVMArrayType::get(IntegerType::get(context, 8), value.size());
+      global = globalBuilder.create<LLVM::GlobalOp>(
+          loc, type, /*isConstant=*/true, LLVM::Linkage::Internal, name,
+          builder.getStringAttr(value),
+          /*alignment=*/0);
       symbolTable.insert(global);
-      // The symbol table inserts at the end of the module, but globals are a bit
-      // nicer if they are at the beginning.
+      // The symbol table inserts at the end of the module, but globals are a
+      // bit nicer if they are at the beginning.
       global->moveBefore(&module.front());
     }
     assert(global != nullptr && "could not find or create GlobalOp");
@@ -146,7 +148,7 @@ struct SclToLLVMLoweringPass
 } // end anonymous namespace
 
 void SclToLLVMLoweringPass::runOnOperation() {
-  MLIRContext * context = &getContext();
+  MLIRContext *context = &getContext();
   // The first thing to define is the conversion target. This will define the
   // final target for this lowering. For this lowering, we are only targeting
   // the LLVM dialect.
@@ -169,6 +171,7 @@ void SclToLLVMLoweringPass::runOnOperation() {
   // patterns must be applied to fully transform an illegal operation into a
   // set of legal ones.
   RewritePatternSet patterns(context);
+  arith::populateArithmeticToLLVMConversionPatterns(typeConverter, patterns);
   populateLoopToStdConversionPatterns(patterns);
   populateMemRefToLLVMConversionPatterns(typeConverter, patterns);
   populateStdToLLVMConversionPatterns(typeConverter, patterns);

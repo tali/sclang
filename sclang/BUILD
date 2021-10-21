@@ -17,6 +17,7 @@ cc_binary(
         "//:SclTransforms",
         "@llvm-project//llvm:Support",
         "@llvm-project//llvm:ir_headers",
+        "@llvm-project//mlir:ArithmeticToLLVM",
         "@llvm-project//mlir:AffineTransforms",
         "@llvm-project//mlir:Analysis",
         "@llvm-project//mlir:CastOpInterfaces",

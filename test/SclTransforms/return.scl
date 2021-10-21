@@ -16,7 +16,7 @@ begin
 end_function
 
 // NO-CHECK-LABEL: @ret_implicit_real
-// NO-CHECK:       [[C1:[a-z0-9]+]] = constant 1.0 : f32
+// NO-CHECK:       [[C1:[a-z0-9]+]] = arith.constant 1.0 : f32
 // NO-CHECK:       return [[C1]] : f32
 function ret_implicit_real : real
 begin
@@ -24,7 +24,7 @@ begin
 end_function
 
 // NO-CHECK-LABEL: @ret_explicit_real
-// NO-CHECK:       [[C1:[a-z0-9]+]] = constant 1.0 : f32
+// NO-CHECK:       [[C1:[a-z0-9]+]] = arith.constant 1.0 : f32
 // NO-CHECK:       return [[C1]] : f32
 function ret_explicit_real : real
 begin
@@ -33,7 +33,7 @@ begin
 end_function
 
 // NO-CHECK-LABEL: @ret_implicit_int
-// NO-CHECK:       [[C1:[a-z0-9]+]] = constant 1 : i16
+// NO-CHECK:       [[C1:[a-z0-9]+]] = arith.constant 1 : i16
 // NO-CHECK:       return [[C1]] : i16
 function ret_implicit_int : int
 begin
@@ -42,7 +42,7 @@ begin
 end_function
 
 // NO-CHECK-LABEL: @ret_explicit_int
-// NO-CHECK:       [[C1:[a-z0-9]+]] = constant 1 : i16
+// NO-CHECK:       [[C1:[a-z0-9]+]] = arith.constant 1 : i16
 // NO-CHECK:       return [[C1]] : i16
 function ret_explicit_int : int
 begin

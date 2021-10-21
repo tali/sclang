@@ -97,6 +97,7 @@ cc_library(
     deps = [
         ":SclDialect",
         "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:ArithmeticDialect",
         "@llvm-project//mlir:Dialect",
         "@llvm-project//mlir:MemRefDialect",
         "@llvm-project//mlir:Pass",

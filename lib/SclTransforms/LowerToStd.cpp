@@ -15,6 +15,7 @@
 #include "sclang/SclDialect/Dialect.h"
 #include "sclang/SclTransforms/Passes.h"
 
+#include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
@@ -51,7 +52,7 @@ public:
     });
 
     // keep structs and arrays
-    //addConversion([&](scl::StructType type) { return type; });
+    // addConversion([&](scl::StructType type) { return type; });
 
     // keep Std types
     addConversion([&](FloatType type) { return type; });
@@ -99,7 +100,8 @@ struct CallFcOpLowering : public OpConversionPattern<scl::CallFcOp> {
 
 /// Lower to either a floating point or an integer comparision, depending on the
 /// type.
-template <typename CompareOp, CmpFPredicate predF, CmpIPredicate predI>
+template <typename CompareOp, arith::CmpFPredicate predF,
+          arith::CmpIPredicate predI>
 struct CompareOpLowering : public OpConversionPattern<CompareOp> {
   using OpConversionPattern<CompareOp>::OpConversionPattern;
 
@@ -109,32 +111,35 @@ struct CompareOpLowering : public OpConversionPattern<CompareOp> {
     typename CompareOp::Adaptor transformed(operands);
 
     if (all_of_type<FloatType>(operands)) {
-      rewriter.replaceOpWithNewOp<CmpFOp>(op, predF, transformed.lhs(),
-                                          transformed.rhs());
+      rewriter.replaceOpWithNewOp<arith::CmpFOp>(op, predF, transformed.lhs(),
+                                                 transformed.rhs());
       return success();
     }
     if (all_of_type<IntegerType>(operands)) {
-      rewriter.replaceOpWithNewOp<CmpIOp>(op, predI, transformed.lhs(),
-                                          transformed.rhs());
+      rewriter.replaceOpWithNewOp<arith::CmpIOp>(op, predI, transformed.lhs(),
+                                                 transformed.rhs());
       return success();
     }
     return failure();
   }
 };
-using EqualLowering =
-    CompareOpLowering<scl::EqualOp, CmpFPredicate::UEQ, CmpIPredicate::eq>;
+using EqualLowering = CompareOpLowering<scl::EqualOp, arith::CmpFPredicate::UEQ,
+                                        arith::CmpIPredicate::eq>;
 using NotEqualLowering =
-    CompareOpLowering<scl::NotEqualOp, CmpFPredicate::UNE, CmpIPredicate::ne>;
+    CompareOpLowering<scl::NotEqualOp, arith::CmpFPredicate::UNE,
+                      arith::CmpIPredicate::ne>;
 using LessThanLowering =
-    CompareOpLowering<scl::LessThanOp, CmpFPredicate::ULT, CmpIPredicate::slt>;
+    CompareOpLowering<scl::LessThanOp, arith::CmpFPredicate::ULT,
+                      arith::CmpIPredicate::slt>;
 using LessEqualLowering =
-    CompareOpLowering<scl::LessEqualOp, CmpFPredicate::ULE, CmpIPredicate::sle>;
+    CompareOpLowering<scl::LessEqualOp, arith::CmpFPredicate::ULE,
+                      arith::CmpIPredicate::sle>;
 using GreaterThanLowering =
-    CompareOpLowering<scl::GreaterThanOp, CmpFPredicate::UGT,
-                      CmpIPredicate::sgt>;
+    CompareOpLowering<scl::GreaterThanOp, arith::CmpFPredicate::UGT,
+                      arith::CmpIPredicate::sgt>;
 using GreaterEqualLowering =
-    CompareOpLowering<scl::GreaterEqualOp, CmpFPredicate::UGE,
-                      CmpIPredicate::sge>;
+    CompareOpLowering<scl::GreaterEqualOp, arith::CmpFPredicate::UGE,
+                      arith::CmpIPredicate::sge>;
 
 // MARK: ConstantOpLowering
 
@@ -144,7 +149,7 @@ struct ConstantOpLowering : public OpConversionPattern<scl::ConstantOp> {
   LogicalResult
   matchAndRewrite(scl::ConstantOp op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
-    rewriter.replaceOpWithNewOp<ConstantOp>(op, op.value());
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, op.value());
     return success();
   }
 };
@@ -280,9 +285,9 @@ struct LogicalOpLowering : public OpConversionPattern<SclOp> {
     return success();
   }
 };
-using AndOpLowering = LogicalOpLowering<scl::AndOp, AndOp>;
-using OrOpLowering = LogicalOpLowering<scl::OrOp, OrOp>;
-using XOrOpLowering = LogicalOpLowering<scl::XOrOp, XOrOp>;
+using AndOpLowering = LogicalOpLowering<scl::AndOp, arith::AndIOp>;
+using OrOpLowering = LogicalOpLowering<scl::OrOp, arith::OrIOp>;
+using XOrOpLowering = LogicalOpLowering<scl::XOrOp, arith::XOrIOp>;
 
 // MARK: NumericOpLowering
 
@@ -308,11 +313,16 @@ struct NumericOpLowering : public OpConversionPattern<SclOp> {
     return failure();
   }
 };
-using AddOpLowering = NumericOpLowering<scl::AddOp, AddFOp, AddIOp>;
-using SubOpLowering = NumericOpLowering<scl::SubOp, SubFOp, SubIOp>;
-using MulOpLowering = NumericOpLowering<scl::MulOp, MulFOp, MulIOp>;
-using DivOpLowering = NumericOpLowering<scl::DivOp, DivFOp, SignedDivIOp>;
-using ModOpLowering = NumericOpLowering<scl::ModOp, RemFOp, SignedRemIOp>;
+using AddOpLowering =
+    NumericOpLowering<scl::AddOp, arith::AddFOp, arith::AddIOp>;
+using SubOpLowering =
+    NumericOpLowering<scl::SubOp, arith::SubFOp, arith::SubIOp>;
+using MulOpLowering =
+    NumericOpLowering<scl::MulOp, arith::MulFOp, arith::MulIOp>;
+using DivOpLowering =
+    NumericOpLowering<scl::DivOp, arith::DivFOp, arith::DivSIOp>;
+using ModOpLowering =
+    NumericOpLowering<scl::ModOp, arith::RemFOp, arith::RemSIOp>;
 
 // MARK: ReturnOpLowering
 
@@ -337,7 +347,8 @@ struct ReturnValueOpLowering : public OpConversionPattern<scl::ReturnValueOp> {
                   ConversionPatternRewriter &rewriter) const final {
     scl::ReturnValueOp::Adaptor transformed(operands);
 
-    auto retval = rewriter.create<memref::LoadOp>(op.getLoc(), transformed.value());
+    auto retval =
+        rewriter.create<memref::LoadOp>(op.getLoc(), transformed.value());
 
     rewriter.replaceOpWithNewOp<ReturnOp>(op, retval.getResult());
     return success();
@@ -390,18 +401,20 @@ struct UnaryMinusOpLowering : public OpConversionPattern<scl::UnaryMinusOp> {
     auto elementType = transformed.rhs().getType();
     return TypeSwitch<Type, LogicalResult>(elementType)
         .Case<FloatType>([&](auto elementType) {
-          rewriter.replaceOpWithNewOp<NegFOp>(op, transformed.rhs());
+          rewriter.replaceOpWithNewOp<arith::NegFOp>(op, transformed.rhs());
           return success();
         })
         .Case<IntegerType>([&](auto elementType) {
           auto loc = op.getLoc();
-          auto zero =
-              rewriter.create<ConstantIntOp>(loc, 0, elementType.getWidth());
-          rewriter.replaceOpWithNewOp<SubIOp>(op, zero, transformed.rhs());
+          auto zero = rewriter.create<arith::ConstantIntOp>(
+              loc, 0, elementType.getWidth());
+          rewriter.replaceOpWithNewOp<arith::SubIOp>(op, zero,
+                                                     transformed.rhs());
           return success();
         })
         .Default([&](auto elementType) {
-          emitError(op.getLoc()) << "invalid type" << elementType << "for UnaryMinusOp";
+          emitError(op.getLoc())
+              << "invalid type" << elementType << "for UnaryMinusOp";
           return failure();
         });
   }
@@ -417,8 +430,8 @@ struct UnaryNotOpLowering : public OpConversionPattern<scl::UnaryNotOp> {
                   ConversionPatternRewriter &rewriter) const final {
     auto loc = op.getLoc();
     scl::UnaryNotOp::Adaptor transformed(operands);
-    auto falseVal = rewriter.create<ConstantIntOp>(loc, 0, 1);
-    auto trueVal = rewriter.create<ConstantIntOp>(loc, 1, 1);
+    auto falseVal = rewriter.create<arith::ConstantIntOp>(loc, 0, 1);
+    auto trueVal = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
     rewriter.replaceOpWithNewOp<SelectOp>(op, transformed.rhs(), falseVal,
                                           trueVal);
     return success();
@@ -439,18 +452,20 @@ struct SclToStdLoweringPass
     registry.insert<scf::SCFDialect>();
     registry.insert<memref::MemRefDialect>();
     registry.insert<StandardOpsDialect>();
+    registry.insert<arith::ArithmeticDialect>();
   }
   void runOnOperation() final;
 };
 } // end anonymous namespace.
 
 void SclToStdLoweringPass::runOnOperation() {
-  MLIRContext * context = &getContext();
+  MLIRContext *context = &getContext();
 
   ConversionTarget target(*context);
   target.addLegalDialect<scf::SCFDialect>();
   target.addLegalDialect<memref::MemRefDialect>();
   target.addLegalDialect<StandardOpsDialect>();
+  target.addLegalDialect<arith::ArithmeticDialect>();
   target.addLegalOp<FuncOp>();
   target.addLegalOp<scl::DebugPrintOp>();
 
@@ -460,18 +475,18 @@ void SclToStdLoweringPass::runOnOperation() {
   SclTypeConverter converter{};
 
   RewritePatternSet patterns(context);
-  patterns.add<
-      AddOpLowering, AndOpLowering, CallFcOpLowering, ConstantOpLowering,
-      DialectCastOpLowering, DivOpLowering, EndOpLowering, EqualLowering,
-      FunctionOpLowering, GreaterEqualLowering, GreaterThanLowering,
-      IfThenElseOpLowering, LessEqualLowering, LessThanLowering, LoadOpLowering,
-      ModOpLowering, MulOpLowering, NotEqualLowering, OrOpLowering,
-      ReturnOpLowering, ReturnValueOpLowering, SubOpLowering, StoreOpLowering,
-      TempVariableOpLowering, UnaryMinusOpLowering, UnaryNotOpLowering,
-      XOrOpLowering>(converter, context);
+  patterns
+      .add<AddOpLowering, AndOpLowering, CallFcOpLowering, ConstantOpLowering,
+           DialectCastOpLowering, DivOpLowering, EndOpLowering, EqualLowering,
+           FunctionOpLowering, GreaterEqualLowering, GreaterThanLowering,
+           IfThenElseOpLowering, LessEqualLowering, LessThanLowering,
+           LoadOpLowering, ModOpLowering, MulOpLowering, NotEqualLowering,
+           OrOpLowering, ReturnOpLowering, ReturnValueOpLowering, SubOpLowering,
+           StoreOpLowering, TempVariableOpLowering, UnaryMinusOpLowering,
+           UnaryNotOpLowering, XOrOpLowering>(converter, context);
 
-  if (failed(applyPartialConversion(getOperation(), target,
-                                    std::move(patterns))))
+  if (failed(
+          applyPartialConversion(getOperation(), target, std::move(patterns))))
     signalPassFailure();
 }
 

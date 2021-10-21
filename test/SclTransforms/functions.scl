@@ -19,7 +19,7 @@ function caller_1 : int
 
 begin
 
-// CHECK-DAG: [[C1:%[a-z_0-9]+]] = constant 1 : i16
+// CHECK-DAG: [[C1:%[a-z_0-9]+]] = arith.constant 1 : i16
 // CHECK-DAG: call @callee_1([[C1]]) : (i16) -> i16
 caller_1 := callee_1(1);
 
@@ -46,8 +46,8 @@ function caller_2 : int
 
 begin
 
-// CHECK-DAG: [[C2:%[a-z_0-9]+]] = constant 2 : i16
-// CHECK-DAG: [[C3:%[a-z_0-9]+]] = constant 3 : i16
+// CHECK-DAG: [[C2:%[a-z_0-9]+]] = arith.constant 2 : i16
+// CHECK-DAG: [[C3:%[a-z_0-9]+]] = arith.constant 3 : i16
 // CHECK-DAG: call @callee_2([[C2]], [[C3]]) : (i16, i16) -> i16
 caller_2 := callee_2(a:=2, b:=3);
 
@@ -59,8 +59,8 @@ function caller_2_reorder : int
 
 begin
 
-// CHECK-DAG: [[C2:%[a-z_0-9]+]] = constant 2 : i16
-// CHECK-DAG: [[C3:%[a-z_0-9]+]] = constant 3 : i16
+// CHECK-DAG: [[C2:%[a-z_0-9]+]] = arith.constant 2 : i16
+// CHECK-DAG: [[C3:%[a-z_0-9]+]] = arith.constant 3 : i16
 // CHECK-DAG: call @callee_2([[C2]], [[C3]]) : (i16, i16) -> i16
 caller_2_reorder := callee_2(b:=3, a:=2);
 
