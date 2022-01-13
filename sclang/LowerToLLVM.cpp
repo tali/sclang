@@ -42,7 +42,7 @@ struct DebugPrintOpLowering : public OpConversionPattern<scl::DebugPrintOp> {
         symbolTable(symbolTable) {}
 
   LogicalResult
-  matchAndRewrite(scl::DebugPrintOp op, ArrayRef<Value> operands,
+  matchAndRewrite(scl::DebugPrintOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
     auto loc = op->getLoc();
     ModuleOp parentModule = op->getParentOfType<ModuleOp>();
