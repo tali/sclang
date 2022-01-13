@@ -175,7 +175,7 @@ struct ArrayTypeStorage : public mlir::TypeStorage {
 } // end namespace scl
 } // end namespace mlir
 
-/// Create an instance of a `StructType` with the given element types. There
+/// Create an instance of a `ArrayType` with the given element types. There
 /// *must* be at least one element type.
 ArrayType ArrayType::get(llvm::ArrayRef<DimTy> dimensions,
                          mlir::Type elementType) {
@@ -334,10 +334,12 @@ void print(StructType type, mlir::DialectAsmPrinter &printer) {
 
   printer << "struct<";
   for (unsigned i = 0; i < names.size(); i++) {
+    StringRef name = names[i];
+    mlir::Type type = types[i];
     if (i) printer << ", ";
-    printer << names[i];
+    printer << name;
     printer << ": ";
-    printer << types[i];
+    printer << type;
   }
   printer << '>';
 }
@@ -357,8 +359,8 @@ mlir::Type parseStructType(mlir::DialectAsmParser &parser) {
   SmallVector<mlir::Type, 1> elementTypes;
   do {
     // Parse the current element name.
-    StringRef elementName;
-    if (parser.parseKeyword(&elementName))
+    std::string elementName;
+    if (parser.parseKeywordOrString(&elementName))
       return nullptr;
     elementNames.push_back(mlir::Identifier::get(elementName, context));
 
