@@ -24,6 +24,7 @@
 
 include "mlir/IR/OpBase.td"
 include "mlir/IR/SymbolInterfaces.td"
+include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
 class AssemblyFormat<string format> {
@@ -98,12 +99,7 @@ class CompareOp<string mnemonic, list<OpTrait> traits = []> :
     SclOp<mnemonic, !listconcat(traits, [SameTypeOperands])>,
     Arguments<(ins AnyType:$lhs, AnyType:$rhs)>,
     Results<(outs Scl_Bool:$result)>,
-    AssemblyFormat<"attr-dict $lhs `,` $rhs `:` type($rhs)"> {
-      let builders = [OpBuilder<(ins "Value":$lhs, "Value":$rhs), [{
-        auto resType = LogicalType::get($_builder.getContext(), 1);
-        build($_builder, $_state, resType, lhs, rhs);
-      }]>];
-    }
+    AssemblyFormat<"attr-dict $lhs `,` $rhs `:` type($rhs)">;
 class UnaryArithmeticOp<string mnemonic, list<OpTrait> traits = []> :
     SclOp<mnemonic, !listconcat(traits, [SameOperandsAndResultType])>,
     Arguments<(ins AnyType:$rhs)>,
