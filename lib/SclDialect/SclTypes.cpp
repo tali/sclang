@@ -256,10 +256,10 @@ struct StructTypeStorage : public mlir::TypeStorage {
   /// instance. This type will be used when uniquing an instance of the type
   /// storage. For our struct type, we will unique each instance structurally on
   /// the elements that it contains.
-  using KeyTy = std::pair< llvm::ArrayRef<Identifier>, llvm::ArrayRef<Type> >;
+  using KeyTy = std::pair< llvm::ArrayRef<StringAttr>, llvm::ArrayRef<Type> >;
 
   /// A constructor for the type storage instance.
-  StructTypeStorage(llvm::ArrayRef<Identifier> elementNames,
+  StructTypeStorage(llvm::ArrayRef<StringAttr> elementNames,
                     llvm::ArrayRef<Type> elementTypes)
       : elementNames(elementNames), elementTypes(elementTypes) {}
 
@@ -283,7 +283,7 @@ struct StructTypeStorage : public mlir::TypeStorage {
   }
 
   /// The following field contains the element types of the struct.
-  llvm::ArrayRef<Identifier> elementNames;
+  llvm::ArrayRef<StringAttr> elementNames;
   llvm::ArrayRef<Type> elementTypes;
 };
 } // end namespace detail
@@ -292,7 +292,7 @@ struct StructTypeStorage : public mlir::TypeStorage {
 
 /// Create an instance of a `StructType` with the given element types. There
 /// *must* be at least one element type.
-StructType StructType::get(llvm::ArrayRef<Identifier> elementNames,
+StructType StructType::get(llvm::ArrayRef<StringAttr> elementNames,
                            llvm::ArrayRef<Type> elementTypes) {
   assert(elementNames.size() == elementTypes.size() &&
          "expected same number of elementNames and elementTypes");
@@ -303,7 +303,7 @@ StructType StructType::get(llvm::ArrayRef<Identifier> elementNames,
 }
 
 /// Returns the element types of this struct type.
-llvm::ArrayRef<Identifier> StructType::getElementNames() {
+llvm::ArrayRef<StringAttr> StructType::getElementNames() {
   // 'getImpl' returns a pointer to the internal storage instance.
   return getImpl()->elementNames;
 }
@@ -314,7 +314,7 @@ llvm::ArrayRef<mlir::Type> StructType::getElementTypes() {
   return getImpl()->elementTypes;
 }
 
-mlir::Type StructType::getElementType(Identifier name) {
+mlir::Type StructType::getElementType(StringAttr name) {
   auto names = getElementNames();
   auto types = getElementTypes();
 
@@ -355,14 +355,14 @@ mlir::Type parseStructType(mlir::DialectAsmParser &parser) {
 
   // Parse the elements of the struct.
   auto context = parser.getBuilder().getContext();
-  SmallVector<mlir::Identifier, 1> elementNames;
+  SmallVector<mlir::StringAttr, 1> elementNames;
   SmallVector<mlir::Type, 1> elementTypes;
   do {
     // Parse the current element name.
     std::string elementName;
     if (parser.parseKeywordOrString(&elementName))
       return nullptr;
-    elementNames.push_back(mlir::Identifier::get(elementName, context));
+    elementNames.push_back(mlir::StringAttr::get(context, elementName));
 
     if (parser.parseColon())
       return nullptr;

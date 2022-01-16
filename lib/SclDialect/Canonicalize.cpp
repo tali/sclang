@@ -61,7 +61,7 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
       return failure();
 
     assert(argCallNames.size() == 0);
-    auto nameId = Identifier::get("scl.name", context);
+    auto nameId = StringAttr::get(context, "scl.name");
     auto nameAttr = func.getArgAttrOfType<StringAttr>(0, nameId);
     SmallVector<Attribute, 1> argNames;
     argNames.push_back(nameAttr);
@@ -88,9 +88,9 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
     SmallVector<Attribute, 4> argNames;
     arguments.reserve(func.getNumArguments());
     argNames.reserve(func.getNumArguments());
-    auto nameId = Identifier::get("scl.name", context);
-    auto defaultId = Identifier::get("scl.default", context);
-    auto defaultLocId = Identifier::get("scl.defaultLoc", context);
+    auto nameId = StringAttr::get(context, "scl.name");
+    auto defaultId = StringAttr::get(context, "scl.default");
+    auto defaultLocId = StringAttr::get(context, "scl.defaultLoc");
     for (unsigned i = 0; i < func.getNumArguments(); i++) {
       auto nameAttr = func.getArgAttrOfType<StringAttr>(i, nameId);
       argNames.push_back(nameAttr);

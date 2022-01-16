@@ -138,7 +138,7 @@ private:
 
   /// Helper conversion for a SCL AST location to an MLIR location.
   mlir::Location loc(Location loc) {
-    return mlir::FileLineColLoc::get(builder.getIdentifier(*loc.file), loc.line,
+    return mlir::FileLineColLoc::get(builder.getStringAttr(*loc.file), loc.line,
                                      loc.col);
   }
 
@@ -377,7 +377,7 @@ private:
     builder.setInsertionPointToStart(&entryBlock);
 
     // Declare all the function arguments in the symbol table.
-    auto nameId = mlir::Identifier::get("scl.name", builder.getContext());
+    auto nameId = mlir::StringAttr::get(builder.getContext(), "scl.name");
     int argIndex = 0;
     for (const auto name_value :
          llvm::zip(input_types, input_names, entryBlock.getArguments())) {
@@ -735,7 +735,7 @@ private:
   }
 
   StructType mlirGenIdbStruct(mlir::Location location, FunctionBlockOp fb) {
-    SmallVector<mlir::Identifier, 4> names;
+    SmallVector<mlir::StringAttr, 4> names;
     SmallVector<mlir::Type, 4> types;
 
     return StructType::get(names, types);
@@ -1131,7 +1131,7 @@ private:
   }
 
   mlir::Type getType(const StructDataTypeSpecAST *type) {
-    llvm::SmallVector<mlir::Identifier, 1> names;
+    llvm::SmallVector<mlir::StringAttr, 1> names;
     llvm::SmallVector<mlir::Type, 1> types;
 
     auto context = builder.getContext();
@@ -1140,7 +1140,7 @@ private:
     types.reserve(components.size());
 
     for (auto &component : components) {
-      auto name = mlir::Identifier::get(component.get()->getName(), context);
+      auto name = mlir::StringAttr::get(context, component.get()->getName());
       names.push_back(name);
 
       mlir::Type type = getType(component.get()->getDataType());
