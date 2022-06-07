@@ -123,20 +123,20 @@ def FunctionOp : TopLevelOp<"function", [
   let extraClassDeclaration = [{
   private:
     // This trait needs access to the hooks defined below.
-    friend class OpTrait::FunctionLike<FunctionOp>;
+    friend class Trait::FunctionLike<FunctionOp>;
 
-    /// Returns the number of arguments. Hook for OpTrait::FunctionLike.
+    /// Returns the number of arguments. Hook for Trait::FunctionLike.
     unsigned getNumFuncArguments() { return getType().getNumInputs(); }
 
-    /// Returns the number of results. Hook for OpTrait::FunctionLike.
+    /// Returns the number of results. Hook for Trait::FunctionLike.
     unsigned getNumFuncResults() { return getType().getNumResults(); }
 
-    /// Hook for OpTrait::FunctionLike, called after verifying that the 'type'
+    /// Hook for Trait::FunctionLike, called after verifying that the 'type'
     /// attribute is present and checks if it holds a function type. Ensures
     /// getType, getNumFuncArguments, and getNumFuncResults can be called safely
     LogicalResult verifyType();
 
-    /// Hook for OpTrait::FunctionLike, called after verifying the function
+    /// Hook for Trait::FunctionLike, called after verifying the function
     /// type and the presence of the (potentially empty) function body.
     LogicalResult verifyBody();
   }];
@@ -176,20 +176,20 @@ def FunctionBlockOp : TopLevelOp<"function_block", [
   let extraClassDeclaration = [{
   private:
     // This trait needs access to the hooks defined below.
-    friend class OpTrait::FunctionLike<FunctionBlockOp>;
+    friend class Trait::FunctionLike<FunctionBlockOp>;
 
-    /// Returns the number of arguments. Hook for OpTrait::FunctionLike.
+    /// Returns the number of arguments. Hook for Trait::FunctionLike.
     unsigned getNumFuncArguments() { return getType().getNumInputs(); }
 
-    /// Returns the number of results. Hook for OpTrait::FunctionLike.
+    /// Returns the number of results. Hook for Trait::FunctionLike.
     unsigned getNumFuncResults() { return getType().getNumResults(); }
 
-    /// Hook for OpTrait::FunctionLike, called after verifying that the 'type'
+    /// Hook for Trait::FunctionLike, called after verifying that the 'type'
     /// attribute is present and checks if it holds a function type. Ensures
     /// getType, getNumFuncArguments, and getNumFuncResults can be called safely
     LogicalResult verifyType();
 
-    /// Hook for OpTrait::FunctionLike, called after verifying the function
+    /// Hook for Trait::FunctionLike, called after verifying the function
     /// type and the presence of the (potentially empty) function body.
     LogicalResult verifyBody();
   }];

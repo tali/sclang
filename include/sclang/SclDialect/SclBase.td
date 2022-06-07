@@ -86,15 +86,15 @@ def Scl_NumericType : AnyTypeOf<[Scl_IntegerType, Scl_RealType]>;
 //   * The parent dialect of the operation.
 //   * The mnemonic for the operation, or the name without the dialect prefix.
 //   * A list of traits for the operation.
-class SclOp<string mnemonic, list<OpTrait> traits = []> :
+class SclOp<string mnemonic, list<Trait> traits = []> :
     Op<Scl_Dialect, mnemonic, traits>;
 
-class ArithmeticOp<string mnemonic, list<OpTrait> traits = []> :
+class ArithmeticOp<string mnemonic, list<Trait> traits = []> :
     SclOp<mnemonic, !listconcat(traits, [SameOperandsAndResultType])>,
     Arguments<(ins AnyType:$lhs, AnyType:$rhs)>,
     Results<(outs AnyType:$result)>,
     AssemblyFormat<"attr-dict $lhs `,` $rhs `:` type($rhs)">;
-class CompareOp<string mnemonic, list<OpTrait> traits = []> :
+class CompareOp<string mnemonic, list<Trait> traits = []> :
     SclOp<mnemonic, !listconcat(traits, [SameTypeOperands])>,
     Arguments<(ins AnyType:$lhs, AnyType:$rhs)>,
     Results<(outs Scl_Bool:$result)>,
@@ -104,7 +104,7 @@ class CompareOp<string mnemonic, list<OpTrait> traits = []> :
         build($_builder, $_state, resType, lhs, rhs);
       }]>];
     }
-class UnaryArithmeticOp<string mnemonic, list<OpTrait> traits = []> :
+class UnaryArithmeticOp<string mnemonic, list<Trait> traits = []> :
     SclOp<mnemonic, !listconcat(traits, [SameOperandsAndResultType])>,
     Arguments<(ins AnyType:$rhs)>,
     Results<(outs AnyType:$result)>,
@@ -112,15 +112,15 @@ class UnaryArithmeticOp<string mnemonic, list<OpTrait> traits = []> :
 
 
 // Check that an op can only be used within the scope of a module-like op.
-def InModuleScope : PredOpTrait<
+def InModuleScope : PredTrait<
   "op must appear in a module-like op's block",
 //TBD  CPred<"isDirectInModuleLikeOp($_op.getParentOp())">>;
 CPred<"true">>;
 
-class TopLevelOp<string mnemonic, list<OpTrait> traits = []> :
+class TopLevelOp<string mnemonic, list<Trait> traits = []> :
   SclOp<mnemonic, !listconcat(traits, [InModuleScope])>;
 
-class FuncTerminatorOp<string mnemonic, list<OpTrait> traits = []> :
+class FuncTerminatorOp<string mnemonic, list<Trait> traits = []> :
     SclOp<mnemonic, !listconcat(traits, [NoSideEffect, Terminator])>;
 
 
