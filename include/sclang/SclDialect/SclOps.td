@@ -23,6 +23,7 @@
 #define SCL_OPS
 
 include "sclang/SclDialect/SclBase.td"
+include "mlir/IR/FunctionInterfaces.td"
 include "mlir/IR/OpAsmInterface.td"
 include "mlir/Interfaces/CallInterfaces.td"
 include "mlir/Interfaces/CastInterfaces.td"
@@ -91,7 +92,7 @@ def CallFcOp : SclOp<"call.fc", [
 
 def FunctionOp : TopLevelOp<"function", [
     AutomaticAllocationScope, DeclareOpInterfaceMethods<CallableOpInterface>,
-    FunctionLike, IsolatedFromAbove, Symbol
+    FunctionOpInterface, IsolatedFromAbove, Symbol
   ]> {
   let summary = "Declare or define a function";
 
