@@ -132,19 +132,19 @@ public:
 
   /// Create an instance of a `StructType` with the given element types. There
   /// *must* be at least one element type.
-  static StructType get(llvm::ArrayRef<mlir::Identifier> elementNames,
+  static StructType get(llvm::ArrayRef<mlir::StringAttr> elementNames,
                         llvm::ArrayRef<mlir::Type> elementTypes);
 
   /// Returns the elements of this struct type.
-  llvm::ArrayRef<mlir::Identifier> getElementNames();
+  llvm::ArrayRef<mlir::StringAttr> getElementNames();
 
   /// Returns the elements of this struct type.
   llvm::ArrayRef<mlir::Type> getElementTypes();
 
   /// Returns the type of the given element.
-  mlir::Type getElementType(mlir::Identifier name);
+  mlir::Type getElementType(mlir::StringAttr name);
   mlir::Type getElementType(llvm::StringRef name) {
-    return getElementType(Identifier::get(name, getContext()));
+    return getElementType(StringAttr::get(getContext(), name));
   }
 
   /// Returns the number of elements held by this struct.
