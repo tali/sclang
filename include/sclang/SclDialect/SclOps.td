@@ -113,9 +113,10 @@ def FunctionOp : TopLevelOp<"function", [
 
   let regions = (region AnyRegion:$body);
 
-  let parser = [{ return ::parseFunctionOp(parser, result); }];
-  let printer = [{ return ::print(p, *this); }];
-  let verifier = [{ return success(); }];
+  let hasCustomAssemblyFormat = 1;
+//  let parser = [{ return ::parseFunctionOp(parser, result); }];
+//  let printer = [{ return ::print(p, *this); }];
+//  let verifier = [{ return success(); }];
 
   let builders = [
     OpBuilder<(ins "StringRef":$name, "FunctionType":$type)>
@@ -166,9 +167,10 @@ def FunctionBlockOp : TopLevelOp<"function_block", [
 
   let regions = (region AnyRegion:$body);
 
-  let parser = [{ return ::parseFunctionBlockOp(parser, result); }];
-  let printer = [{ return ::print(p, *this); }];
-  let verifier = [{ return success(); }];
+  let hasCustomAssemblyFormat = 1;
+//  let parser = [{ return ::parseFunctionBlockOp(parser, result); }];
+//  let printer = [{ return ::print(p, *this); }];
+//  let verifier = [{ return success(); }];
 
   let builders = [
     OpBuilder<(ins "StringRef":$name)>
@@ -265,8 +267,9 @@ def ConstantS5TimeOp : SclOp<"constant.s5time",
   let summary = "literal time or date constant";
   let arguments = (ins UI16Attr:$value);
   let results = (outs Scl_S5TimeType:$result);
-  let parser = [{ return ::parseConstantS5TimeOp(parser, result); }];
-  let printer = [{ return ::print(p, *this); }];
+  let hasCustomAssemblyFormat = 1;
+//  let parser = [{ return ::parseConstantS5TimeOp(parser, result); }];
+//  let printer = [{ return ::print(p, *this); }];
   let builders = [ OpBuilder<(ins "unsigned int":$timeMS)> ];
   let extraClassDeclaration = [{
     unsigned int getTimeMS();
@@ -279,8 +282,9 @@ def ConstantTimeOp : SclOp<"constant.time",
   let summary = "literal time constant";
   let arguments = (ins SI32Attr:$value);
   let results = (outs Scl_TimeType:$result);
-  let parser = [{ return ::parseConstantTimeOp(parser, result); }];
-  let printer = [{ return ::print(p, *this); }];
+  let hasCustomAssemblyFormat = 1;
+//  let parser = [{ return ::parseConstantTimeOp(parser, result); }];
+//  let printer = [{ return ::print(p, *this); }];
   let builders = [ OpBuilder<(ins "int":$timeMS)> ];
   let hasFolder = 1;
 }
@@ -290,8 +294,9 @@ def ConstantDateOp : SclOp<"constant.date",
   let summary = "literal time constant";
   let arguments = (ins UI16Attr:$value);
   let results = (outs Scl_DateType:$result);
-  let parser = [{ return ::parseConstantDateOp(parser, result); }];
-  let printer = [{ return ::print(p, *this); }];
+  let hasCustomAssemblyFormat = 1;
+//  let parser = [{ return ::parseConstantDateOp(parser, result); }];
+//  let printer = [{ return ::print(p, *this); }];
   let builders = [ OpBuilder<(ins "int":$year, "int":$month, "int":$day)> ];
   let hasFolder = 1;
 }
@@ -301,8 +306,9 @@ def ConstantTimeOfDayOp : SclOp<"constant.tod",
   let summary = "literal time constant";
   let arguments = (ins UI32Attr:$value);
   let results = (outs Scl_TimeOfDayType:$result);
-  let parser = [{ return ::parseConstantTimeOfDayOp(parser, result); }];
-  let printer = [{ return ::print(p, *this); }];
+  let hasCustomAssemblyFormat = 1;
+//  let parser = [{ return ::parseConstantTimeOfDayOp(parser, result); }];
+//  let printer = [{ return ::print(p, *this); }];
   let builders = [ OpBuilder<(ins "uint32_t":$timeMS)> ];
   let hasFolder = 1;
 }
@@ -312,8 +318,9 @@ def ConstantDateAndTimeOp : SclOp<"constant.dt",
   let summary = "literal time constant";
   let arguments = (ins UI64Attr:$value);
   let results = (outs Scl_DateAndTimeType:$result);
-  let parser = [{ return ::parseConstantDateAndTimeOp(parser, result); }];
-  let printer = [{ return ::print(p, *this); }];
+  let hasCustomAssemblyFormat = 1;
+//  let parser = [{ return ::parseConstantDateAndTimeOp(parser, result); }];
+//  let printer = [{ return ::print(p, *this); }];
   let builders = [
     OpBuilder<(ins
       "int":$year, "int":$month, "int":$day,

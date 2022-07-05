@@ -262,8 +262,8 @@ unsigned ConstantS5TimeOp::getTimeMS() {
   assert(false);
 }
 
-static mlir::ParseResult parseConstantS5TimeOp(mlir::OpAsmParser &parser,
-                                               mlir::OperationState &result) {
+mlir::ParseResult ConstantS5TimeOp::parse(mlir::OpAsmParser &parser,
+                                          mlir::OperationState &result) {
   uint64_t secs, msecs;
   if (parser.parseOptionalAttrDict(result.attributes) ||
       parser.parseInteger(secs) || parser.parseKeyword("s") ||
@@ -279,7 +279,7 @@ static mlir::ParseResult parseConstantS5TimeOp(mlir::OpAsmParser &parser,
   return success();
 }
 
-static void print(mlir::OpAsmPrinter &printer, ConstantS5TimeOp op) {
+void ConstantS5TimeOp::print(mlir::OpAsmPrinter &printer, ConstantS5TimeOp op) {
   printer << " ";
   printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
   unsigned t = op.getTimeMS();
@@ -312,8 +312,8 @@ void ConstantTimeOp::build(OpBuilder &builder, OperationState &state,
   build(builder, state, type, timeMS);
 }
 
-static mlir::ParseResult parseConstantTimeOp(mlir::OpAsmParser &parser,
-                                             mlir::OperationState &result) {
+mlir::ParseResult ConstantTimeOp::parse(mlir::OpAsmParser &parser,
+                                        mlir::OperationState &result) {
   uint64_t secs, msecs;
   if (parser.parseOptionalAttrDict(result.attributes) ||
       parser.parseInteger(secs) || parser.parseKeyword("s") ||
@@ -327,7 +327,7 @@ static mlir::ParseResult parseConstantTimeOp(mlir::OpAsmParser &parser,
   return success();
 }
 
-static void print(mlir::OpAsmPrinter &printer, ConstantTimeOp op) {
+void ConstantTimeOp::print(mlir::OpAsmPrinter &printer, ConstantTimeOp op) {
   printer << " ";
   printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
   int32_t t = op.value();
@@ -363,8 +363,8 @@ void ConstantDateOp::build(OpBuilder &builder, OperationState &state,
   build(builder, state, type, days);
 }
 
-static mlir::ParseResult parseConstantDateOp(mlir::OpAsmParser &parser,
-                                             mlir::OperationState &result) {
+mlir::ParseResult ConstantDateOp::parse(mlir::OpAsmParser &parser,
+                                        mlir::OperationState &result) {
   int year, month, day;
   if (parser.parseOptionalAttrDict(result.attributes) ||
       parser.parseInteger(year) ||
@@ -385,7 +385,7 @@ static mlir::ParseResult parseConstantDateOp(mlir::OpAsmParser &parser,
   return success();
 }
 
-static void print(mlir::OpAsmPrinter &printer, ConstantDateOp op) {
+void ConstantDateOp::print(mlir::OpAsmPrinter &printer, ConstantDateOp op) {
   printer << " ";
   printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
   int year, month, day;
@@ -420,8 +420,8 @@ void ConstantTimeOfDayOp::build(OpBuilder &builder, OperationState &state,
   build(builder, state, type, timeMS);
 }
 
-static mlir::ParseResult parseConstantTimeOfDayOp(mlir::OpAsmParser &parser,
-                                               mlir::OperationState &result) {
+mlir::ParseResult ConstantTimeOfDayOp::parse(mlir::OpAsmParser &parser,
+                                             mlir::OperationState &result) {
   uint64_t secs, msecs;
   if (parser.parseOptionalAttrDict(result.attributes) ||
       parser.parseInteger(secs) || parser.parseKeyword("s") ||
@@ -435,7 +435,7 @@ static mlir::ParseResult parseConstantTimeOfDayOp(mlir::OpAsmParser &parser,
   return success();
 }
 
-static void print(mlir::OpAsmPrinter &printer, ConstantTimeOfDayOp op) {
+void ConstantTimeOfDayOp::print(mlir::OpAsmPrinter &printer, ConstantTimeOfDayOp op) {
   printer << " ";
   printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
   int32_t t = op.value();
@@ -470,7 +470,7 @@ void ConstantDateAndTimeOp::build(OpBuilder &builder, OperationState &state,
   build(builder, state, type, value);
 }
 
-static mlir::ParseResult parseConstantDateAndTimeOp(mlir::OpAsmParser &parser,
+mlir::ParseResult ConstantDateAndTimeOp::parse(mlir::OpAsmParser &parser,
                                                mlir::OperationState &result) {
   int year, month, day, hour, min, sec, msec;
   if (parser.parseOptionalAttrDict(result.attributes) ||
@@ -491,7 +491,7 @@ static mlir::ParseResult parseConstantDateAndTimeOp(mlir::OpAsmParser &parser,
   return success();
 }
 
-static void print(mlir::OpAsmPrinter &printer, ConstantDateAndTimeOp op) {
+void ConstantDateAndTimeOp::print(mlir::OpAsmPrinter &printer, ConstantDateAndTimeOp op) {
   printer << " ";
   printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
 
@@ -566,7 +566,7 @@ bool DialectCastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
 // MARK: FunctionOp
 //===----------------------------------------------------------------------===//
 
-static ParseResult parseFunctionOp(OpAsmParser &parser, OperationState &state) {
+ParseResult FunctionOp::parse(OpAsmParser &parser, OperationState &state) {
   auto buildFuncType = [](Builder &builder, ArrayRef<Type> argTypes,
                           ArrayRef<Type> results, function_like_impl::VariadicFlag,
                           std::string &) {
@@ -577,7 +577,7 @@ static ParseResult parseFunctionOp(OpAsmParser &parser, OperationState &state) {
                                          buildFuncType);
 }
 
-static void print(OpAsmPrinter &printer, FunctionOp fnOp) {
+void FunctionOp::print(OpAsmPrinter &printer, FunctionOp fnOp) {
   FunctionType fnType = fnOp.getType();
   function_like_impl::printFunctionLikeOp(printer, fnOp, fnType.getInputs(),
                                   /*isVariadic=*/false, fnType.getResults());
@@ -640,7 +640,7 @@ ArrayRef<Type> FunctionOp::getCallableResults() {
 // MARK: FunctionBlockOp
 //===----------------------------------------------------------------------===//
 
-static ParseResult parseFunctionBlockOp(OpAsmParser &parser, OperationState &state) {
+ParseResult FunctionBlockOp::parse(OpAsmParser &parser, OperationState &state) {
   auto buildFuncType = [](Builder &builder, ArrayRef<Type> argTypes,
                           ArrayRef<Type> results, function_like_impl::VariadicFlag,
                           std::string &) {
@@ -651,7 +651,7 @@ static ParseResult parseFunctionBlockOp(OpAsmParser &parser, OperationState &sta
                                          buildFuncType);
 }
 
-static void print(OpAsmPrinter &printer, FunctionBlockOp fnOp) {
+void FunctionBlockOp::print(OpAsmPrinter &printer, FunctionBlockOp fnOp) {
   FunctionType fnType = fnOp.getType();
   function_like_impl::printFunctionLikeOp(printer, fnOp, fnType.getInputs(),
                                   /*isVariadic=*/false, fnType.getResults());
