@@ -15,15 +15,19 @@
 #include "sclang/SclDialect/Dialect.h"
 #include "sclang/SclTransforms/Passes.h"
 
+#include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
+#include "mlir/Conversion/ArithmeticToLLVM/ArithmeticToLLVM.h"
+#include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
+#include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
-#include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
-#include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
-#include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVMPass.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/SCF.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 
@@ -41,8 +45,8 @@ struct DebugPrintOpLowering : public OpConversionPattern<scl::DebugPrintOp> {
     symbolTable(symbolTable) {}
 
   LogicalResult
-  matchAndRewrite(scl::DebugPrintOp op, ArrayRef<Value> operands,
-                  ConversionPatternRewriter &rewriter) const final {
+  matchAndRewrite(scl::DebugPrintOp op, scl::DebugPrintOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
     ModuleOp parentModule = op->getParentOfType<ModuleOp>();
 
@@ -62,7 +66,7 @@ struct DebugPrintOpLowering : public OpConversionPattern<scl::DebugPrintOp> {
 
     // Generate call to `printf`.
     SmallVector<Value, 2> printfArgs = {{ formatSpecifierCst, msgCst }};
-    rewriter.create<CallOp>(loc, printfRef, printfRetType, printfArgs);
+    rewriter.create<func::CallOp>(loc, printfRef, printfRetType, printfArgs);
 
     rewriter.eraseOp(op);
     return success();
@@ -142,6 +146,8 @@ struct SclToLLVMLoweringPass
     registry.insert<LLVM::LLVMDialect>();
   }
   void runOnOperation() final;
+
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(SclToLLVMLoweringPass)
 };
 } // end anonymous namespace
 
@@ -169,9 +175,12 @@ void SclToLLVMLoweringPass::runOnOperation() {
   // patterns must be applied to fully transform an illegal operation into a
   // set of legal ones.
   RewritePatternSet patterns(context);
-  populateLoopToStdConversionPatterns(patterns);
+  populateAffineToStdConversionPatterns(patterns);
+  populateSCFToControlFlowConversionPatterns(patterns);
   populateMemRefToLLVMConversionPatterns(typeConverter, patterns);
-  populateStdToLLVMConversionPatterns(typeConverter, patterns);
+  arith::populateArithmeticToLLVMConversionPatterns(typeConverter, patterns);
+  populateFuncToLLVMConversionPatterns(typeConverter, patterns);
+  cf::populateControlFlowToLLVMConversionPatterns(typeConverter, patterns);
 
   auto module = getOperation();
   SymbolTable symbolTable(module);

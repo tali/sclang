@@ -279,10 +279,10 @@ mlir::ParseResult ConstantS5TimeOp::parse(mlir::OpAsmParser &parser,
   return success();
 }
 
-void ConstantS5TimeOp::print(mlir::OpAsmPrinter &printer, ConstantS5TimeOp op) {
+void ConstantS5TimeOp::print(mlir::OpAsmPrinter &printer) {
   printer << " ";
-  printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
-  unsigned t = op.getTimeMS();
+  printer.printOptionalAttrDict((*this)->getAttrs(), /*elidedAttrs=*/{"value"});
+  unsigned t = getTimeMS();
   int secs = t / 1000;
   int msecs = t % 1000;
   printer << secs << " s " << msecs;
@@ -327,10 +327,10 @@ mlir::ParseResult ConstantTimeOp::parse(mlir::OpAsmParser &parser,
   return success();
 }
 
-void ConstantTimeOp::print(mlir::OpAsmPrinter &printer, ConstantTimeOp op) {
+void ConstantTimeOp::print(mlir::OpAsmPrinter &printer) {
   printer << " ";
-  printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
-  int32_t t = op.value();
+  printer.printOptionalAttrDict((*this)->getAttrs(), /*elidedAttrs=*/{"value"});
+  int32_t t = value();
   int secs = t / 1000;
   int msecs = t % 1000;
   printer << secs << " s " << msecs;
@@ -385,11 +385,11 @@ mlir::ParseResult ConstantDateOp::parse(mlir::OpAsmParser &parser,
   return success();
 }
 
-void ConstantDateOp::print(mlir::OpAsmPrinter &printer, ConstantDateOp op) {
+void ConstantDateOp::print(mlir::OpAsmPrinter &printer) {
   printer << " ";
-  printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
+  printer.printOptionalAttrDict((*this)->getAttrs(), /*elidedAttrs=*/{"value"});
   int year, month, day;
-  getDateFromDaysSince1990(op.value(), &year, &month, &day);
+  getDateFromDaysSince1990(value(), &year, &month, &day);
   printer << year << " " << month << " " << day;
 }
 
@@ -435,10 +435,10 @@ mlir::ParseResult ConstantTimeOfDayOp::parse(mlir::OpAsmParser &parser,
   return success();
 }
 
-void ConstantTimeOfDayOp::print(mlir::OpAsmPrinter &printer, ConstantTimeOfDayOp op) {
+void ConstantTimeOfDayOp::print(mlir::OpAsmPrinter &printer) {
   printer << " ";
-  printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
-  int32_t t = op.value();
+  printer.printOptionalAttrDict((*this)->getAttrs(), /*elidedAttrs=*/{"value"});
+  int32_t t = value();
   int secs = t / 1000;
   int msecs = t % 1000;
   printer << secs << " s " << msecs;
@@ -491,12 +491,12 @@ mlir::ParseResult ConstantDateAndTimeOp::parse(mlir::OpAsmParser &parser,
   return success();
 }
 
-void ConstantDateAndTimeOp::print(mlir::OpAsmPrinter &printer, ConstantDateAndTimeOp op) {
+void ConstantDateAndTimeOp::print(mlir::OpAsmPrinter &printer) {
   printer << " ";
-  printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
+  printer.printOptionalAttrDict((*this)->getAttrs(), /*elidedAttrs=*/{"value"});
 
   int year, month, day, hour, min, sec, msec;
-  from_datetime(op.value(), &year, &month, &day, &hour, &min, &sec, &msec);
+  from_datetime(value(), &year, &month, &day, &hour, &min, &sec, &msec);
   printer << year << ':' << month << ':' << day << ' ';
   printer << hour << ':' << min << ':' << sec << ' ' << msec;
 }
@@ -568,33 +568,33 @@ bool DialectCastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
 
 ParseResult FunctionOp::parse(OpAsmParser &parser, OperationState &state) {
   auto buildFuncType = [](Builder &builder, ArrayRef<Type> argTypes,
-                          ArrayRef<Type> results, function_like_impl::VariadicFlag,
+                          ArrayRef<Type> results,
+                          function_interface_impl::VariadicFlag,
                           std::string &) {
     return builder.getFunctionType(argTypes, results);
   };
 
-  return function_like_impl::parseFunctionLikeOp(parser, state, /*allowVariadic=*/false,
-                                         buildFuncType);
+  return function_interface_impl::parseFunctionOp(parser, state,
+                                                   /*allowVariadic=*/false,
+                                                   buildFuncType);
 }
 
-void FunctionOp::print(OpAsmPrinter &printer, FunctionOp fnOp) {
-  FunctionType fnType = fnOp.getType();
-  function_like_impl::printFunctionLikeOp(printer, fnOp, fnType.getInputs(),
-                                  /*isVariadic=*/false, fnType.getResults());
+void FunctionOp::print(OpAsmPrinter &printer) {
+  function_interface_impl::printFunctionOp(printer, *this, /*isVariadic=*/false);
 }
 
 LogicalResult FunctionOp::verifyType() {
-  auto type = getTypeAttr().getValue();
+  auto type = function_typeAttr().getValue();
   if (!type.isa<FunctionType>())
-    return emitOpError("requires '" + getTypeAttrName() +
+    return emitOpError("requires '" + function_typeAttrName().getValue() +
                        "' attribute of function type");
-  if (getType().getNumResults() > 1)
+  if (function_type().getNumResults() > 1)
     return emitOpError("cannot have more than one result");
   return success();
 }
 
 LogicalResult FunctionOp::verifyBody() {
-  FunctionType fnType = getType();
+  FunctionType fnType = function_type();
   auto walkResult = walk([fnType](Operation *op) -> WalkResult {
     if (auto retOp = dyn_cast<ReturnOp>(op)) {
       if (fnType.getNumResults() != 0)
@@ -618,14 +618,6 @@ LogicalResult FunctionOp::verifyBody() {
   return failure(walkResult.wasInterrupted());
 }
 
-void FunctionOp::build(OpBuilder &builder, OperationState &state,
-                       StringRef name, FunctionType type) {
-  state.addAttribute(SymbolTable::getSymbolAttrName(),
-                     builder.getStringAttr(name));
-  state.addAttribute(getTypeAttrName(), TypeAttr::get(type));
-  state.addRegion();
-}
-
 // CallableOpInterface
 Region *FunctionOp::getCallableRegion() {
   return isExternal() ? nullptr : &body();
@@ -633,7 +625,7 @@ Region *FunctionOp::getCallableRegion() {
 
 // CallableOpInterface
 ArrayRef<Type> FunctionOp::getCallableResults() {
-  return getType().getResults();
+  return function_type().getResults();
 }
 
 //===----------------------------------------------------------------------===//
@@ -642,35 +634,35 @@ ArrayRef<Type> FunctionOp::getCallableResults() {
 
 ParseResult FunctionBlockOp::parse(OpAsmParser &parser, OperationState &state) {
   auto buildFuncType = [](Builder &builder, ArrayRef<Type> argTypes,
-                          ArrayRef<Type> results, function_like_impl::VariadicFlag,
+                          ArrayRef<Type> results,
+                          function_interface_impl::VariadicFlag,
                           std::string &) {
     return builder.getFunctionType(argTypes, results);
   };
 
-  return function_like_impl::parseFunctionLikeOp(parser, state, /*allowVariadic=*/false,
-                                         buildFuncType);
+  return function_interface_impl::parseFunctionOp(parser, state,
+                                                   /*allowVariadic=*/false,
+                                                   buildFuncType);
 }
 
-void FunctionBlockOp::print(OpAsmPrinter &printer, FunctionBlockOp fnOp) {
-  FunctionType fnType = fnOp.getType();
-  function_like_impl::printFunctionLikeOp(printer, fnOp, fnType.getInputs(),
-                                  /*isVariadic=*/false, fnType.getResults());
+void FunctionBlockOp::print(OpAsmPrinter &printer) {
+  function_interface_impl::printFunctionOp(printer, *this, /*isVariadic=*/false);
 }
 
 LogicalResult FunctionBlockOp::verifyType() {
-  auto type = getTypeAttr().getValue();
+  auto type = function_typeAttr().getValue();
   if (!type.isa<FunctionType>())
-    return emitOpError("requires '" + getTypeAttrName() +
+    return emitOpError("requires '" + function_typeAttrName().getValue() +
                        "' attribute of function type");
-  if (getType().getNumInputs() != 1)
+  if (function_type().getNumInputs() != 1)
     return emitOpError("must have one input");
-  if (getType().getNumResults() != 0)
+  if (function_type().getNumResults() != 0)
     return emitOpError("cannot have results");
   return success();
 }
 
 LogicalResult FunctionBlockOp::verifyBody() {
-  FunctionType fnType = getType();
+  FunctionType fnType = function_type();
   auto walkResult = walk([fnType](Operation *op) -> WalkResult {
     if (auto retOp = dyn_cast<ReturnValueOp>(op)) {
       return retOp.emitOpError(
@@ -691,9 +683,10 @@ void FunctionBlockOp::build(OpBuilder &builder, OperationState &state,
   SmallVector<Type, 0> results = {};
   FunctionType func_type = builder.getFunctionType(inputs, results);
 
-  state.addAttribute(mlir::SymbolTable::getSymbolAttrName(),
+  state.addAttribute(mlir::StringAttr::get(builder.getContext(), "sym_name"),
                      builder.getStringAttr(name));
-  state.addAttribute(getTypeAttrName(), TypeAttr::get(func_type));
+  state.addAttribute(mlir::StringAttr::get(builder.getContext(), "function_type"),
+                     TypeAttr::get(func_type));
 
   state.addRegion();
 }
@@ -705,7 +698,7 @@ Region *FunctionBlockOp::getCallableRegion() {
 
 // CallableOpInterface
 ArrayRef<Type> FunctionBlockOp::getCallableResults() {
-  return getType().getResults();
+  return function_type().getResults();
 }
 
 

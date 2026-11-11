@@ -77,7 +77,7 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
   mlir::LogicalResult
   canonicalizeArguments(scl::CallFcOp op, scl::FunctionOp func, PatternRewriter &rewriter) const {
     auto context = op->getContext();
-    auto funcType = func.getType();
+    auto funcType = func.getFunctionType().cast<FunctionType>();
 
     auto argCallNames = op.argNames().getValue();
     SmallBitVector argUsed(argCallNames.size());

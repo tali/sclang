@@ -335,7 +335,7 @@ void print(StructType type, mlir::DialectAsmPrinter &printer) {
   printer << "struct<";
   for (unsigned i = 0; i < names.size(); i++) {
     if (i) printer << ", ";
-    printer << names[i];
+    printer << names[i].getValue();
     printer << ": ";
     printer << types[i];
   }

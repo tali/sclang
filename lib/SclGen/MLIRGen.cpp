@@ -24,7 +24,6 @@
 #include "sclang/SclDialect/Dialect.h"
 #include "sclang/SclGen/AST.h"
 
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinDialect.h"
@@ -138,7 +137,7 @@ private:
 
   /// Helper conversion for a SCL AST location to an MLIR location.
   mlir::Location loc(Location loc) {
-    return mlir::FileLineColLoc::get(builder.getIdentifier(*loc.file), loc.line,
+    return mlir::FileLineColLoc::get(builder.getStringAttr(*loc.file), loc.line,
                                      loc.col);
   }
 
@@ -300,7 +299,7 @@ private:
     });
   }
 
-  mlir::FuncOp mlirGen(const OrganizationBlockAST *ob) {
+  mlir::Operation *mlirGen(const OrganizationBlockAST *ob) {
     emitError(loc(ob->loc())) << "TBD not implemented";
     return nullptr;
   }
@@ -503,7 +502,7 @@ private:
     return builder.create<DataBlockOp>(location, typeAttr, nameAttr);
   }
 
-  mlir::FuncOp mlirGen(const UserDefinedTypeAST *udt) {
+  mlir::Operation *mlirGen(const UserDefinedTypeAST *udt) {
     emitError(loc(udt->loc())) << "TBD not implemented";
     return nullptr;
   }
@@ -1291,7 +1290,7 @@ private:
 namespace sclang {
 
 // The public API for codegen.
-mlir::OwningModuleRef mlirGen(mlir::MLIRContext &context,
+mlir::OwningOpRef<mlir::ModuleOp> mlirGen(mlir::MLIRContext &context,
                               ModuleAST &moduleAST) {
   return MLIRGenImpl(context).mlirGen(&moduleAST);
 }

@@ -17,6 +17,8 @@ td_library(
         "@llvm-project//mlir:CallInterfacesTdFiles",
         "@llvm-project//mlir:CastInterfacesTdFiles",
         "@llvm-project//mlir:OpBaseTdFiles",
+        "@llvm-project//mlir:InferTypeOpInterfaceTdFiles",
+        "@llvm-project//mlir:FunctionInterfacesTdFiles",
         "@llvm-project//mlir:SideEffectInterfacesTdFiles",
     ],
 )
@@ -63,6 +65,7 @@ cc_library(
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:Dialect",
         "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:InferTypeOpInterface",
         "@llvm-project//mlir:SideEffectInterfaces",
     ],
 )

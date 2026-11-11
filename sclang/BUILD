@@ -35,7 +35,6 @@ cc_binary(
         "@llvm-project//mlir:SCFToStandard",
         "@llvm-project//mlir:SideEffectInterfaces",
         "@llvm-project//mlir:StandardOps",
-        "@llvm-project//mlir:StandardToLLVM",
         "@llvm-project//mlir:ToLLVMIRTranslation",
         "@llvm-project//mlir:Transforms",
     ],

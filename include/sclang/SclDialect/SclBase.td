@@ -100,10 +100,10 @@ class CompareOp<string mnemonic, list<Trait> traits = []> :
     Arguments<(ins AnyType:$lhs, AnyType:$rhs)>,
     Results<(outs Scl_Bool:$result)>,
     AssemblyFormat<"attr-dict $lhs `,` $rhs `:` type($rhs)"> {
-      let builders = [OpBuilder<(ins "Value":$lhs, "Value":$rhs), [{
-        auto resType = LogicalType::get($_builder.getContext(), 1);
-        build($_builder, $_state, resType, lhs, rhs);
-      }]>];
+//      let builders = [OpBuilder<(ins "Value":$lhs, "Value":$rhs), [{
+//        auto resType = LogicalType::get($_builder.getContext(), 1);
+//        build($_builder, $_state, resType, lhs, rhs);
+//      }]>];
     }
 class UnaryArithmeticOp<string mnemonic, list<Trait> traits = []> :
     SclOp<mnemonic, !listconcat(traits, [SameOperandsAndResultType])>,
@@ -113,10 +113,11 @@ class UnaryArithmeticOp<string mnemonic, list<Trait> traits = []> :
 
 
 // Check that an op can only be used within the scope of a module-like op.
-def InModuleScope : PredTrait<
+def InModuleScope : PredOpTrait<
   "op must appear in a module-like op's block",
 //TBD  CPred<"isDirectInModuleLikeOp($_op.getParentOp())">>;
 CPred<"true">>;
+
 
 class TopLevelOp<string mnemonic, list<Trait> traits = []> :
   SclOp<mnemonic, !listconcat(traits, [InModuleScope])>;

@@ -25,9 +25,10 @@
 
 #include <memory>
 
+#include "mlir/IR/BuiltinOps.h"
+
 namespace mlir {
 class MLIRContext;
-class OwningModuleRef;
 } // namespace mlir
 
 namespace sclang {
@@ -35,7 +36,7 @@ class ModuleAST;
 
 /// Emit IR for the given SCL moduleAST, returns a newly created MLIR module
 /// or nullptr on failure.
-mlir::OwningModuleRef mlirGen(mlir::MLIRContext &context, ModuleAST &moduleAST);
+mlir::OwningOpRef<mlir::ModuleOp> mlirGen(mlir::MLIRContext &context, ModuleAST &moduleAST);
 } // namespace sclang
 
 #endif // SCLANG_MLIRGEN_H_

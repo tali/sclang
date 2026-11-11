@@ -91,7 +91,8 @@ def CallFcOp : SclOp<"call.fc", [
 }
 
 def FunctionOp : TopLevelOp<"function", [
-    AutomaticAllocationScope, DeclareOpInterfaceMethods<CallableOpInterface>,
+    AutomaticAllocationScope,
+    DeclareOpInterfaceMethods<CallableOpInterface>,
     FunctionOpInterface, IsolatedFromAbove, Symbol
   ]> {
   let summary = "Declare or define a function";
@@ -105,8 +106,8 @@ def FunctionOp : TopLevelOp<"function", [
   }];
 
   let arguments = (ins
-    TypeAttr:$type,
-    StrAttr:$sym_name
+    SymbolNameAttr:$sym_name,
+    TypeAttrOf<FunctionType>:$function_type
   );
 
   let results = (outs);
@@ -114,39 +115,20 @@ def FunctionOp : TopLevelOp<"function", [
   let regions = (region AnyRegion:$body);
 
   let hasCustomAssemblyFormat = 1;
-//  let parser = [{ return ::parseFunctionOp(parser, result); }];
-//  let printer = [{ return ::print(p, *this); }];
-//  let verifier = [{ return success(); }];
-
-  let builders = [
-    OpBuilder<(ins "StringRef":$name, "FunctionType":$type)>
-  ];
 
   let extraClassDeclaration = [{
-  private:
-    // This trait needs access to the hooks defined below.
-    friend class Trait::FunctionLike<FunctionOp>;
-
-    /// Returns the number of arguments. Hook for Trait::FunctionLike.
-    unsigned getNumFuncArguments() { return getType().getNumInputs(); }
-
-    /// Returns the number of results. Hook for Trait::FunctionLike.
-    unsigned getNumFuncResults() { return getType().getNumResults(); }
-
-    /// Hook for Trait::FunctionLike, called after verifying that the 'type'
-    /// attribute is present and checks if it holds a function type. Ensures
-    /// getType, getNumFuncArguments, and getNumFuncResults can be called safely
+    FunctionType getFunctionType() { return function_type(); }
+    ArrayRef<Type> getArgumentTypes() { return getFunctionType().getInputs(); }
+    ArrayRef<Type> getResultTypes() { return getFunctionType().getResults(); }
     LogicalResult verifyType();
-
-    /// Hook for Trait::FunctionLike, called after verifying the function
-    /// type and the presence of the (potentially empty) function body.
     LogicalResult verifyBody();
   }];
 }
 
 def FunctionBlockOp : TopLevelOp<"function_block", [
-    AutomaticAllocationScope, DeclareOpInterfaceMethods<CallableOpInterface>,
-    FunctionLike, IsolatedFromAbove, Symbol, SymbolTable
+    AutomaticAllocationScope,
+    DeclareOpInterfaceMethods<CallableOpInterface>,
+    FunctionOpInterface, IsolatedFromAbove, Symbol, SymbolTable
   ]> {
   let summary = "Declare or define a function block";
 
@@ -159,8 +141,8 @@ def FunctionBlockOp : TopLevelOp<"function_block", [
   }];
 
   let arguments = (ins
-    TypeAttr:$type,
-    StrAttr:$sym_name
+    SymbolNameAttr:$sym_name,
+    TypeAttrOf<FunctionType>:$function_type
   );
 
   let results = (outs);
@@ -172,28 +154,13 @@ def FunctionBlockOp : TopLevelOp<"function_block", [
 //  let printer = [{ return ::print(p, *this); }];
 //  let verifier = [{ return success(); }];
 
-  let builders = [
-    OpBuilder<(ins "StringRef":$name)>
-  ];
-
   let extraClassDeclaration = [{
-  private:
-    // This trait needs access to the hooks defined below.
-    friend class Trait::FunctionLike<FunctionBlockOp>;
-
-    /// Returns the number of arguments. Hook for Trait::FunctionLike.
-    unsigned getNumFuncArguments() { return getType().getNumInputs(); }
-
-    /// Returns the number of results. Hook for Trait::FunctionLike.
-    unsigned getNumFuncResults() { return getType().getNumResults(); }
-
-    /// Hook for Trait::FunctionLike, called after verifying that the 'type'
-    /// attribute is present and checks if it holds a function type. Ensures
-    /// getType, getNumFuncArguments, and getNumFuncResults can be called safely
+    static void build(OpBuilder &builder, OperationState &state,
+                      StringRef name);
+    FunctionType getFunctionType() { return function_type(); }
+    ArrayRef<Type> getArgumentTypes() { return getFunctionType().getInputs(); }
+    ArrayRef<Type> getResultTypes() { return getFunctionType().getResults(); }
     LogicalResult verifyType();
-
-    /// Hook for Trait::FunctionLike, called after verifying the function
-    /// type and the presence of the (potentially empty) function body.
     LogicalResult verifyBody();
   }];
 }
