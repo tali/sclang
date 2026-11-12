@@ -107,7 +107,9 @@ def FunctionOp : TopLevelOp<"function", [
 
   let arguments = (ins
     SymbolNameAttr:$sym_name,
-    TypeAttrOf<FunctionType>:$function_type
+    TypeAttrOf<FunctionType>:$function_type,
+    OptionalAttr<DictArrayAttr>:$arg_attrs,
+    OptionalAttr<DictArrayAttr>:$res_attrs
   );
 
   let results = (outs);
@@ -116,8 +118,11 @@ def FunctionOp : TopLevelOp<"function", [
 
   let hasCustomAssemblyFormat = 1;
 
+  let builders = [
+    OpBuilder<(ins "StringRef":$name, "FunctionType":$function_type)>
+  ];
+
   let extraClassDeclaration = [{
-    FunctionType getFunctionType() { return function_type(); }
     ArrayRef<Type> getArgumentTypes() { return getFunctionType().getInputs(); }
     ArrayRef<Type> getResultTypes() { return getFunctionType().getResults(); }
     LogicalResult verifyType();
@@ -142,7 +147,9 @@ def FunctionBlockOp : TopLevelOp<"function_block", [
 
   let arguments = (ins
     SymbolNameAttr:$sym_name,
-    TypeAttrOf<FunctionType>:$function_type
+    TypeAttrOf<FunctionType>:$function_type,
+    OptionalAttr<DictArrayAttr>:$arg_attrs,
+    OptionalAttr<DictArrayAttr>:$res_attrs
   );
 
   let results = (outs);
@@ -150,14 +157,10 @@ def FunctionBlockOp : TopLevelOp<"function_block", [
   let regions = (region AnyRegion:$body);
 
   let hasCustomAssemblyFormat = 1;
-//  let parser = [{ return ::parseFunctionBlockOp(parser, result); }];
-//  let printer = [{ return ::print(p, *this); }];
-//  let verifier = [{ return success(); }];
 
   let extraClassDeclaration = [{
     static void build(OpBuilder &builder, OperationState &state,
                       StringRef name);
-    FunctionType getFunctionType() { return function_type(); }
     ArrayRef<Type> getArgumentTypes() { return getFunctionType().getInputs(); }
     ArrayRef<Type> getResultTypes() { return getFunctionType().getResults(); }
     LogicalResult verifyType();
@@ -199,21 +202,21 @@ def TempVariableOp : SclOp<"tmpvar",
   let assemblyFormat = "$name attr-dict `:` type($result)";
 }
 
-def BitCastOp : SclOp<"bit.cast", [DeclareOpInterfaceMethods<CastOpInterface>, NoSideEffect]> {
+def BitCastOp : SclOp<"bit.cast", [DeclareOpInterfaceMethods<CastOpInterface>, Pure]> {
   let summary = "Type cast between different representations of the same bits";
   let arguments = (ins AnyType:$value);
   let results = (outs AnyType:$result);
   let assemblyFormat = "attr-dict $value `:` type($value) `to` type($result)";
 }
 
-def DialectCastOp : SclOp<"mlir.cast", [DeclareOpInterfaceMethods<CastOpInterface>, NoSideEffect]> {
+def DialectCastOp : SclOp<"mlir.cast", [DeclareOpInterfaceMethods<CastOpInterface>, Pure]> {
   let summary = "Type cast between SCL and Standard dialect";
   let arguments = (ins AnyType:$value);
   let results = (outs AnyType:$result);
   let assemblyFormat = "attr-dict $value `:` type($value) `to` type($result)";
 }
 
-def IntegerCastOp : SclOp<"int.cast", [DeclareOpInterfaceMethods<CastOpInterface>, NoSideEffect]> {
+def IntegerCastOp : SclOp<"int.cast", [DeclareOpInterfaceMethods<CastOpInterface>, Pure]> {
   let summary = "Type cast between integers with different bitwidths";
   let arguments = (ins Scl_IntegerType:$value);
   let results = (outs Scl_IntegerType:$result);
@@ -221,7 +224,7 @@ def IntegerCastOp : SclOp<"int.cast", [DeclareOpInterfaceMethods<CastOpInterface
 }
 
 def ConstantOp : SclOp<"constant",
-    [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
+    [ConstantLike, Pure, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let summary = "literal constant";
   let arguments = (ins AnyAttr:$value);
   let results = (outs AnyType:$result);
@@ -230,7 +233,7 @@ def ConstantOp : SclOp<"constant",
 }
 
 def ConstantS5TimeOp : SclOp<"constant.s5time",
-    [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
+    [ConstantLike, Pure, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let summary = "literal time or date constant";
   let arguments = (ins UI16Attr:$value);
   let results = (outs Scl_S5TimeType:$result);
@@ -245,7 +248,7 @@ def ConstantS5TimeOp : SclOp<"constant.s5time",
 }
 
 def ConstantTimeOp : SclOp<"constant.time",
-    [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
+    [ConstantLike, Pure, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let summary = "literal time constant";
   let arguments = (ins SI32Attr:$value);
   let results = (outs Scl_TimeType:$result);
@@ -257,7 +260,7 @@ def ConstantTimeOp : SclOp<"constant.time",
 }
 
 def ConstantDateOp : SclOp<"constant.date",
-    [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
+    [ConstantLike, Pure, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let summary = "literal time constant";
   let arguments = (ins UI16Attr:$value);
   let results = (outs Scl_DateType:$result);
@@ -269,7 +272,7 @@ def ConstantDateOp : SclOp<"constant.date",
 }
 
 def ConstantTimeOfDayOp : SclOp<"constant.tod",
-    [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
+    [ConstantLike, Pure, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let summary = "literal time constant";
   let arguments = (ins UI32Attr:$value);
   let results = (outs Scl_TimeOfDayType:$result);
@@ -281,7 +284,7 @@ def ConstantTimeOfDayOp : SclOp<"constant.tod",
 }
 
 def ConstantDateAndTimeOp : SclOp<"constant.dt",
-    [ConstantLike, NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
+    [ConstantLike, Pure, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let summary = "literal time constant";
   let arguments = (ins UI64Attr:$value);
   let results = (outs Scl_DateAndTimeType:$result);
@@ -298,7 +301,7 @@ def ConstantDateAndTimeOp : SclOp<"constant.dt",
 }
 
 def GetElementOp : SclOp<"getelement",
-    [NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
+    [Pure, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let summary = "get the address of a struct element";
   let arguments = (ins Scl_AddressType:$addr, StrAttr:$name);
   let results = (outs Scl_AddressType:$element);
@@ -306,13 +309,13 @@ def GetElementOp : SclOp<"getelement",
 }
 
 def GetGlobalOp : SclOp<"getglobal",
-    [NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
+    [Pure, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let arguments = (ins FlatSymbolRefAttr:$name);
   let results = (outs Scl_AddressType:$element);
   let assemblyFormat = "attr-dict $name `:` type($element)";
 }
 
-def GetIndexOp : SclOp<"getindex", [NoSideEffect]> {
+def GetIndexOp : SclOp<"getindex", [Pure]> {
   let summary = "get the address of an indexed element";
   let arguments = (ins Scl_AddressType:$addr, Variadic<Scl_IntegerType>:$indices);
   let results = (outs Scl_AddressType:$element);
@@ -320,7 +323,7 @@ def GetIndexOp : SclOp<"getindex", [NoSideEffect]> {
 }
 
 def GetVariableOp : SclOp<"getvariable",
-    [NoSideEffect, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
+    [Pure, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let summary = "get the address of a FB variable";
   let arguments = (ins Scl_AddressType:$addr, FlatSymbolRefAttr:$sym_name);
   let results = (outs Scl_AddressType:$element);
@@ -361,13 +364,13 @@ def StoreOp : SclOp<"store", [/*SameOperandsElementType]*/]> {
 //
 
 def ConditionOp : SclOp<"condition",
-    [NoSideEffect, HasParent<"WhileDoOp">, Terminator]> {
+    [Pure, HasParent<"WhileDoOp">, Terminator]> {
   let summary = "condition for WhileDoOp";
   let arguments = (ins Scl_Bool:$cond);
   let assemblyFormat = "attr-dict $cond `:` type($cond)";
 }
 
-def EndOp : SclOp<"end", [NoSideEffect, Terminator]> {
+def EndOp : SclOp<"end", [Pure, Terminator]> {
   let summary = "implicit terminator for blocks";
   let assemblyFormat = "attr-dict";
 }
@@ -412,7 +415,7 @@ def RepeatOp : SclOp<"repeat"> {
   let assemblyFormat = "$repeatBody attr-dict";
 }
 
-def UntilOp : SclOp<"until", [NoSideEffect, HasParent<"RepeatOp">, Terminator]> {
+def UntilOp : SclOp<"until", [Pure, HasParent<"RepeatOp">, Terminator]> {
   let summary = "condition for RepeatOp";
   let arguments = (ins Scl_Bool:$cond);
   let assemblyFormat = "attr-dict $cond `:` type($cond)";
@@ -454,7 +457,7 @@ def ReturnValueOp : FuncTerminatorOp<"return.value"> {
 
   let extraClassDeclaration = [{
     Type getReturnType() {
-      return value().getType().dyn_cast<AddressType>().getElementType();
+      return getValue().getType().dyn_cast<AddressType>().getElementType();
     }
   }];
 }

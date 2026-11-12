@@ -16,18 +16,18 @@
 #include "sclang/SclTransforms/Passes.h"
 
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
-#include "mlir/Conversion/ArithmeticToLLVM/ArithmeticToLLVM.h"
+#include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
-#include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/SCF/SCF.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 
@@ -57,7 +57,7 @@ struct DebugPrintOpLowering : public OpConversionPattern<scl::DebugPrintOp> {
     Value formatSpecifierCst = getOrCreateGlobalString(loc, rewriter,
         "_debug_print_fmt", StringRef("%s\n\0", 4), parentModule, /*reuse=*/true);
 
-    std::string msg = std::string(op.msg());
+    std::string msg = std::string(op.getMsg());
     // Append `\0` to follow C style string given that LLVM::createGlobalString()
     // won't handle this directly for us.
     msg.push_back('\0');
@@ -177,8 +177,8 @@ void SclToLLVMLoweringPass::runOnOperation() {
   RewritePatternSet patterns(context);
   populateAffineToStdConversionPatterns(patterns);
   populateSCFToControlFlowConversionPatterns(patterns);
-  populateMemRefToLLVMConversionPatterns(typeConverter, patterns);
-  arith::populateArithmeticToLLVMConversionPatterns(typeConverter, patterns);
+  populateFinalizeMemRefToLLVMConversionPatterns(typeConverter, patterns);
+  arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
   populateFuncToLLVMConversionPatterns(typeConverter, patterns);
   cf::populateControlFlowToLLVMConversionPatterns(typeConverter, patterns);
 

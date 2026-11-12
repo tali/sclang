@@ -56,7 +56,7 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
   canonicalizeSingleArgument(scl::CallFcOp op, scl::FunctionOp func, PatternRewriter &rewriter) const {
     auto context = op->getContext();
 
-    auto argCallNames = op.argNames().getValue();
+    auto argCallNames = op.getArgNames().getValue();
     if (argCallNames.size() == 1)
       return failure();
 
@@ -67,8 +67,8 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
     argNames.push_back(nameAttr);
     auto argNamesAttr = ArrayAttr::get(context, argNames);
 
-    rewriter.replaceOpWithNewOp<scl::CallFcOp>(op, op.getType(), op.callee(),
-                                               op.arguments(), argNamesAttr);
+    rewriter.replaceOpWithNewOp<scl::CallFcOp>(op, op.getType(), op.getCallee(),
+                                               op.getArguments(), argNamesAttr);
 
     return success();
   }
@@ -79,7 +79,7 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
     auto context = op->getContext();
     auto funcType = func.getFunctionType().cast<FunctionType>();
 
-    auto argCallNames = op.argNames().getValue();
+    auto argCallNames = op.getArgNames().getValue();
     SmallBitVector argUsed(argCallNames.size());
 
     // map named arguments
@@ -102,7 +102,7 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
         if (argCallName == name) {
           if (i != j)
             reordered = true;
-          arguments.push_back(op.arguments()[j]);
+          arguments.push_back(op.getArguments()[j]);
           argUsed[j] = true;
           found = true;
           break;
@@ -126,7 +126,7 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
       return failure();
 
     auto argNamesAttr = ArrayAttr::get(context, argNames);
-    rewriter.replaceOpWithNewOp<scl::CallFcOp>(op, op.getType(), op.callee(),
+    rewriter.replaceOpWithNewOp<scl::CallFcOp>(op, op.getType(), op.getCallee(),
                                                arguments, argNamesAttr);
 
     return success();
@@ -139,7 +139,7 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
   matchAndRewrite(scl::CallFcOp op, PatternRewriter &rewriter) const override {
     scl::FunctionOp func =
         SymbolTable::lookupNearestSymbolFrom<scl::FunctionOp>(op->getParentOp(),
-                                                              op.calleeAttr());
+                                                              op.getCalleeAttr());
     assert(func && "cannot lookup FunctionOp");
 
     switch (func.getNumArguments()) {

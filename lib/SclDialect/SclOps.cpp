@@ -174,11 +174,11 @@ void from_datetime(uint64_t value, int *year, int *month, int *day,
 ///     of the operation. The caller will remove the operation and use that
 ///     result instead.
 ///
-OpFoldResult ConstantOp::fold(ArrayRef<Attribute> operands) { return value(); }
+OpFoldResult ConstantOp::fold(FoldAdaptor) { return getValue(); }
 
 void ConstantOp::getAsmResultNames(
     function_ref<void(Value, StringRef)> setNameFn) {
-  if (auto intCst = value().dyn_cast<IntegerAttr>()) {
+  if (auto intCst = getValue().dyn_cast<IntegerAttr>()) {
     LogicalType logTy = getType().dyn_cast<LogicalType>();
 
     // Sugar BOOL constants with 'true' and 'false'.
@@ -237,8 +237,8 @@ uint16_t getS5TimeBcdCoded(unsigned int timeMS)
 } // namespace
 
 
-OpFoldResult ConstantS5TimeOp::fold(ArrayRef<Attribute> operands) {
-  return valueAttr();
+OpFoldResult ConstantS5TimeOp::fold(FoldAdaptor) {
+  return getValueAttr();
 }
 
 void ConstantS5TimeOp::build(OpBuilder &builder, OperationState &state,
@@ -249,7 +249,7 @@ void ConstantS5TimeOp::build(OpBuilder &builder, OperationState &state,
 }
 
 unsigned ConstantS5TimeOp::getTimeMS() {
-  unsigned v = value();
+  unsigned v = getValue();
   unsigned scale = v & 0x3000;
   unsigned t = from_bcd3(0, v);
 
@@ -302,8 +302,8 @@ void ConstantS5TimeOp::getAsmResultNames(
 // MARK: ConstantTimeOp
 //===----------------------------------------------------------------------===//
 
-OpFoldResult ConstantTimeOp::fold(ArrayRef<Attribute> operands) {
-  return valueAttr();
+OpFoldResult ConstantTimeOp::fold(FoldAdaptor) {
+  return getValueAttr();
 }
 
 void ConstantTimeOp::build(OpBuilder &builder, OperationState &state,
@@ -330,7 +330,7 @@ mlir::ParseResult ConstantTimeOp::parse(mlir::OpAsmParser &parser,
 void ConstantTimeOp::print(mlir::OpAsmPrinter &printer) {
   printer << " ";
   printer.printOptionalAttrDict((*this)->getAttrs(), /*elidedAttrs=*/{"value"});
-  int32_t t = value();
+  int32_t t = getValue();
   int secs = t / 1000;
   int msecs = t % 1000;
   printer << secs << " s " << msecs;
@@ -341,7 +341,7 @@ void ConstantTimeOp::getAsmResultNames(
   SmallString<32> buffer;
   llvm::raw_svector_ostream name(buffer);
   name << "t_";
-  printTimeLiteral(name, value());
+  printTimeLiteral(name, getValue());
 
   setNameFn(getResult(), name.str());
 }
@@ -351,8 +351,8 @@ void ConstantTimeOp::getAsmResultNames(
 // MARK: ConstantDateOp
 //===----------------------------------------------------------------------===//
 
-OpFoldResult ConstantDateOp::fold(ArrayRef<Attribute> operands) {
-  return valueAttr();
+OpFoldResult ConstantDateOp::fold(FoldAdaptor) {
+  return getValueAttr();
 }
 
 void ConstantDateOp::build(OpBuilder &builder, OperationState &state,
@@ -389,7 +389,7 @@ void ConstantDateOp::print(mlir::OpAsmPrinter &printer) {
   printer << " ";
   printer.printOptionalAttrDict((*this)->getAttrs(), /*elidedAttrs=*/{"value"});
   int year, month, day;
-  getDateFromDaysSince1990(value(), &year, &month, &day);
+  getDateFromDaysSince1990(getValue(), &year, &month, &day);
   printer << year << " " << month << " " << day;
 }
 
@@ -399,7 +399,7 @@ void ConstantDateOp::getAsmResultNames(
   llvm::raw_svector_ostream name(buffer);
 
   int year, month, day;
-  getDateFromDaysSince1990(value(), &year, &month, &day);
+  getDateFromDaysSince1990(getValue(), &year, &month, &day);
   name << "d_" << year << '_' << month << '_' << day;
 
   setNameFn(getResult(), name.str());
@@ -410,8 +410,8 @@ void ConstantDateOp::getAsmResultNames(
 // MARK: ConstantTimeOfDayOp
 //===----------------------------------------------------------------------===//
 
-OpFoldResult ConstantTimeOfDayOp::fold(ArrayRef<Attribute> operands) {
-  return valueAttr();
+OpFoldResult ConstantTimeOfDayOp::fold(FoldAdaptor) {
+  return getValueAttr();
 }
 
 void ConstantTimeOfDayOp::build(OpBuilder &builder, OperationState &state,
@@ -438,7 +438,7 @@ mlir::ParseResult ConstantTimeOfDayOp::parse(mlir::OpAsmParser &parser,
 void ConstantTimeOfDayOp::print(mlir::OpAsmPrinter &printer) {
   printer << " ";
   printer.printOptionalAttrDict((*this)->getAttrs(), /*elidedAttrs=*/{"value"});
-  int32_t t = value();
+  int32_t t = getValue();
   int secs = t / 1000;
   int msecs = t % 1000;
   printer << secs << " s " << msecs;
@@ -449,7 +449,7 @@ void ConstantTimeOfDayOp::getAsmResultNames(
   SmallString<32> buffer;
   llvm::raw_svector_ostream name(buffer);
   name << "tod_";
-  printTimeLiteral(name, value());
+  printTimeLiteral(name, getValue());
 
   setNameFn(getResult(), name.str());
 }
@@ -459,8 +459,8 @@ void ConstantTimeOfDayOp::getAsmResultNames(
 // MARK: ConstantDateAndTimeOp
 //===----------------------------------------------------------------------===//
 
-OpFoldResult ConstantDateAndTimeOp::fold(ArrayRef<Attribute> operands) {
-  return valueAttr();
+OpFoldResult ConstantDateAndTimeOp::fold(FoldAdaptor) {
+  return getValueAttr();
 }
 
 void ConstantDateAndTimeOp::build(OpBuilder &builder, OperationState &state,
@@ -496,7 +496,7 @@ void ConstantDateAndTimeOp::print(mlir::OpAsmPrinter &printer) {
   printer.printOptionalAttrDict((*this)->getAttrs(), /*elidedAttrs=*/{"value"});
 
   int year, month, day, hour, min, sec, msec;
-  from_datetime(value(), &year, &month, &day, &hour, &min, &sec, &msec);
+  from_datetime(getValue(), &year, &month, &day, &hour, &min, &sec, &msec);
   printer << year << ':' << month << ':' << day << ' ';
   printer << hour << ':' << min << ':' << sec << ' ' << msec;
 }
@@ -506,7 +506,7 @@ void ConstantDateAndTimeOp::getAsmResultNames(
   SmallString<32> buffer;
   llvm::raw_svector_ostream name(buffer);
   int year, month, day, hour, min, sec, msec;
-  from_datetime(value(), &year, &month, &day, &hour, &min, &sec, &msec);
+  from_datetime(getValue(), &year, &month, &day, &hour, &min, &sec, &msec);
   name << "dt_" << year << '-' << month << '-' << day << '_';
   name << hour << '-' << min << '-' << sec << '_' << msec;
 
@@ -574,27 +574,31 @@ ParseResult FunctionOp::parse(OpAsmParser &parser, OperationState &state) {
     return builder.getFunctionType(argTypes, results);
   };
 
-  return function_interface_impl::parseFunctionOp(parser, state,
-                                                   /*allowVariadic=*/false,
-                                                   buildFuncType);
+  return function_interface_impl::parseFunctionOp(
+      parser, state, /*allowVariadic=*/false,
+      getFunctionTypeAttrName(state.name), buildFuncType,
+      getArgAttrsAttrName(state.name), getResAttrsAttrName(state.name));
 }
 
 void FunctionOp::print(OpAsmPrinter &printer) {
-  function_interface_impl::printFunctionOp(printer, *this, /*isVariadic=*/false);
+  function_interface_impl::printFunctionOp(printer, *this, /*isVariadic=*/false,
+                                            getFunctionTypeAttrName(),
+                                            getArgAttrsAttrName(),
+                                            getResAttrsAttrName());
 }
 
 LogicalResult FunctionOp::verifyType() {
-  auto type = function_typeAttr().getValue();
+  auto type = getFunctionTypeAttr().getValue();
   if (!type.isa<FunctionType>())
-    return emitOpError("requires '" + function_typeAttrName().getValue() +
+    return emitOpError("requires '" + getFunctionTypeAttrName().getValue() +
                        "' attribute of function type");
-  if (function_type().getNumResults() > 1)
+  if (getFunctionType().getNumResults() > 1)
     return emitOpError("cannot have more than one result");
   return success();
 }
 
 LogicalResult FunctionOp::verifyBody() {
-  FunctionType fnType = function_type();
+  FunctionType fnType = getFunctionType();
   auto walkResult = walk([fnType](Operation *op) -> WalkResult {
     if (auto retOp = dyn_cast<ReturnOp>(op)) {
       if (fnType.getNumResults() != 0)
@@ -618,14 +622,26 @@ LogicalResult FunctionOp::verifyBody() {
   return failure(walkResult.wasInterrupted());
 }
 
-// CallableOpInterface
-Region *FunctionOp::getCallableRegion() {
-  return isExternal() ? nullptr : &body();
+void FunctionOp::build(OpBuilder &builder, OperationState &state,
+                       StringRef name, FunctionType type) {
+  state.addAttribute(getSymNameAttrName(state.name),
+                     builder.getStringAttr(name));
+  state.addAttribute(getFunctionTypeAttrName(state.name), TypeAttr::get(type));
+  state.addRegion();
 }
 
 // CallableOpInterface
+Region *FunctionOp::getCallableRegion() {
+  return isExternal() ? nullptr : &getBody();
+}
+
+// CallableOpInterface
+ArrayAttr FunctionOp::getCallableArgAttrs() { return getArgAttrsAttr(); }
+ArrayAttr FunctionOp::getCallableResAttrs() { return getResAttrsAttr(); }
+
+// CallableOpInterface
 ArrayRef<Type> FunctionOp::getCallableResults() {
-  return function_type().getResults();
+  return getFunctionType().getResults();
 }
 
 //===----------------------------------------------------------------------===//
@@ -640,29 +656,33 @@ ParseResult FunctionBlockOp::parse(OpAsmParser &parser, OperationState &state) {
     return builder.getFunctionType(argTypes, results);
   };
 
-  return function_interface_impl::parseFunctionOp(parser, state,
-                                                   /*allowVariadic=*/false,
-                                                   buildFuncType);
+  return function_interface_impl::parseFunctionOp(
+      parser, state, /*allowVariadic=*/false,
+      getFunctionTypeAttrName(state.name), buildFuncType,
+      getArgAttrsAttrName(state.name), getResAttrsAttrName(state.name));
 }
 
 void FunctionBlockOp::print(OpAsmPrinter &printer) {
-  function_interface_impl::printFunctionOp(printer, *this, /*isVariadic=*/false);
+  function_interface_impl::printFunctionOp(printer, *this, /*isVariadic=*/false,
+                                            getFunctionTypeAttrName(),
+                                            getArgAttrsAttrName(),
+                                            getResAttrsAttrName());
 }
 
 LogicalResult FunctionBlockOp::verifyType() {
-  auto type = function_typeAttr().getValue();
+  auto type = getFunctionTypeAttr().getValue();
   if (!type.isa<FunctionType>())
-    return emitOpError("requires '" + function_typeAttrName().getValue() +
+    return emitOpError("requires '" + getFunctionTypeAttrName().getValue() +
                        "' attribute of function type");
-  if (function_type().getNumInputs() != 1)
+  if (getFunctionType().getNumInputs() != 1)
     return emitOpError("must have one input");
-  if (function_type().getNumResults() != 0)
+  if (getFunctionType().getNumResults() != 0)
     return emitOpError("cannot have results");
   return success();
 }
 
 LogicalResult FunctionBlockOp::verifyBody() {
-  FunctionType fnType = function_type();
+  FunctionType fnType = getFunctionType();
   auto walkResult = walk([fnType](Operation *op) -> WalkResult {
     if (auto retOp = dyn_cast<ReturnValueOp>(op)) {
       return retOp.emitOpError(
@@ -693,19 +713,27 @@ void FunctionBlockOp::build(OpBuilder &builder, OperationState &state,
 
 // CallableOpInterface
 Region *FunctionBlockOp::getCallableRegion() {
-  return isExternal() ? nullptr : &body();
+  return isExternal() ? nullptr : &getBody();
 }
 
 // CallableOpInterface
+ArrayAttr FunctionBlockOp::getCallableArgAttrs() { return getArgAttrsAttr(); }
+ArrayAttr FunctionBlockOp::getCallableResAttrs() { return getResAttrsAttr(); }
+
+// CallableOpInterface
 ArrayRef<Type> FunctionBlockOp::getCallableResults() {
-  return function_type().getResults();
+  return getFunctionType().getResults();
 }
 
 
 // MARK: CallFbOp
 
+void CallFbOp::setCalleeFromCallable(CallInterfaceCallable callable) {
+  (*this)->setAttr(getFbAttrName(), callable.get<SymbolRefAttr>());
+}
+
 CallInterfaceCallable CallFbOp::getCallableForCallee() {
-  return getOperation()->getAttrOfType<SymbolRefAttr>(fb());
+  return getOperation()->getAttrOfType<SymbolRefAttr>(getFb());
 }
 
 Operation::operand_range CallFbOp::getArgOperands() {
@@ -715,32 +743,36 @@ Operation::operand_range CallFbOp::getArgOperands() {
 
 // MARK: CallFcOp
 
-CallInterfaceCallable CallFcOp::getCallableForCallee() {
-  return getOperation()->getAttrOfType<SymbolRefAttr>(callee());
+void CallFcOp::setCalleeFromCallable(CallInterfaceCallable callable) {
+  (*this)->setAttr(getCalleeAttrName(), callable.get<SymbolRefAttr>());
 }
 
-Operation::operand_range CallFcOp::getArgOperands() { return arguments(); }
+CallInterfaceCallable CallFcOp::getCallableForCallee() {
+  return getOperation()->getAttrOfType<SymbolRefAttr>(getCallee());
+}
+
+Operation::operand_range CallFcOp::getArgOperands() { return getArguments(); }
 
 
 // MARK: GetElementOp
 
 void GetElementOp::getAsmResultNames(
     function_ref<void(Value, StringRef)> setNameFn) {
-  setNameFn(getResult(), name());
+  setNameFn(getResult(), getName());
 }
 
 // MARK: GetGlobalOp
 
 void GetGlobalOp::getAsmResultNames(
     function_ref<void(Value, StringRef)> setNameFn) {
-  setNameFn(getResult(), name());
+  setNameFn(getResult(), getName());
 }
 
 // MARK: GetVariableOp
 
 void GetVariableOp::getAsmResultNames(
     function_ref<void(Value, StringRef)> setNameFn) {
-  setNameFn(getResult(), sym_name());
+  setNameFn(getResult(), getSymName());
 }
 
 // MARK: IntegerCastOp
@@ -764,7 +796,7 @@ bool IntegerCastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
 
 void TempVariableOp::getAsmResultNames(
     function_ref<void(Value, StringRef)> setNameFn) {
-  setNameFn(getResult(), name());
+  setNameFn(getResult(), getName());
 }
 
 

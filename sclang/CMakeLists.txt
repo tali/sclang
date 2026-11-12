@@ -39,7 +39,7 @@ target_link_libraries(sclang
     MLIRExecutionEngine
     MLIRIR
     MLIRLLVMCommonConversion
-    MLIRMemRef
+    MLIRMemRefDialect
     MLIRParser
     MLIRPass
     MLIRSideEffectInterfaces

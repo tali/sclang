@@ -29,7 +29,7 @@
 #include "sclang/SclGen/AST.h"
 #include "sclang/SclGen/Lexer.h"
 
-#include "llvm/ADT/Optional.h"
+#include <optional>
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/raw_ostream.h"
@@ -606,7 +606,7 @@ private:
     if (!type)
       return nullptr;
 
-    llvm::Optional<std::unique_ptr<ExpressionAST>> init;
+    std::optional<std::unique_ptr<ExpressionAST>> init;
     if (lexer.getCurToken() == tok_assignment) {
       lexer.consume(tok_assignment);
 
@@ -852,7 +852,7 @@ private:
 
     auto dataType = ParseDataTypeSpec();
 
-    llvm::Optional<std::unique_ptr<ExpressionAST>> init;
+    std::optional<std::unique_ptr<ExpressionAST>> init;
     if (lexer.getCurToken() == tok_assignment) {
       lexer.consume(tok_assignment);
 
@@ -1413,7 +1413,7 @@ private:
         another = false;
     }
 
-    llvm::Optional<std::unique_ptr<CodeSectionAST>> elseBlock;
+    std::optional<std::unique_ptr<CodeSectionAST>> elseBlock;
     if (lexer.getCurToken() == tok_else) {
       lexer.consume(tok_else);
 
@@ -1446,7 +1446,7 @@ private:
     if (!code)
       return parseError<CaseOfAST>("code section", "for case");
 
-    llvm::Optional<std::unique_ptr<CodeSectionAST>> elseBlock;
+    std::optional<std::unique_ptr<CodeSectionAST>> elseBlock;
     if (lexer.getCurToken() == tok_else) {
       lexer.consume(tok_else);
 
@@ -1477,7 +1477,7 @@ private:
     if (!last)
       return parseError<ForDoAST>("expression", "for end value");
 
-    llvm::Optional<std::unique_ptr<ExpressionAST>> increment;
+    std::optional<std::unique_ptr<ExpressionAST>> increment;
     if (lexer.getCurToken() == tok_by) {
       lexer.consume(tok_by);
 

@@ -295,8 +295,8 @@ void ASTDumper::dump(const VariableDeclarationAST *node) {
     dump(var.get());
   dump(node->getDataType());
   auto init = node->getInitializer();
-  if (init.hasValue())
-    dump(init.getValue());
+  if (init.has_value())
+    dump(init.value());
 }
 
 void ASTDumper::dump(const VariableIdentifierAST *node) {
@@ -419,8 +419,8 @@ void ASTDumper::dump(const ComponentDeclarationAST *node) {
   outs << "ComponentDeclaration " << node->getName() << "\n";
   dump(node->getDataType());
   auto init = node->getInitializer();
-  if (init.hasValue())
-    dump(init.getValue());
+  if (init.has_value())
+    dump(init.value());
 }
 
 void ASTDumper::dump(const StructDataTypeSpecAST *node) {
@@ -605,10 +605,10 @@ void ASTDumper::dump(const IfThenElseAST *node) {
     dump(then.get());
 
   auto elseBlock = node->getElseBlock();
-  if (elseBlock.hasValue()) {
+  if (elseBlock.has_value()) {
     INDENT();
     outs << "Else\n";
-    dump(elseBlock.getValue());
+    dump(elseBlock.value());
   }
 }
 
@@ -652,8 +652,8 @@ void ASTDumper::dump(const CaseOfAST *node) {
   outs << "Of\n";
   dump(node->getCode());
   auto elseBlock = node->getElseBlock();
-  if (elseBlock.hasValue())
-    dump(elseBlock.getValue());
+  if (elseBlock.has_value())
+    dump(elseBlock.value());
 }
 
 void ASTDumper::dump(const ForDoAST *node) {
@@ -664,10 +664,10 @@ void ASTDumper::dump(const ForDoAST *node) {
   outs << "To\n";
   dump(node->getLast());
   auto increment = node->getIncrement();
-  if (increment.hasValue()) {
+  if (increment.has_value()) {
     indent();
     outs << "By\n";
-    dump(increment.getValue());
+    dump(increment.value());
   }
   indent();
   outs << "Do\n";

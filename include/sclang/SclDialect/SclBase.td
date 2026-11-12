@@ -123,7 +123,7 @@ class TopLevelOp<string mnemonic, list<Trait> traits = []> :
   SclOp<mnemonic, !listconcat(traits, [InModuleScope])>;
 
 class FuncTerminatorOp<string mnemonic, list<Trait> traits = []> :
-    SclOp<mnemonic, !listconcat(traits, [NoSideEffect, Terminator])>;
+    SclOp<mnemonic, !listconcat(traits, [Pure, Terminator])>;
 
 
 #endif // SCL_BASE

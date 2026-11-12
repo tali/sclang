@@ -410,22 +410,22 @@ class ComponentDeclarationAST {
   Location location;
   std::string name;
   std::unique_ptr<DataTypeSpecAST> dataType;
-  llvm::Optional<std::unique_ptr<ExpressionAST>> initializer;
+  std::optional<std::unique_ptr<ExpressionAST>> initializer;
 
 public:
   ComponentDeclarationAST(Location loc, std::string name,
                           std::unique_ptr<DataTypeSpecAST> dataType,
-                          llvm::Optional<std::unique_ptr<ExpressionAST>> init)
+                          std::optional<std::unique_ptr<ExpressionAST>> init)
       : location(std::move(loc)), name(std::move(name)),
         dataType(std::move(dataType)), initializer(std::move(init)) {}
 
   const Location &loc() const { return location; }
   llvm::StringRef getName() const { return name; }
   const DataTypeSpecAST *getDataType() const { return dataType.get(); }
-  llvm::Optional<const ExpressionAST *> getInitializer() const {
-    if (!initializer.hasValue())
-      return llvm::NoneType();
-    return initializer.getValue().get();
+  std::optional<const ExpressionAST *> getInitializer() const {
+    if (!initializer.has_value())
+      return std::nullopt;
+    return initializer.value().get();
   }
 };
 
@@ -607,19 +607,19 @@ public:
 
 class IfThenElseAST : public InstructionAST {
   std::vector<std::unique_ptr<IfThenAST>> thens;
-  llvm::Optional<std::unique_ptr<CodeSectionAST>> elseBlock;
+  std::optional<std::unique_ptr<CodeSectionAST>> elseBlock;
 
 public:
   IfThenElseAST(Location loc, std::vector<std::unique_ptr<IfThenAST>> thens,
-                llvm::Optional<std::unique_ptr<CodeSectionAST>> elseBlock)
+                std::optional<std::unique_ptr<CodeSectionAST>> elseBlock)
       : InstructionAST(std::move(loc), Instr_IfThenElse),
         thens(std::move(thens)), elseBlock(std::move(elseBlock)) {}
 
   llvm::ArrayRef<std::unique_ptr<IfThenAST>> getThens() const { return thens; }
-  llvm::Optional<const CodeSectionAST *> getElseBlock() const {
-    if (!elseBlock.hasValue())
-      return llvm::NoneType();
-    return elseBlock.getValue().get();
+  std::optional<const CodeSectionAST *> getElseBlock() const {
+    if (!elseBlock.has_value())
+      return std::nullopt;
+    return elseBlock.value().get();
   };
 
   /// LLVM style RTTI
@@ -701,21 +701,21 @@ public:
 class CaseOfAST : public InstructionAST {
   std::unique_ptr<ExpressionAST> expr;
   std::unique_ptr<CodeSectionAST> code;
-  llvm::Optional<std::unique_ptr<CodeSectionAST>> elseBlock;
+  std::optional<std::unique_ptr<CodeSectionAST>> elseBlock;
 
 public:
   CaseOfAST(Location loc, std::unique_ptr<ExpressionAST> expr,
             std::unique_ptr<CodeSectionAST> code,
-            llvm::Optional<std::unique_ptr<CodeSectionAST>> elseBlock)
+            std::optional<std::unique_ptr<CodeSectionAST>> elseBlock)
       : InstructionAST(std::move(loc), Instr_CaseOf), expr(std::move(expr)),
         code(std::move(code)), elseBlock(std::move(elseBlock)) {}
 
   const ExpressionAST *getExpr() const { return expr.get(); }
   const CodeSectionAST *getCode() const { return code.get(); };
-  llvm::Optional<const CodeSectionAST *> getElseBlock() const {
-    if (!elseBlock.hasValue())
-      return llvm::NoneType();
-    return elseBlock.getValue().get();
+  std::optional<const CodeSectionAST *> getElseBlock() const {
+    if (!elseBlock.has_value())
+      return std::nullopt;
+    return elseBlock.value().get();
   };
 
   /// LLVM style RTTI
@@ -727,13 +727,13 @@ public:
 class ForDoAST : public InstructionAST {
   std::unique_ptr<ExpressionAST> assignment;
   std::unique_ptr<ExpressionAST> last;
-  llvm::Optional<std::unique_ptr<ExpressionAST>> increment;
+  std::optional<std::unique_ptr<ExpressionAST>> increment;
   std::unique_ptr<CodeSectionAST> code;
 
 public:
   ForDoAST(Location loc, std::unique_ptr<ExpressionAST> assignment,
            std::unique_ptr<ExpressionAST> last,
-           llvm::Optional<std::unique_ptr<ExpressionAST>> increment,
+           std::optional<std::unique_ptr<ExpressionAST>> increment,
            std::unique_ptr<CodeSectionAST> code)
       : InstructionAST(std::move(loc), Instr_ForDo),
         assignment(std::move(assignment)), last(std::move(last)),
@@ -741,10 +741,10 @@ public:
 
   const ExpressionAST *getAssignment() const { return assignment.get(); }
   const ExpressionAST *getLast() const { return last.get(); }
-  llvm::Optional<const ExpressionAST *> getIncrement() const {
-    if (!increment.hasValue())
-      return llvm::NoneType();
-    return increment.getValue().get();
+  std::optional<const ExpressionAST *> getIncrement() const {
+    if (!increment.has_value())
+      return std::nullopt;
+    return increment.value().get();
   };
   const CodeSectionAST *getCode() const { return code.get(); }
 
@@ -963,7 +963,7 @@ class VariableDeclarationAST {
   Location location;
   std::vector<std::unique_ptr<VariableIdentifierAST>> vars;
   std::unique_ptr<DataTypeSpecAST> dataType;
-  llvm::Optional<std::unique_ptr<ExpressionAST>> initializer;
+  std::optional<std::unique_ptr<ExpressionAST>> initializer;
 
 public:
   const Location &loc() const { return location; }
@@ -971,16 +971,16 @@ public:
     return vars;
   }
   const DataTypeSpecAST *getDataType() const { return dataType.get(); }
-  llvm::Optional<ExpressionAST *> const getInitializer() const {
-    if (!initializer.hasValue())
-      return llvm::NoneType();
-    return initializer.getValue().get();
+  std::optional<ExpressionAST *> const getInitializer() const {
+    if (!initializer.has_value())
+      return std::nullopt;
+    return initializer.value().get();
   }
 
   VariableDeclarationAST(
       Location loc, std::vector<std::unique_ptr<VariableIdentifierAST>> vars,
       std::unique_ptr<DataTypeSpecAST> dataType,
-      llvm::Optional<std::unique_ptr<ExpressionAST>> init)
+      std::optional<std::unique_ptr<ExpressionAST>> init)
       : location(loc), vars(std::move(vars)), dataType(std::move(dataType)),
         initializer(std::move(init)) {}
 };

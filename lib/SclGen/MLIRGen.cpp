@@ -57,10 +57,10 @@ using llvm::TypeSwitch;
 namespace {
 
 class VariableSymbol {
-  llvm::Optional<mlir::Location> loc;
+  std::optional<mlir::Location> loc;
   mlir::Type type;
   mlir::Value value;
-  llvm::Optional<const ExpressionAST *> constValue;
+  std::optional<const ExpressionAST *> constValue;
 
 public:
   VariableSymbol() : loc(), type(), value() {}
@@ -70,14 +70,14 @@ public:
                  const ExpressionAST *constValue)
       : loc(loc), type(type), value(value), constValue(constValue) {}
 
-  mlir::Location getLocation() const { return loc.getValue(); }
+  mlir::Location getLocation() const { return loc.value(); }
   mlir::Type getType() const { return type; }
   mlir::Value getValue() const { return value; }
-  const ExpressionAST* getConstValue() const { return constValue.getValue(); }
+  const ExpressionAST* getConstValue() const { return constValue.value(); }
   bool isAddress() const { return type && type.isa<AddressType>(); }
   bool isDirect() const { return value != nullptr; }
   bool isElement() const { return type && value == nullptr; }
-  bool isConst() const { return constValue.hasValue(); }
+  bool isConst() const { return constValue.has_value(); }
 };
 
 /// Implementation of a simple MLIR emission from the SCL AST.
@@ -208,8 +208,8 @@ private:
     for (const auto &decl : decls->getValues()) {
       auto type = getType(decl->getDataType());
       mlir::Value init = nullptr;
-      if (decl->getInitializer().hasValue()) {
-        init = mlirGen(decl->getInitializer().getValue());
+      if (decl->getInitializer().has_value()) {
+        init = mlirGen(decl->getInitializer().value());
         if (!init)
           return mlir::failure();
       }
@@ -240,7 +240,7 @@ private:
         if (failed(declare(location, name, addressType, varStorage)))
           return mlir::failure();
         if (init) {
-          auto value = mlirGen(init.getValue());
+          auto value = mlirGen(init.value());
           builder.create<StoreOp>(location, varStorage, value);
         }
       }
@@ -728,7 +728,7 @@ private:
       emitError(location) << "unknown symbol '" << name << "'";
       return nullptr;
     }
-    mlir::Type type = db.type();
+    mlir::Type type = db.getType();
     mlir::Type address = AddressType::get(type);
     return builder.create<GetGlobalOp>(location, address, name);
   }
@@ -758,7 +758,7 @@ private:
         emitError(location) << "unknown variable '" << name << "' in FB '" << fbName << "'";
         return nullptr;
       }
-      mlir::Type elementType = var.type();
+      mlir::Type elementType = var.getType();
       mlir::Type resultType = AddressType::get(elementType);
 
       return builder.create<GetVariableOp>(location, resultType, address, name);
@@ -1184,14 +1184,14 @@ private:
     mlir::Value start = mlirGenRValue(assign->getRhs());
     mlir::Value last = mlirGenRValue(forDo->getLast());
     mlir::Value incr = nullptr;
-    if (forDo->getIncrement().hasValue())
-      incr = mlirGenRValue(forDo->getIncrement().getValue());
+    if (forDo->getIncrement().has_value())
+      incr = mlirGenRValue(forDo->getIncrement().value());
 
     auto forDoOp = builder.create<ForDoOp>(location, var, start, last, incr);
 
     auto old = builder.saveInsertionPoint();
 
-    builder.createBlock(&forDoOp.doBody());
+    builder.createBlock(&forDoOp.getDoBody());
     if (failed(mlirGen(forDo->getCode())))
       return mlir::failure();
 
@@ -1222,14 +1222,14 @@ private:
       } else {
         builder.create<EndOp>(location);
       }
-      builder.createBlock(&cond.thenBody());
+      builder.createBlock(&cond.getThenBody());
       if (failed(mlirGen(ifThen->getCodeBlock())))
         return mlir::failure();
       builder.create<EndOp>(location);
-      builder.createBlock(&cond.elseBody());
+      builder.createBlock(&cond.getElseBody());
     }
     if (ifThenElse->getElseBlock()) {
-      if (failed(mlirGen(ifThenElse->getElseBlock().getValue())))
+      if (failed(mlirGen(ifThenElse->getElseBlock().value())))
         return mlir::failure();
     }
     builder.create<EndOp>(loc(ifThenElse->loc()));
@@ -1246,11 +1246,11 @@ private:
 
     auto old = builder.saveInsertionPoint();
 
-    builder.createBlock(&whileDoOp.whileBody());
+    builder.createBlock(&whileDoOp.getWhileBody());
     auto condition = mlirGen(whileDo->getCondition());
     builder.create<ConditionOp>(location, condition);
 
-    builder.createBlock(&whileDoOp.doBody());
+    builder.createBlock(&whileDoOp.getDoBody());
     if (failed(mlirGen(whileDo->getCode())))
       return mlir::failure();
     builder.create<EndOp>(location);
@@ -1265,7 +1265,7 @@ private:
     auto repeatOp = builder.create<RepeatOp>(location);
     auto old = builder.saveInsertionPoint();
 
-    builder.createBlock(&repeatOp.repeatBody());
+    builder.createBlock(&repeatOp.getRepeatBody());
     if (failed(mlirGen(repeatUntil->getCode())))
       return mlir::failure();
 

@@ -15,13 +15,14 @@
 #include "sclang/SclDialect/Dialect.h"
 #include "sclang/SclTransforms/Passes.h"
 
-#include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/SCF/SCF.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/ADT/STLExtras.h"
+#include <optional>
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -66,17 +67,17 @@ public:
     // SCL types persist after conversion to Std.
     addSourceMaterialization([&](OpBuilder &builder, Type resultType,
                                  ValueRange inputs,
-                                 Location loc) -> Optional<Value> {
+                                 Location loc) -> std::optional<Value> {
       if (inputs.size() != 1)
-        return None;
+        return std::nullopt;
       auto op = builder.create<scl::DialectCastOp>(loc, resultType, inputs[0]);
       return op.getResult();
     });
     addTargetMaterialization([&](OpBuilder &builder, Type resultType,
                                  ValueRange inputs,
-                                 Location loc) -> Optional<Value> {
+                                 Location loc) -> std::optional<Value> {
       if (inputs.size() != 1)
-        return None;
+        return std::nullopt;
       return builder.create<scl::DialectCastOp>(loc, resultType, inputs[0])
           .getResult();
     });
@@ -92,8 +93,8 @@ struct CallFcOpLowering : public OpConversionPattern<scl::CallFcOp> {
   matchAndRewrite(scl::CallFcOp op, scl::CallFcOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type returnType = getTypeConverter()->convertType(op.getType());
-    rewriter.replaceOpWithNewOp<CallOp>(op, op.callee(), returnType,
-                                        adaptor.arguments());
+    rewriter.replaceOpWithNewOp<CallOp>(op, op.getCallee(), returnType,
+                                        adaptor.getArguments());
     return success();
   }
 };
@@ -110,13 +111,13 @@ struct CompareOpLowering : public OpConversionPattern<CompareOp> {
   matchAndRewrite(CompareOp op, typename CompareOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     if (all_of_type<FloatType>(adaptor.getOperands())) {
-      rewriter.replaceOpWithNewOp<CmpFOp>(op, predF, adaptor.lhs(),
-                                          adaptor.rhs());
+      rewriter.replaceOpWithNewOp<CmpFOp>(op, predF, adaptor.getLhs(),
+                                          adaptor.getRhs());
       return success();
     }
     if (all_of_type<IntegerType>(adaptor.getOperands())) {
-      rewriter.replaceOpWithNewOp<CmpIOp>(op, predI, adaptor.lhs(),
-                                          adaptor.rhs());
+      rewriter.replaceOpWithNewOp<CmpIOp>(op, predI, adaptor.getLhs(),
+                                          adaptor.getRhs());
       return success();
     }
     return failure();
@@ -145,7 +146,8 @@ struct ConstantOpLowering : public OpConversionPattern<scl::ConstantOp> {
   LogicalResult
   matchAndRewrite(scl::ConstantOp op, scl::ConstantOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, op.value());
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(op,
+        op.getValue().cast<TypedAttr>());
     return success();
   }
 };
@@ -159,7 +161,7 @@ struct DialectCastOpLowering : public OpConversionPattern<scl::DialectCastOp> {
   LogicalResult
   matchAndRewrite(scl::DialectCastOp op, scl::DialectCastOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Value value = adaptor.value();
+    Value value = adaptor.getValue();
 
     if (value.getType() != typeConverter->convertType(op.getType())) {
       return failure();
@@ -192,7 +194,7 @@ struct FunctionOpLowering : public OpConversionPattern<scl::FunctionOp> {
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     StringRef name = op.getName();
-    auto sclType = op.function_type();
+    auto sclType = op.getFunctionType();
 
     // convert argument types
     TypeConverter::SignatureConversion signatureConverter(
@@ -233,16 +235,16 @@ struct IfThenElseOpLowering : public OpConversionPattern<scl::IfThenElseOp> {
   matchAndRewrite(scl::IfThenElseOp op, scl::IfThenElseOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
-    auto loweredOp = rewriter.create<scf::IfOp>(op.getLoc(), adaptor.cond(),
+    auto loweredOp = rewriter.create<scf::IfOp>(op.getLoc(), adaptor.getCond(),
                                                 /*withElseRegion=*/true);
     // inline the block from our then body into the lowered region,
     // then remove the implicitly created one
-    rewriter.inlineRegionBefore(op.thenBody(),
+    rewriter.inlineRegionBefore(op.getThenBody(),
                                 &loweredOp.getThenRegion().back());
     rewriter.eraseBlock(&loweredOp.getThenRegion().back());
 
     // same for the else part
-    rewriter.inlineRegionBefore(op.elseBody(),
+    rewriter.inlineRegionBefore(op.getElseBody(),
                                 &loweredOp.getElseRegion().back());
     rewriter.eraseBlock(&loweredOp.getElseRegion().back());
 
@@ -259,7 +261,7 @@ struct LoadOpLowering : public OpConversionPattern<scl::LoadOp> {
   LogicalResult
   matchAndRewrite(scl::LoadOp op, scl::LoadOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<memref::LoadOp>(op, adaptor.address());
+    rewriter.replaceOpWithNewOp<memref::LoadOp>(op, adaptor.getAddress());
     return success();
   }
 };
@@ -275,7 +277,7 @@ struct LogicalOpLowering : public OpConversionPattern<SclOp> {
   LogicalResult
   matchAndRewrite(SclOp op, typename SclOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<LoweredOp>(op, adaptor.lhs(), adaptor.rhs());
+    rewriter.replaceOpWithNewOp<LoweredOp>(op, adaptor.getLhs(), adaptor.getRhs());
     return success();
   }
 };
@@ -334,7 +336,7 @@ struct ReturnValueOpLowering : public OpConversionPattern<scl::ReturnValueOp> {
   LogicalResult
   matchAndRewrite(scl::ReturnValueOp op, scl::ReturnValueOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto retval = rewriter.create<memref::LoadOp>(op.getLoc(), adaptor.value());
+    auto retval = rewriter.create<memref::LoadOp>(op.getLoc(), adaptor.getValue());
 
     rewriter.replaceOpWithNewOp<func::ReturnOp>(op, retval.getResult());
     return success();
@@ -349,8 +351,8 @@ struct StoreOpLowering : public OpConversionPattern<scl::StoreOp> {
   LogicalResult
   matchAndRewrite(scl::StoreOp op, scl::StoreOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<memref::StoreOp>(op, adaptor.rhs(),
-                                                 adaptor.lhs());
+    rewriter.replaceOpWithNewOp<memref::StoreOp>(op, adaptor.getRhs(),
+                                                 adaptor.getLhs());
     return success();
   }
 };
@@ -364,7 +366,7 @@ struct TempVariableOpLowering
   LogicalResult
   matchAndRewrite(scl::TempVariableOp op, scl::TempVariableOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto resultType = getTypeConverter()->convertType(op.result().getType());
+    auto resultType = getTypeConverter()->convertType(op.getResult().getType());
     auto memref = resultType.dyn_cast<MemRefType>();
 
     rewriter.replaceOpWithNewOp<memref::AllocaOp>(op, memref);
@@ -381,16 +383,16 @@ struct UnaryMinusOpLowering
   LogicalResult
   matchAndRewrite(scl::UnaryMinusOp op, scl::UnaryMinusOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto elementType = adaptor.rhs().getType();
+    auto elementType = adaptor.getRhs().getType();
     return TypeSwitch<Type, LogicalResult>(elementType)
         .Case<FloatType>([&](auto elementType) {
-          rewriter.replaceOpWithNewOp<NegFOp>(op, adaptor.rhs());
+          rewriter.replaceOpWithNewOp<NegFOp>(op, adaptor.getRhs());
           return success();
         })
         .Case<IntegerType>([&](auto elementType) {
           auto loc = op.getLoc();
           auto zero = rewriter.create<ConstantIntOp>(loc, 0, elementType);
-          rewriter.replaceOpWithNewOp<SubIOp>(op, zero, adaptor.rhs());
+          rewriter.replaceOpWithNewOp<SubIOp>(op, zero, adaptor.getRhs());
           return success();
         })
         .Default([&](auto elementType) {
@@ -412,7 +414,7 @@ struct UnaryNotOpLowering : public OpConversionPattern<scl::UnaryNotOp> {
     auto i1 = rewriter.getIntegerType(1);
     auto falseVal = rewriter.create<ConstantIntOp>(loc, 0, i1);
     auto trueVal = rewriter.create<ConstantIntOp>(loc, 1, i1);
-    rewriter.replaceOpWithNewOp<SelectOp>(op, adaptor.rhs(), falseVal,
+    rewriter.replaceOpWithNewOp<SelectOp>(op, adaptor.getRhs(), falseVal,
                                           trueVal);
     return success();
   }
@@ -431,7 +433,7 @@ struct SclToStdLoweringPass
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<scf::SCFDialect>();
     registry.insert<memref::MemRefDialect>();
-    registry.insert<arith::ArithmeticDialect>();
+    registry.insert<arith::ArithDialect>();
     registry.insert<func::FuncDialect>();
   }
   void runOnOperation() final;
@@ -446,7 +448,7 @@ void SclToStdLoweringPass::runOnOperation() {
   ConversionTarget target(*context);
   target.addLegalDialect<scf::SCFDialect>();
   target.addLegalDialect<memref::MemRefDialect>();
-  target.addLegalDialect<arith::ArithmeticDialect>();
+  target.addLegalDialect<arith::ArithDialect>();
   target.addLegalDialect<func::FuncDialect>();
   target.addLegalOp<func::FuncOp>();
   target.addLegalOp<scl::DebugPrintOp>();
