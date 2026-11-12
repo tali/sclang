@@ -1248,7 +1248,13 @@ private:
 
     builder.createBlock(&whileDoOp.getWhileBody());
     auto condition = mlirGen(whileDo->getCondition());
-    builder.create<ConditionOp>(location, condition);
+    // Successor placeholders; the loop lowering sets the real targets.
+    auto *condBlock = &whileDoOp.getWhileBody().front();
+    auto *dummy = builder.createBlock(&whileDoOp.getWhileBody());
+    builder.setInsertionPointToEnd(condBlock);
+    builder.create<ConditionOp>(location, condition, dummy, dummy);
+    builder.setInsertionPointToEnd(dummy);
+    builder.create<EndOp>(location);
 
     builder.createBlock(&whileDoOp.getDoBody());
     if (failed(mlirGen(whileDo->getCode())))
@@ -1270,7 +1276,13 @@ private:
       return mlir::failure();
 
     auto until = mlirGen(repeatUntil->getCondition());
-    builder.create<UntilOp>(location, until);
+    // Successor placeholders; the loop lowering sets the real targets.
+    auto *bodyBlock = &repeatOp.getRepeatBody().front();
+    auto *dummy = builder.createBlock(&repeatOp.getRepeatBody());
+    builder.setInsertionPointToEnd(bodyBlock);
+    builder.create<UntilOp>(location, until, dummy, dummy);
+    builder.setInsertionPointToEnd(dummy);
+    builder.create<EndOp>(location);
 
     builder.restoreInsertionPoint(old);
     return mlir::success();

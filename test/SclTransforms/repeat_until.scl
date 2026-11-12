@@ -1,0 +1,19 @@
+// RUN: sclang-gen --emit=mlir-std %s | FileCheck %s
+
+// CHECK-LABEL: func.func @rep
+// CHECK:         cf.br ^bb1
+// CHECK:       ^bb1:
+// CHECK:         arith.addi
+// CHECK:         arith.cmpi sge, {{%[0-9]+}}, %c5_i16 : i16
+// CHECK:         cf.cond_br {{%[0-9]+}}, ^bb2, ^bb1
+// CHECK:       ^bb2:
+function rep : int
+var
+  n : int;
+end_var
+begin
+  n := 0;
+  repeat
+    n := n + 1;
+  until n >= 5;
+end_function

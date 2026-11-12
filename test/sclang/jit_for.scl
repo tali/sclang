@@ -1,0 +1,27 @@
+// RUN: sclang --opt --emit=jit %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+
+// CHECK: start OB1
+// CHECK: sum ok
+// CHECK: exit OB1
+function OB1 : int
+var
+  i : int;
+  sum : int;
+end_var
+begin
+  sum := 0;
+  for i := 1 to 10 do
+    sum := sum + i;
+  end_for;
+  if sum = 55 then
+    // DEBUG PRINT sum ok
+  end_if;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  // DEBUG PRINT start OB1
+  OB1();
+  // DEBUG PRINT exit OB1
+end_function

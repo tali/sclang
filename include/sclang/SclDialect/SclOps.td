@@ -363,11 +363,11 @@ def StoreOp : SclOp<"store", [/*SameOperandsElementType]*/]> {
 // MARK: control flow
 //
 
-def ConditionOp : SclOp<"condition",
-    [Pure, HasParent<"WhileDoOp">, Terminator]> {
+def ConditionOp : SclOp<"condition", [Pure, Terminator]> {
   let summary = "condition for WhileDoOp";
   let arguments = (ins Scl_Bool:$cond);
-  let assemblyFormat = "attr-dict $cond `:` type($cond)";
+  let successors = (successor AnySuccessor:$trueDest, AnySuccessor:$falseDest);
+  let assemblyFormat = "attr-dict $cond `:` type($cond) $trueDest `,` $falseDest";
 }
 
 def EndOp : SclOp<"end", [Pure, Terminator]> {
@@ -415,10 +415,11 @@ def RepeatOp : SclOp<"repeat"> {
   let assemblyFormat = "$repeatBody attr-dict";
 }
 
-def UntilOp : SclOp<"until", [Pure, HasParent<"RepeatOp">, Terminator]> {
+def UntilOp : SclOp<"until", [Pure, Terminator]> {
   let summary = "condition for RepeatOp";
   let arguments = (ins Scl_Bool:$cond);
-  let assemblyFormat = "attr-dict $cond `:` type($cond)";
+  let successors = (successor AnySuccessor:$trueDest, AnySuccessor:$falseDest);
+  let assemblyFormat = "attr-dict $cond `:` type($cond) $trueDest `,` $falseDest";
 }
 
 

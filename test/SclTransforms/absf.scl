@@ -10,7 +10,7 @@ end_var;
 begin
 
 // CHECK: [[C0:%[a-z0-9]+]] = arith.constant 0.000000e+00 : f32
-// CHECK: memref.store %arg0, [[INVAR:%[a-z_0-9]+]][] : memref<f32>
+// CHECK: memref.store %arg0, [[INVAR:%[a-z_0-9]+]][] : memref<f32, strided<[], offset: ?>>
 
 // CHECK: [[IN:%[0-9]+]] = memref.load [[INVAR]]
 // CHECK: [[LT:%[0-9]+]] = arith.cmpf ult, [[IN]], [[C0]]
@@ -19,7 +19,7 @@ begin
 
 // CHECK:   [[IN:%[0-9]+]] = memref.load [[INVAR]]
 // CHECK:   [[NEG:%[0-9]+]] = arith.negf [[IN]] : f32
-// CHECK:   memref.store [[NEG]], [[ABS:%[a-z_0-9]+]][] : memref<f32>
+// CHECK:   memref.store [[NEG]], [[ABS:%[a-z_0-9]+]][] : memref<f32, strided<[], offset: ?>>
     abs := -in;
 
 // CHECK: } else {
@@ -29,19 +29,19 @@ begin
   elsif in > 0.0 then
 
 // CHECK:     [[IN:%[0-9]+]] = memref.load [[INVAR]]
-// CHECK:     memref.store [[IN]], [[ABS]][] : memref<f32>
+// CHECK:     memref.store [[IN]], [[ABS]][] : memref<f32, strided<[], offset: ?>>
     abs := in;
 
 // CHECK:   } else {
   else
 
-// CHECK: memref.store [[C0]], [[ABS]][] : memref<f32>
+// CHECK: memref.store [[C0]], [[ABS]][] : memref<f32, strided<[], offset: ?>>
     abs := 0.0;
 
 // CHECK:   }
 // CHECK: }
   end_if;
 
-// CHECK: [[RET:%[0-9]+]] = memref.load [[ABS]][] : memref<f32>
+// CHECK: [[RET:%[0-9]+]] = memref.load [[ABS]][] : memref<f32, strided<[], offset: ?>>
 // CHECK: return [[RET]]
 end_function

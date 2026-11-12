@@ -1,0 +1,23 @@
+// RUN: sclang-gen --emit=mlir-std %s | FileCheck %s
+
+// CHECK-LABEL: func.func @loop
+// CHECK:         memref.store %c1_i16, {{%[a-z_0-9]+}}[]
+// CHECK:         cf.br ^bb1
+// CHECK:       ^bb1:
+// CHECK:         arith.cmpi sle, {{%[0-9]+}}, %c10_i16 : i16
+// CHECK:         cf.cond_br {{%[0-9]+}}, ^bb2, ^bb3
+// CHECK:       ^bb2:
+// CHECK:         arith.addi
+// CHECK:         cf.br ^bb1
+// CHECK:       ^bb3:
+function loop : int
+var
+  i : int;
+  sum : int;
+end_var
+begin
+  sum := 0;
+  for i := 1 to 10 by 2 do
+    sum := sum + i;
+  end_for;
+end_function

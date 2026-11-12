@@ -1,0 +1,21 @@
+// RUN: sclang-gen --emit=mlir-std %s | FileCheck %s
+
+// CHECK-LABEL: func.func @wh
+// CHECK:         cf.br ^bb1
+// CHECK:       ^bb1:
+// CHECK:         arith.cmpi sgt, {{%[0-9]+}}, %c0_i16 : i16
+// CHECK:         cf.cond_br {{%[0-9]+}}, ^bb2, ^bb3
+// CHECK:       ^bb2:
+// CHECK:         arith.subi
+// CHECK:         cf.br ^bb1
+// CHECK:       ^bb3:
+function wh : int
+var
+  n : int;
+end_var
+begin
+  n := 10;
+  while n > 0 do
+    n := n - 1;
+  end_while;
+end_function
