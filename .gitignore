@@ -1,3 +1,9 @@
 build.*
 bazel-*
 user.bazelrc
+
+# Editor / OS / IDE junk
+*.swp
+.DS_Store
+.ijwb/
+xcode/
