@@ -6,7 +6,11 @@ Instead of generating AWL or machine code for S7, it directly targets the host c
 Goal is to provide a fast compiler and runtime to run unit and integration tests for large SCL projects.
 
 Current status:
-parsing SCL files works quite well, code generation only works for a very limited subset of expressions.
+parsing SCL files works quite well. Code generation covers functions, expressions,
+control flow (if/elsif/else, for, while, repeat-until, continue/exit/return) and
+array variables, and the compiler can JIT-execute the result on the host.
+Function blocks, organization blocks, CASE/GOTO, strings and user-defined types
+are parsed but not yet code-generated.
 
 [MLIR]: https://mlir.llvm.org/
 
@@ -59,3 +63,11 @@ bazel test --config=generic_clang //test
 # alternatively:
 bazel test --config=generic_gcc //test
 ```
+
+# REFERENCES
+
+- SIEMENS, *Structured Control Language (SCL) for S7-300/S7-400 Programming*
+  (the language this compiler implements):
+  <https://cache.industry.siemens.com/dl/files/188/1137188/att_27471/v1/SCLV4_e.pdf>
+- IEC 61131-3, *Programmable controllers – Programming languages*
+  (the international standard SCL is based on): <https://webstore.iec.ch/publication/4552>
