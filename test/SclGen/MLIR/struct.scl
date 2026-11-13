@@ -15,8 +15,8 @@ end_var;
 
 
 begin
-// CHECK:            %a1 = scl.getelement "a1" from %a : !scl.address<!scl.struct<a1: !scl.int, a2: !scl.real>> -> !scl.address<!scl.int>
-// CHECK:            %0 = scl.load %a1 : !scl.address<!scl.int> : !scl.int
+// CHECK:            %a1 = scl.getelement "a1" from %a : !scl.address<!scl.struct<a1: !scl.int, a2: !scl.real>> -> !scl.address<!scl.char>
+// CHECK:            %0 = scl.load %a1 : !scl.address<!scl.char> : !scl.int
 // CHECK:            scl.store %f : !scl.address<!scl.int> = %0 : !scl.int
   f := a.a1;
 

@@ -1,0 +1,37 @@
+// RUN: sclang-gen --emit=ast %s | FileCheck %s
+
+function f : int
+var
+  x : int;
+end_var
+
+begin
+  x := 2;
+// CHECK: Case
+// CHECK: SimpleVariable x
+// CHECK: Of
+// CHECK: CaseLabel
+// CHECK-NEXT: IntegerConstant 1
+// CHECK: CaseLabel
+// CHECK-NEXT: IntegerConstant 2
+// CHECK-NEXT: IntegerConstant 3
+  case x of
+    1: x := 10;
+    2, 3: x := 20;
+  else
+    x := 30;
+  end_case;
+end_function
+
+function g : int
+label
+// CHECK: JumpLabelDeclarationSubsection
+  again;
+// CHECK-NEXT: JumpLabelDeclaration again
+end_label
+begin
+// CHECK: Goto again
+  goto again;
+// CHECK: Label again
+  again: g := 1;
+end_function

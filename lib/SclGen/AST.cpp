@@ -110,6 +110,8 @@ private:
   void dump(const ExitAST *node);
   void dump(const GotoAST *node);
   void dump(const DebugPrintAST *node);
+  void dump(const JumpLabelAST *node);
+  void dump(const CaseLabelAST *node);
 
   void dump(std::string, const llvm::ArrayRef<std::unique_ptr<ExpressionAST>>);
 
@@ -463,6 +465,8 @@ void ASTDumper::dump(const InstructionAST *code) {
   dispatch(ExitAST);
   dispatch(GotoAST);
   dispatch(DebugPrintAST);
+  dispatch(JumpLabelAST);
+  dispatch(CaseLabelAST);
 #undef dispatch
   // No match, fallback to a generic message
   INDENT();
@@ -713,6 +717,18 @@ void ASTDumper::dump(const GotoAST *node) {
 void ASTDumper::dump(const DebugPrintAST *node) {
   INDENT();
   outs << "DebugPrint " << node->getMsg() << "\n";
+}
+
+void ASTDumper::dump(const JumpLabelAST *node) {
+  INDENT();
+  outs << "Label " << node->getLabel() << "\n";
+}
+
+void ASTDumper::dump(const CaseLabelAST *node) {
+  INDENT();
+  outs << "CaseLabel\n";
+  for (auto const &value : node->getValues())
+    dump(value.get());
 }
 
 void ASTDumper::dump(

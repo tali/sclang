@@ -403,6 +403,31 @@ def IfThenElseOp : SclOp<"if", [SingleBlockImplicitTerminator<"scl::EndOp">]> {
   let assemblyFormat = "attr-dict $cond `:` type($cond) $thenBody `else` $elseBody";
 }
 
+def CaseOp : SclOp<"case"> {
+  let summary = "case-of selection";
+  let description = [{
+    Selects one of several code regions based on the selector value.
+    `caseValues` holds one DenseI32ArrayAttr per case region: the selector
+    values which select that region. The last region is the else block.
+
+    Example:
+      scl.case %sel : !scl.int, [[1, 2], [3]] {
+        ...
+      } {
+        ...
+      } {
+        ...
+      }
+  }];
+
+  let arguments = (ins
+    Scl_NumericType:$selector,
+    ArrayAttr:$caseValues
+  );
+  let regions = (region VariadicRegion<SizedRegion<1>>:$body);
+  let assemblyFormat = "attr-dict $selector `:` type($selector) $caseValues $body";
+}
+
 def WhileDoOp : SclOp<"while"> {
   let summary = "while-do loop";
   let regions = (region AnyRegion:$whileBody, AnyRegion:$doBody);

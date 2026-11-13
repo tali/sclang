@@ -935,7 +935,7 @@ private:
       if (!instr)
         return parseError<CodeSectionAST>("instruction", "in code section");
 
-      if (!llvm::isa<DebugPrintAST>(instr)) {
+      if (!llvm::isa<DebugPrintAST, JumpLabelAST, CaseLabelAST>(instr)) {
         if (lexer.getCurToken() != tok_semicolon)
           return parseError<CodeSectionAST>(tok_semicolon,
                                             "to end the instruction");
@@ -983,6 +983,29 @@ private:
     if (!expr)
       return parseError<InstructionAST>("expression", "in a statement");
 
+    // A label: `name:` (jump label) or `value, value:` (case element).
+    if (lexer.getCurToken() == tok_comma || lexer.getCurToken() == tok_colon) {
+      std::vector<std::unique_ptr<ExpressionAST>> values;
+      values.push_back(std::move(expr));
+      while (lexer.getCurToken() == tok_comma) {
+        lexer.consume(tok_comma);
+        auto value = ParseExpression();
+        if (!value)
+          return parseError<InstructionAST>("expression", "in label values");
+        values.push_back(std::move(value));
+      }
+      if (lexer.getCurToken() != tok_colon)
+        return parseError<InstructionAST>(tok_colon, "to end a label");
+      lexer.consume(tok_colon);
+
+      if (values.size() == 1) {
+        if (auto *var = llvm::dyn_cast<SimpleVariableAST>(values[0].get()))
+          if (!var->isSymbol())
+            return std::make_unique<JumpLabelAST>(loc, var->getName().str());
+      }
+      return std::make_unique<CaseLabelAST>(loc, std::move(values));
+    }
+
     auto binary = llvm::dyn_cast<BinaryExpressionAST>(expr.get());
     if (binary) {
       if (binary->getOp() != tok_assignment)
@@ -997,8 +1020,6 @@ private:
       return std::make_unique<SubroutineProcessingAST>(std::move(loc),
                                                        std::move(expr));
     }
-
-    // TODO: jump labels
 
     return parseError<InstructionAST>("instruction", "in code block");
   }

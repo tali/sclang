@@ -14,7 +14,7 @@ begin
 
 // CHECK: [[IN:%[0-9]+]] = memref.load [[INVAR]]
 // CHECK: [[LT:%[0-9]+]] = arith.cmpi slt, [[IN]], [[C0]]
-// CHECK: scf.if [[LT]] {
+// CHECK: cf.cond_br [[LT]]
   if in < int#0 then
 
 // CHECK:   [[IN:%[0-9]+]] = memref.load [[INVAR]]
@@ -22,24 +22,20 @@ begin
 // CHECK:   memref.store [[NEG]], [[ABS:%[a-z_0-9]+]][] : memref<i16, strided<[], offset: ?>>
     abs := -in;
 
-// CHECK: } else {
 // CHECK:   [[IN:%[0-9]+]] = memref.load [[INVAR]]
 // CHECK:   [[GT:%[0-9]+]] = arith.cmpi sgt, [[IN]], [[C0]]
-// CHECK:   scf.if [[GT]] {
+// CHECK: cf.cond_br [[GT]]
   elsif in > int#0 then
 
 // CHECK:     [[IN:%[0-9]+]] = memref.load [[INVAR]]
 // CHECK:     memref.store [[IN]], [[ABS]][] : memref<i16, strided<[], offset: ?>>
     abs := in;
 
-// CHECK:   } else {
   else
 
 // CHECK: memref.store [[C0]], [[ABS]][] : memref<i16, strided<[], offset: ?>>
     abs := int#0;
 
-// CHECK:   }
-// CHECK: }
   end_if;
 
 // CHECK: [[RET:%[0-9]+]] = memref.load [[ABS]][] : memref<i16, strided<[], offset: ?>>

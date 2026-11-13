@@ -30,6 +30,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopedHashTable.h"
@@ -98,6 +99,11 @@ public:
 
     for (const auto &unit : *moduleAST) {
       builder.clearInsertionPoint();
+      if (auto *udt = llvm::dyn_cast<UserDefinedTypeAST>(unit.get())) {
+        if (failed(mlirGen(udt)))
+          return nullptr;
+        continue;
+      }
       auto func = mlirGen(unit.get());
       if (!func)
         return nullptr;
@@ -134,6 +140,25 @@ private:
   llvm::StringRef functionName;
   /// Whether this function returns a value.
   bool functionHasReturnValue;
+
+  /// Jump label name -> block, for the function currently being generated.
+  llvm::StringMap<mlir::Block *> labelBlocks;
+  /// User-defined type name -> struct type.
+  llvm::StringMap<mlir::Type> udtTypes;
+
+  /// Does the current insertion block already end with a terminator?
+  bool blockHasTerminator() {
+    auto block = builder.getInsertionBlock();
+    return block && !block->empty() &&
+           block->back().hasTrait<mlir::OpTrait::IsTerminator>();
+  }
+
+  /// Create the EndOp terminator for the current block, unless it already
+  /// has a terminator (e.g. from a goto).
+  void createEndOp(mlir::Location location) {
+    if (!blockHasTerminator())
+      builder.create<EndOp>(location);
+  }
 
   /// Helper conversion for a SCL AST location to an MLIR location.
   mlir::Location loc(Location loc) {
@@ -176,7 +201,6 @@ private:
         .Case<FunctionAST>([&](auto function) { return mlirGen(function); })
         .Case<FunctionBlockAST>([&](auto fb) { return mlirGen(fb); })
         .Case<OrganizationBlockAST>([&](auto ob) { return mlirGen(ob); })
-        .Case<UserDefinedTypeAST>([&](auto udt) { return mlirGen(udt); })
         .Default([&](auto unit) {
           emitError(loc(unit->loc()))
               << "MLIR codegen encountered an unhandled unit kind '"
@@ -264,13 +288,8 @@ private:
   }
 
   mlir::LogicalResult mlirGen(const JumpLabelDeclarationSubsectionAST *decls) {
-    for (const auto &decl : decls->getValues()) {
-      auto location = loc(decl->loc());
-
-      emitError(location) << "LABEL not supported"; // TODO: TBD
-      return mlir::failure();
-    }
-
+    // Labels are defined by label statements in the code section; the
+    // declaration only reserves the names, so there is nothing to emit.
     return mlir::success();
   }
 
@@ -300,15 +319,29 @@ private:
   }
 
   mlir::Operation *mlirGen(const OrganizationBlockAST *ob) {
-    emitError(loc(ob->loc())) << "TBD not implemented";
-    return nullptr;
+    // An organization block is an entry point without parameters or return
+    // value: model it as a void function.
+    return mlirGenFunctionLike(ob->getIdentifier(), builder.getNoneType(),
+                               ob->getDeclarations(), ob->getCode(),
+                               loc(ob->loc()));
   }
 
   FunctionOp mlirGen(const FunctionAST *func) {
-    auto location = loc(func->loc());
-    functionName = func->getIdentifier();
-    functionHasReturnValue = false;
-    std::string name(func->getIdentifier());
+    return mlirGenFunctionLike(func->getIdentifier(),
+                               getType(func->getType()),
+                               func->getDeclarations(), func->getCode(),
+                               loc(func->loc()));
+  }
+
+  /// Shared codegen for functions and organization blocks.
+  FunctionOp mlirGenFunctionLike(llvm::StringRef identifier, mlir::Type retType,
+                                 const DeclarationSectionAST *declarations,
+                                 const CodeSectionAST *code,
+                                 mlir::Location location) {
+    functionName = identifier;
+    functionHasReturnValue = !retType.isa<mlir::NoneType>();
+    labelBlocks.clear();
+    std::string name(identifier);
 
     // Create a scope in the symbol table to hold variable declarations.
     llvm::ScopedHashTableScope<StringRef, VariableSymbol> var_scope(
@@ -320,23 +353,19 @@ private:
     std::vector<llvm::StringRef> output_names;
     std::vector<const VariableDeclarationSubsectionAST *> tempvar;
     // register function result as output variable
-    auto retType = getType(func->getType());
-    if (!retType.isa<mlir::NoneType>()) {
+    if (functionHasReturnValue) {
       output_types.push_back(retType);
       output_names.push_back(name);
-      functionHasReturnValue = true;
     }
 
     // Parse the declaration subsections
-    const auto &declarations = func->getDeclarations()->getDecls();
-    for (const auto &decl : declarations) {
+    for (const auto &decl : declarations->getDecls()) {
       switch (decl->getKind()) {
       case DeclarationSubsectionAST::DeclarationASTKind::Decl_Constant:
-        emitError(location) << "TBD constants not implemented";
-        return nullptr;
       case DeclarationSubsectionAST::DeclarationASTKind::Decl_JumpLabel:
-        emitError(location) << "TBD jump labels not implemented";
-        return nullptr;
+        if (failed(mlirGen(decl.get())))
+          return nullptr;
+        break;
       case DeclarationSubsectionAST::DeclarationASTKind::Decl_Variable:
         const auto &vardecls =
             llvm::cast<VariableDeclarationSubsectionAST>(*decl);
@@ -412,16 +441,14 @@ private:
     }
 
     // Emit the body of the function.
-    if (mlir::failed(mlirGen(func->getCode()))) {
+    if (mlir::failed(mlirGen(code))) {
       function.erase();
       return nullptr;
     }
 
-    // Implicitly return if no return statement was emitted.
-    if (entryBlock.empty() || (!isa<ReturnOp>(entryBlock.back()) &&
-                               !isa<ReturnValueOp>(entryBlock.back()))) {
+    // Implicitly return if the current block has no terminator yet.
+    if (!blockHasTerminator())
       mlirgenReturn(location);
-    }
 
     return function;
   }
@@ -481,10 +508,9 @@ private:
       return nullptr;
     }
 
-    // Implicitly return if no return statement was emitted.
-    if (entryBlock.empty() || !isa<ReturnOp>(entryBlock.back())) {
+    // Implicitly return if the current block has no terminator yet.
+    if (!blockHasTerminator())
       mlirgenReturn(location);
-    }
 
     return function;
   }
@@ -502,9 +528,13 @@ private:
     return builder.create<DataBlockOp>(location, typeAttr, nameAttr);
   }
 
-  mlir::Operation *mlirGen(const UserDefinedTypeAST *udt) {
-    emitError(loc(udt->loc())) << "TBD not implemented";
-    return nullptr;
+  /// Register a user-defined type. Emits no op; returns success/failure.
+  mlir::LogicalResult mlirGen(const UserDefinedTypeAST *udt) {
+    auto type = getType(udt->getType());
+    if (!type)
+      return mlir::failure();
+    udtTypes[udt->getIdentifier()] = type;
+    return mlir::success();
   }
 
   // MARK: C.2 Structure of Declaration Sections
@@ -556,6 +586,9 @@ private:
         .Case<DebugPrintAST>([&](auto debugPrint) {
           return mlirGen(debugPrint);
         })
+        .Case<CaseOfAST>([&](auto caseOf) { return mlirGen(caseOf); })
+        .Case<JumpLabelAST>([&](auto label) { return mlirGen(label); })
+        .Case<GotoAST>([&](auto goto_) { return mlirGen(goto_); })
         .Default([&](auto instr) {
           emitError(loc(instr->loc()))
               << "MLIR codegen encountered an unhandled instruction kind '"
@@ -617,6 +650,32 @@ private:
   }
 
   mlir::Value mlirGenRValue(const ExpressionAST *expr) {
+    // FB/struct members are addressed as i8 views; load with the declared
+    // member type so the value has the right type.
+    if (auto *var = llvm::dyn_cast<SimpleVariableAST>(expr)) {
+      if (!var->isSymbol()) {
+        auto sym = symbolTable.lookup(var->getName());
+        if (sym.isElement()) {
+          auto addr = mlirGen(var);
+          if (!addr)
+            return nullptr;
+          return builder.create<LoadOp>(loc(expr->loc()), sym.getType(), addr);
+        }
+      }
+    }
+    if (auto *bin = llvm::dyn_cast<BinaryExpressionAST>(expr)) {
+      if (bin->getOp() == tok_dot) {
+        auto addr = mlirGen(expr);
+        if (!addr)
+          return nullptr;
+        auto base = mlirGen(bin->getLhs());
+        auto name = llvm::cast<SimpleVariableAST>(bin->getRhs())->getName();
+        auto ty = base ? memberDeclaredType(base, name) : nullptr;
+        if (!ty)
+          return nullptr;
+        return builder.create<LoadOp>(loc(expr->loc()), ty, addr);
+      }
+    }
     return mlirGenRValue(mlirGen(expr));
   }
   mlir::Value mlirGenRValue(mlir::Value expr) {
@@ -707,7 +766,9 @@ private:
   mlir::Value mlirGenVariable(mlir::Location location, StringRef name) {
     auto variable = symbolTable.lookup(name);
     if (variable.isElement()) {
-      auto type = AddressType::get(variable.getType());
+      // FB members live in the instance DB byte buffer; address them as i8.
+      auto i8 = IntegerType::get(builder.getContext(), 8);
+      auto type = AddressType::get(i8);
       auto self = symbolTable.lookup("$self").getValue();
       assert(self);
       return builder.create<GetVariableOp>(location, type, self, name);
@@ -740,6 +801,25 @@ private:
     return StructType::get(names, types);
   }
 
+  /// The declared type of a struct/IDB member (used to type loads).
+  mlir::Type memberDeclaredType(mlir::Value base, StringRef name) {
+    auto baseTy = base.getType().cast<AddressType>().getElementType();
+    if (auto idbTy = baseTy.dyn_cast<InstanceDbType>()) {
+      auto fbName = mlir::StringAttr::get(theModule->getContext(),
+                                          idbTy.getFbSymbol());
+      auto fb = mlir::SymbolTable::lookupNearestSymbolFrom<FunctionBlockOp>(
+          theModule, fbName);
+      if (!fb)
+        return nullptr;
+      auto var = mlir::dyn_cast_or_null<VariableOp>(
+          mlir::SymbolTable::lookupSymbolIn(fb, name));
+      return var ? var.getType() : nullptr;
+    }
+    if (auto structTy = baseTy.dyn_cast<StructType>())
+      return structTy.getElementType(name);
+    return nullptr;
+  }
+
   mlir::Value mlirGenElement(mlir::Location location,
                              mlir::Value address, StringRef name) {
     mlir::Type baseType = address.getType().cast<AddressType>().getElementType();
@@ -758,14 +838,15 @@ private:
         emitError(location) << "unknown variable '" << name << "' in FB '" << fbName << "'";
         return nullptr;
       }
-      mlir::Type elementType = var.getType();
-      mlir::Type resultType = AddressType::get(elementType);
+      // Address the member as an i8 view into the instance byte buffer.
+      auto i8 = IntegerType::get(builder.getContext(), 8);
+      mlir::Type resultType = AddressType::get(i8);
 
       return builder.create<GetVariableOp>(location, resultType, address, name);
     })
     .Case<StructType>([&](auto structType) -> GetElementOp {
-      mlir::Type elementType = structType.getElementType(name);
-      mlir::Type resultType = AddressType::get(elementType);
+      auto i8 = IntegerType::get(builder.getContext(), 8);
+      mlir::Type resultType = AddressType::get(i8);
 
       return builder.create<GetElementOp>(location, resultType, address, name);
     })
@@ -813,12 +894,12 @@ private:
     //    and the result value is returned. If an error occurs we get a nullptr
     //    and propagate.
     //
-    mlir::Value lhs = mlirGen(expr->getLhs());
-    if (!lhs)
-      return nullptr;
     if (expr->getOp() == tok_dot) {
       // this BinaryExpression is a STRUCT element access:
       // the right hand side is special, it's not a normal expression but a name
+      mlir::Value lhs = mlirGen(expr->getLhs());
+      if (!lhs)
+        return nullptr;
       if (!isa<SimpleVariableAST>(expr->getRhs())) {
         emitError(loc(expr->getRhs()->loc()), "expected element name");
         return nullptr;
@@ -826,7 +907,11 @@ private:
       auto name = llvm::cast<SimpleVariableAST>(expr->getRhs())->getName();
       return mlirGenElement(location, lhs, name);
     }
-    lhs = mlirGenRValue(lhs);
+    // Go through the AST overload so that FB/DB members (addressed as i8
+    // views) are loaded with their declared member type.
+    mlir::Value lhs = mlirGenRValue(expr->getLhs());
+    if (!lhs)
+      return nullptr;
     mlir::Value rhs = mlirGenRValue(expr->getRhs());
     if (!rhs)
       return nullptr;
@@ -1151,7 +1236,10 @@ private:
   }
 
   mlir::Type getType(const UserDefinedTypeIdentifierAST *type) {
-    // TODO: TBD other types
+    auto it = udtTypes.find(type->getName());
+    if (it != udtTypes.end())
+      return it->second;
+    // A reference to a function block type is an instance DB.
     return InstanceDbType::get(builder.getContext(), type->getName());
   }
 
@@ -1195,7 +1283,7 @@ private:
     if (failed(mlirGen(forDo->getCode())))
       return mlir::failure();
 
-    builder.create<EndOp>(location);
+    createEndOp(location);
     builder.restoreInsertionPoint(old);
 
     return mlir::success();
@@ -1220,19 +1308,19 @@ private:
         old = builder.saveInsertionPoint();
         first = false;
       } else {
-        builder.create<EndOp>(location);
+        createEndOp(location);
       }
       builder.createBlock(&cond.getThenBody());
       if (failed(mlirGen(ifThen->getCodeBlock())))
         return mlir::failure();
-      builder.create<EndOp>(location);
+      createEndOp(location);
       builder.createBlock(&cond.getElseBody());
     }
     if (ifThenElse->getElseBlock()) {
       if (failed(mlirGen(ifThenElse->getElseBlock().value())))
         return mlir::failure();
     }
-    builder.create<EndOp>(loc(ifThenElse->loc()));
+    createEndOp(loc(ifThenElse->loc()));
 
     builder.restoreInsertionPoint(old);
 
@@ -1254,12 +1342,12 @@ private:
     builder.setInsertionPointToEnd(condBlock);
     builder.create<ConditionOp>(location, condition, dummy, dummy);
     builder.setInsertionPointToEnd(dummy);
-    builder.create<EndOp>(location);
+    createEndOp(location);
 
     builder.createBlock(&whileDoOp.getDoBody());
     if (failed(mlirGen(whileDo->getCode())))
       return mlir::failure();
-    builder.create<EndOp>(location);
+    createEndOp(location);
 
     builder.restoreInsertionPoint(old);
     return mlir::success();
@@ -1282,9 +1370,129 @@ private:
     builder.setInsertionPointToEnd(bodyBlock);
     builder.create<UntilOp>(location, until, dummy, dummy);
     builder.setInsertionPointToEnd(dummy);
-    builder.create<EndOp>(location);
+    createEndOp(location);
 
     builder.restoreInsertionPoint(old);
+    return mlir::success();
+  }
+
+  /// Codegen a case-of selection into a scl.case op with one region per
+  /// case label plus an else region.
+  mlir::LogicalResult mlirGen(const CaseOfAST *caseOf) {
+    auto location = loc(caseOf->loc());
+    mlir::Value selector = mlirGenRValue(caseOf->getExpr());
+    if (!selector)
+      return mlir::failure();
+    if (!selector.getType().isa<IntegerType>()) {
+      emitError(location) << "case selector must be an integer";
+      return mlir::failure();
+    }
+
+    // Group the flat instruction list by case labels.
+    struct CaseGroup {
+      std::vector<int32_t> values;
+      std::vector<const InstructionAST *> body;
+    };
+    std::vector<CaseGroup> groups;
+    for (const auto &instr : caseOf->getCode()->getInstructions()) {
+      if (auto *label = llvm::dyn_cast<CaseLabelAST>(instr.get())) {
+        CaseGroup group;
+        for (const auto &value : label->getValues()) {
+          int v;
+          if (failed(getConstantInteger(value.get(), v)))
+            return mlir::failure();
+          group.values.push_back(v);
+        }
+        groups.push_back(std::move(group));
+      } else {
+        if (groups.empty()) {
+          emitError(loc(instr->loc()))
+              << "instruction before the first case label";
+          return mlir::failure();
+        }
+        groups.back().body.push_back(instr.get());
+      }
+    }
+
+    SmallVector<mlir::Attribute, 4> caseValues;
+    for (auto &group : groups)
+      caseValues.push_back(
+          mlir::DenseI32ArrayAttr::get(builder.getContext(), group.values));
+    auto caseValuesAttr = mlir::ArrayAttr::get(builder.getContext(), caseValues);
+
+    auto caseOp =
+        builder.create<CaseOp>(location, selector, caseValuesAttr,
+                              (unsigned)groups.size() + 1);
+    auto old = builder.saveInsertionPoint();
+
+    for (size_t i = 0; i < groups.size(); ++i) {
+      auto &group = groups[i];
+      builder.createBlock(&caseOp.getBody()[i]);
+      builder.setInsertionPointToStart(&caseOp.getBody()[i].front());
+      for (auto *instr : group.body) {
+        if (failed(mlirGen(instr)))
+          return mlir::failure();
+      }
+      createEndOp(location);
+    }
+
+    // The last region is the else block.
+    builder.createBlock(&caseOp.getBody().back());
+    builder.setInsertionPointToStart(&caseOp.getBody().back().front());
+    (void)0;
+    if (caseOf->getElseBlock().has_value()) {
+      if (failed(mlirGen(caseOf->getElseBlock().value())))
+        return mlir::failure();
+    }
+    createEndOp(location);
+
+    builder.restoreInsertionPoint(old);
+    return mlir::success();
+  }
+
+  /// Codegen a jump label: split the current block, branch to the label block.
+  mlir::LogicalResult mlirGen(const JumpLabelAST *label) {
+    auto location = loc(label->loc());
+    auto name = label->getLabel();
+    mlir::Block *cur = builder.getInsertionBlock();
+    mlir::Block *labelBlock;
+    auto it = labelBlocks.find(name);
+    if (it != labelBlocks.end()) {
+      labelBlock = it->second;
+    } else {
+      labelBlock = builder.createBlock(cur->getParent());
+      labelBlocks[name] = labelBlock;
+    }
+    if (!blockHasTerminator()) {
+      builder.setInsertionPointToEnd(cur);
+      builder.create<mlir::cf::BranchOp>(location, labelBlock);
+    }
+    builder.setInsertionPointToStart(labelBlock);
+    return mlir::success();
+  }
+
+  /// Codegen a goto: branch to the label block (created on demand for
+  /// forward references) and continue in a fresh unreachable block.
+  mlir::LogicalResult mlirGen(const GotoAST *goto_) {
+    auto location = loc(goto_->loc());
+    auto name = goto_->getLabel();
+    mlir::Block *cur = builder.getInsertionBlock();
+    mlir::Block *target;
+    auto it = labelBlocks.find(name);
+    if (it != labelBlocks.end()) {
+      target = it->second;
+    } else {
+      target = builder.createBlock(cur->getParent());
+      labelBlocks[name] = target;
+    }
+    if (blockHasTerminator()) {
+      emitError(location) << "goto must not follow a terminator";
+      return mlir::failure();
+    }
+    builder.setInsertionPointToEnd(cur);
+    builder.create<mlir::cf::BranchOp>(location, target);
+    mlir::Block *dead = builder.createBlock(cur->getParent());
+    builder.setInsertionPointToStart(dead);
     return mlir::success();
   }
 

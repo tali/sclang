@@ -1,0 +1,32 @@
+// RUN: sclang-gen --emit=mlir-std %s | FileCheck %s
+
+// CHECK: func.func @fb1(%arg0: memref<6xi8>)
+function_block fb1
+var_input
+  in : int;
+end_var
+var_output
+  out : int;
+end_var
+var
+  state : int := 0;
+end_var
+begin
+  out := state;
+  state := in;
+end_function_block
+
+// CHECK: memref.global @db1 : memref<6xi8>
+data_block db1
+  fb1
+end_data_block
+
+// CHECK-LABEL: func.func @fc1
+// CHECK:         %[[DB:[0-9]+]] = memref.get_global @db1 : memref<6xi8>
+// CHECK:         call @fb1(%[[DB]]) : (memref<6xi8>) -> ()
+function fc1 : int
+begin
+  "db1".in := 1;
+  fb1."db1"();
+  fc1 := "db1".out;
+end_function

@@ -16,15 +16,15 @@ end_var
 
 begin
 
-// CHECK: %b = scl.getvariable @b from %arg0
-// CHECK: scl.store %b : !scl.address<!scl.int> = %c1 : !scl.int
+// CHECK: %{{[a-z0-9_]+}} = scl.getvariable @b from %arg0
+// CHECK: scl.store %{{[a-z0-9_]+}} : !scl.address<!scl.char> = %c1 : !scl.int
   b := 1;
 
-// CHECK: %a = scl.getvariable @a from %arg0
-// CHECK: %0 = scl.load %a : !scl.address<!scl.bool> : !scl.bool
-// CHECK: scl.if %0 : !scl.bool  {
+// CHECK: %{{[a-z0-9_]+}} = scl.getvariable @a from %arg0
+// CHECK: %{{[0-9]+}} = scl.load %{{[a-z0-9_]+}} : !scl.address<!scl.char> : !scl.bool
+// CHECK: scl.if %0 : !scl.bool {
   if a then
-// CHECK:   scl.store %b : !scl.address<!scl.int> = %c2 : !scl.int
+// CHECK: scl.store %{{[a-z0-9_]+}} : !scl.address<!scl.char> = %c2 : !scl.int
     b := 2;
   end_if;
 // CHECK: } else  {
@@ -48,17 +48,17 @@ end_var
 
 begin
 
-// CHECK: %a = scl.getvariable @a from %arg0
-// CHECK: %0 = scl.load %a : !scl.address<!scl.bool> : !scl.bool
-// CHECK: scl.if %0 : !scl.bool  {
+// CHECK: %{{[a-z0-9_]+}} = scl.getvariable @a from %arg0
+// CHECK: %{{[0-9]+}} = scl.load %{{[a-z0-9_]+}} : !scl.address<!scl.char> : !scl.bool
+// CHECK: scl.if %0 : !scl.bool {
   if a then
-// CHECK: %b = scl.getvariable @b from %arg0
-// CHECK: scl.store %b : !scl.address<!scl.int> = %c1 : !scl.int
+// CHECK: %{{[a-z0-9_]+}} = scl.getvariable @b from %arg0
+// CHECK: scl.store %{{[a-z0-9_]+}} : !scl.address<!scl.char> = %c1 : !scl.int
     b := 1;
 // CHECK: } else  {
   else
-// CHECK: %b = scl.getvariable @b from %arg0
-// CHECK: scl.store %b : !scl.address<!scl.int> = %c2 : !scl.int
+// CHECK: %{{[a-z0-9_]+}} = scl.getvariable @b from %arg0
+// CHECK: scl.store %{{[a-z0-9_]+}} : !scl.address<!scl.char> = %c2 : !scl.int
     b := 2;
 // CHECK: }
   end_if;
@@ -82,25 +82,25 @@ end_var
 
 begin
 
-// CHECK: %a1 = scl.getvariable @a1 from %arg0
-// CHECK: %0 = scl.load %a1 : !scl.address<!scl.bool> : !scl.bool
-// CHECK: scl.if %0 : !scl.bool  {
+// CHECK: %{{[a-z0-9_]+}} = scl.getvariable @a1 from %arg0
+// CHECK: %{{[0-9]+}} = scl.load %{{[a-z0-9_]+}} : !scl.address<!scl.char> : !scl.bool
+// CHECK: scl.if %0 : !scl.bool {
   if a1 then
-// CHECK: %b = scl.getvariable @b from %arg0
-// CHECK: scl.store %b : !scl.address<!scl.int> = %c1 : !scl.int
+// CHECK: %{{[a-z0-9_]+}} = scl.getvariable @b from %arg0
+// CHECK: scl.store %{{[a-z0-9_]+}} : !scl.address<!scl.char> = %c1 : !scl.int
     b := 1;
 // CHECK: } else  {
-// CHECK: %a2 = scl.getvariable @a2 from %arg0
-// CHECK: %1 = scl.load %a2 : !scl.address<!scl.bool> : !scl.bool
+// CHECK: %{{[a-z0-9_]+}} = scl.getvariable @a2 from %arg0
+// CHECK: %{{[0-9]+}} = scl.load %{{[a-z0-9_]+}} : !scl.address<!scl.char> : !scl.bool
 // CHECK: scl.if %1 : !scl.bool  {
   elsif a2 then
-// CHECK: %b = scl.getvariable @b from %arg0
-// CHECK: scl.store %b : !scl.address<!scl.int> = %c2 : !scl.int
+// CHECK: %{{[a-z0-9_]+}} = scl.getvariable @b from %arg0
+// CHECK: scl.store %{{[a-z0-9_]+}} : !scl.address<!scl.char> = %c2 : !scl.int
     b := 2;
 // CHECK: } else  {
   else
-// CHECK: %b = scl.getvariable @b from %arg0
-// CHECK: scl.store %b : !scl.address<!scl.int> = %c3 : !scl.int
+// CHECK: %{{[a-z0-9_]+}} = scl.getvariable @b from %arg0
+// CHECK: scl.store %{{[a-z0-9_]+}} : !scl.address<!scl.char> = %c3 : !scl.int
     b := 3;
 // CHECK: }
   end_if;

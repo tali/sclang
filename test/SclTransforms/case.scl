@@ -1,0 +1,23 @@
+// RUN: sclang-gen --emit=mlir-std %s | FileCheck %s
+
+// CHECK-LABEL: func.func @f
+// CHECK:         arith.extsi {{%[0-9]+}} : i16 to i32
+// CHECK:         cf.switch {{%[0-9]+}} : i32, [
+// CHECK-DAG:       1: ^bb{{[0-9]+}}
+// CHECK-DAG:       2: ^bb{{[0-9]+}}
+// CHECK-DAG:       3: ^bb{{[0-9]+}}
+// CHECK:         ]
+function f : int
+var
+  x : int;
+end_var
+begin
+  x := 2;
+  case x of
+    1: x := 10;
+    2, 3: x := 20;
+  else
+    x := 30;
+  end_case;
+  f := x;
+end_function

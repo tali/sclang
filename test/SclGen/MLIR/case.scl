@@ -1,0 +1,24 @@
+// RUN: sclang-gen --emit=mlir %s | sclang-gen -x mlir --emit=mlir | FileCheck %s
+
+// CHECK-LABEL: scl.function @f
+function f : int
+var
+  x : int;
+end_var
+begin
+  x := 2;
+// CHECK: scl.case %{{[0-9]+}} : !scl.int [array<i32: 1>, array<i32: 2, 3>] {
+// CHECK:   scl.store
+// CHECK: }, {
+// CHECK:   scl.store
+// CHECK: }, {
+// CHECK:   scl.store
+// CHECK: }
+  case x of
+    1: x := 10;
+    2, 3: x := 20;
+  else
+    x := 30;
+  end_case;
+  f := x;
+end_function

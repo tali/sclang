@@ -19,6 +19,7 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -39,19 +40,110 @@ template <typename U> bool all_of_type(ValueRange range) {
   return all_of(range, [](Value elem) { return elem.getType().isa<U>(); });
 }
 
+// MARK: FB/struct layout
+
+/// Memory layout of a function block instance (its variables) or struct,
+/// computed from the ops before conversion starts (the ops are erased during
+/// conversion, so the layout must be cached up front).
+struct FbMemberLayout {
+  std::string name;
+  int64_t offset;
+  Type type;
+};
+struct FbLayout {
+  int64_t size = 0;
+  std::vector<FbMemberLayout> members;
+};
+using FbLayoutCache = llvm::StringMap<FbLayout>;
+
+/// Size of a type in bytes.
+static int64_t byteSize(Type type, const FbLayoutCache &layouts) {
+  if (auto intTy = type.dyn_cast<scl::IntegerType>())
+    return (intTy.getWidth() + 7) / 8;
+  if (auto logTy = type.dyn_cast<scl::LogicalType>())
+    return (logTy.getWidth() + 7) / 8;
+  if (type.isa<scl::RealType>())
+    return 4;
+  if (auto arrTy = type.dyn_cast<scl::ArrayType>()) {
+    int64_t count = 1;
+    for (auto &dim : arrTy.getDimensions())
+      count *= dim.second - dim.first + 1;
+    return count * byteSize(arrTy.getElementType(), layouts);
+  }
+  if (auto structTy = type.dyn_cast<scl::StructType>()) {
+    int64_t size = 0;
+    for (auto elem : structTy.getElementTypes())
+      size += byteSize(elem, layouts);
+    return size;
+  }
+  if (auto idbTy = type.dyn_cast<scl::InstanceDbType>()) {
+    auto it = layouts.find(idbTy.getFbSymbol());
+    return it != layouts.end() ? it->second.size : 0;
+  }
+  // date/time types
+  if (type.isa<scl::S5TimeType>() || type.isa<scl::DateType>())
+    return 2;
+  if (type.isa<scl::TimeType>() || type.isa<scl::TimeOfDayType>())
+    return 4;
+  if (type.isa<scl::DateAndTimeType>())
+    return 8;
+  return 0;
+}
+
+/// Compute the layouts of all function blocks in the module.
+static FbLayoutCache computeFbLayouts(ModuleOp module) {
+  FbLayoutCache layouts;
+  // Two passes so that FBs referencing other FBs work regardless of order.
+  for (unsigned pass = 0; pass < 2; ++pass) {
+    for (auto fb : module.getOps<scl::FunctionBlockOp>()) {
+      FbLayout layout;
+      for (auto var : fb.getBody().getOps<scl::VariableOp>()) {
+        int64_t size = byteSize(var.getType(), layouts);
+        layout.members.push_back(
+            {var.getSymName().str(), layout.size, var.getType()});
+        layout.size += size;
+      }
+      layouts[fb.getName()] = layout;
+    }
+  }
+  return layouts;
+}
+
 // MARK: SclTypeConverter
 
 class SclTypeConverter : public TypeConverter {
 public:
-  SclTypeConverter() {
+  FbLayoutCache fbLayouts;
+
+  SclTypeConverter() : SclTypeConverter(FbLayoutCache{}) {}
+  explicit SclTypeConverter(FbLayoutCache layouts) : fbLayouts(std::move(layouts)) {
     addConversion([&](scl::AddressType type) {
-      auto elem = convertType(type.getElementType());
-      if (!elem)
+      auto elem = type.getElementType();
+      // An instance DB address is the instance buffer itself.
+      if (auto idbTy = elem.dyn_cast<scl::InstanceDbType>()) {
+        auto it = fbLayouts.find(idbTy.getFbSymbol());
+        if (it == fbLayouts.end())
+          return Type();
+        return (Type)MemRefType::get({it->second.size},
+                                     IntegerType::get(type.getContext(), 8));
+      }
+      auto celem = convertType(elem);
+      if (!celem)
         return Type();
-      // 0-d memref with dynamic offset, so that array element addresses
-      // produced by memref.reinterpret_cast have the same type.
+      // An i8 address is a rank-1 byte view into a byte buffer (FB/struct
+      // members). It must not be chained through another reinterpret_cast:
+      // ReinterpretCastOp::fold strips the inner offset when folding
+      // reinterpret_cast(reinterpret_cast(x)), so byte accesses index the
+      // view directly. Other addresses are 0-d memrefs with dynamic offset,
+      // so that array element addresses produced by memref.reinterpret_cast
+      // have the same type.
+      if (celem.isInteger(8))
+        return (Type)mlir::MemRefType::get(
+            {ShapedType::kDynamic}, celem,
+            StridedLayoutAttr::get(type.getContext(), ShapedType::kDynamic,
+                                   {1}));
       return (Type)mlir::MemRefType::get(
-          {}, elem,
+          {}, celem,
           StridedLayoutAttr::get(type.getContext(), ShapedType::kDynamic, {}));
     });
     addConversion([&](scl::IntegerType type) {
@@ -63,7 +155,6 @@ public:
     addConversion([&](scl::RealType type) {
       return FloatType::getF32(type.getContext());
     });
-
     addConversion([&](scl::ArrayType type) {
       SmallVector<int64_t, 2> shape;
       for (auto &dim : type.getDimensions())
@@ -73,13 +164,41 @@ public:
         return Type();
       return (Type)MemRefType::get(shape, elem);
     });
-
-    // keep structs
-    //addConversion([&](scl::StructType type) { return type; });
+    // A struct or instance DB is a flat byte buffer; members are addressed by
+    // byte offset via memref.reinterpret_cast.
+    addConversion([&](scl::StructType type) {
+      return (Type)MemRefType::get(
+          {byteSize(type, fbLayouts)}, IntegerType::get(type.getContext(), 8));
+    });
+    addConversion([&](scl::InstanceDbType type) {
+      auto it = fbLayouts.find(type.getFbSymbol());
+      if (it == fbLayouts.end())
+        return Type();
+      return (Type)MemRefType::get({it->second.size},
+                                   IntegerType::get(type.getContext(), 8));
+    });
+    // date/time types lower to plain integers of their storage width
+    addConversion([&](scl::S5TimeType type) {
+      return IntegerType::get(type.getContext(), 16);
+    });
+    addConversion([&](scl::TimeType type) {
+      return IntegerType::get(type.getContext(), 32);
+    });
+    addConversion([&](scl::DateType type) {
+      return IntegerType::get(type.getContext(), 16);
+    });
+    addConversion([&](scl::TimeOfDayType type) {
+      return IntegerType::get(type.getContext(), 32);
+    });
+    addConversion([&](scl::DateAndTimeType type) {
+      return IntegerType::get(type.getContext(), 64);
+    });
 
     // keep Std types
     addConversion([&](FloatType type) { return type; });
     addConversion([&](IntegerType type) { return type; });
+    addConversion([&](IndexType type) { return type; });
+    addConversion([&](MemRefType type) { return type; });
 
     // Add generic source and target materializations to handle cases where
     // SCL types persist after conversion to Std.
@@ -244,34 +363,50 @@ struct FunctionOpLowering : public OpConversionPattern<scl::FunctionOp> {
   }
 };
 
-// MARK: IfThenElseOpLowering
-
-struct IfThenElseOpLowering : public OpConversionPattern<scl::IfThenElseOp> {
-  using OpConversionPattern<scl::IfThenElseOp>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(scl::IfThenElseOp op, scl::IfThenElseOp::Adaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-
-    auto loweredOp = rewriter.create<scf::IfOp>(op.getLoc(), adaptor.getCond(),
-                                                /*withElseRegion=*/true);
-    // inline the block from our then body into the lowered region,
-    // then remove the implicitly created one
-    rewriter.inlineRegionBefore(op.getThenBody(),
-                                &loweredOp.getThenRegion().back());
-    rewriter.eraseBlock(&loweredOp.getThenRegion().back());
-
-    // same for the else part
-    rewriter.inlineRegionBefore(op.getElseBody(),
-                                &loweredOp.getElseRegion().back());
-    rewriter.eraseBlock(&loweredOp.getElseRegion().back());
-
-    rewriter.replaceOp(op, loweredOp.getResults());
-    return success();
-  }
-};
-
 // MARK: LoadOpLowering
+
+/// Load a value of `resTy` from `addr`; byte-assemble if the address is an
+/// i8 view (FB/struct members in a byte buffer).
+static Value loadFromByteBuffer(OpBuilder &b, Location loc, Value addr,
+                                Type resTy) {
+  auto memTy = addr.getType().cast<MemRefType>();
+  auto zero = b.create<arith::ConstantIndexOp>(loc, 0);
+  if (memTy.getElementType() == resTy) {
+    SmallVector<Value, 1> indices(memTy.getRank(), zero);
+    return b.create<memref::LoadOp>(loc, addr, indices);
+  }
+  if (!memTy.getElementType().isInteger(8) || memTy.getRank() != 1)
+    return nullptr;
+  if (!resTy.isIntOrFloat())
+    return nullptr;
+  int64_t nbytes = (resTy.getIntOrFloatBitWidth() + 7) / 8;
+  if (nbytes == 0 || nbytes > 8)
+    return nullptr;
+  auto accTy = resTy.isa<FloatType>()
+                   ? IntegerType::get(b.getContext(), nbytes <= 4 ? 32 : 64)
+                   : resTy;
+  // addr is a rank-1 i8 view starting at the value (FB/struct member);
+  // assemble the value byte by byte. Do not chain another reinterpret_cast:
+  // its fold would drop the member offset.
+  Value acc = b.create<arith::ConstantOp>(loc, accTy,
+                                          b.getIntegerAttr(accTy, 0));
+  for (int64_t i = 0; i < nbytes; ++i) {
+    auto idx = b.create<arith::ConstantIndexOp>(loc, i);
+    Value byte = b.create<memref::LoadOp>(loc, addr, ValueRange{idx});
+    Value ext = b.create<arith::ExtUIOp>(loc, accTy, byte);
+    if (i > 0) {
+      auto sh = b.create<arith::ConstantOp>(loc, accTy,
+                                            b.getIntegerAttr(accTy, 8 * i));
+      ext = b.create<arith::ShLIOp>(loc, ext, sh);
+    }
+    acc = b.create<arith::OrIOp>(loc, acc, ext);
+  }
+  if (resTy.isa<FloatType>())
+    return b.create<arith::BitcastOp>(loc, resTy, acc);
+  if (accTy != resTy)
+    return b.create<arith::TruncIOp>(loc, resTy, acc);
+  return acc;
+}
 
 struct LoadOpLowering : public OpConversionPattern<scl::LoadOp> {
   using OpConversionPattern<scl::LoadOp>::OpConversionPattern;
@@ -279,7 +414,14 @@ struct LoadOpLowering : public OpConversionPattern<scl::LoadOp> {
   LogicalResult
   matchAndRewrite(scl::LoadOp op, scl::LoadOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<memref::LoadOp>(op, adaptor.getAddress());
+    auto resTy = typeConverter->convertType(op.getType());
+    if (!resTy)
+      return failure();
+    Value loaded = loadFromByteBuffer(rewriter, op.getLoc(),
+                                       adaptor.getAddress(), resTy);
+    if (!loaded)
+      return failure();
+    rewriter.replaceOp(op, loaded);
     return success();
   }
 };
@@ -354,14 +496,62 @@ struct ReturnValueOpLowering : public OpConversionPattern<scl::ReturnValueOp> {
   LogicalResult
   matchAndRewrite(scl::ReturnValueOp op, scl::ReturnValueOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto retval = rewriter.create<memref::LoadOp>(op.getLoc(), adaptor.getValue());
-
-    rewriter.replaceOpWithNewOp<func::ReturnOp>(op, retval.getResult());
+    auto resTy = getTypeConverter()->convertType(op.getReturnType());
+    if (!resTy)
+      return failure();
+    Value retval = loadFromByteBuffer(rewriter, op.getLoc(), adaptor.getValue(),
+                                      resTy);
+    if (!retval)
+      return failure();
+    rewriter.replaceOpWithNewOp<func::ReturnOp>(op, retval);
     return success();
   }
 };
 
 // MARK: StoreOpLowering
+
+/// Store `value` at `addr`, splitting into bytes if the address is an i8 view.
+static LogicalResult storeToByteBuffer(OpBuilder &b, Location loc, Value value,
+                                       Value addr) {
+  auto memTy = addr.getType().cast<MemRefType>();
+  auto zero = b.create<arith::ConstantIndexOp>(loc, 0);
+  if (memTy.getElementType() == value.getType()) {
+    SmallVector<Value, 1> indices(memTy.getRank(), zero);
+    b.create<memref::StoreOp>(loc, value, addr, indices);
+    return success();
+  }
+  if (!memTy.getElementType().isInteger(8) || memTy.getRank() != 1)
+    return failure();
+  Type valTy = value.getType();
+  if (!valTy.isIntOrFloat())
+    return failure();
+  int64_t nbytes = (valTy.getIntOrFloatBitWidth() + 7) / 8;
+  if (nbytes == 0 || nbytes > 8)
+    return failure();
+  auto accTy = valTy.isa<FloatType>()
+                   ? IntegerType::get(b.getContext(), nbytes <= 4 ? 32 : 64)
+                   : valTy;
+  Value acc = value;
+  if (valTy.isa<FloatType>())
+    acc = b.create<arith::BitcastOp>(loc, accTy, value);
+  else if (accTy != valTy)
+    acc = b.create<arith::ExtSIOp>(loc, accTy, value);
+  auto i8 = IntegerType::get(b.getContext(), 8);
+  // addr is a rank-1 i8 view starting at the value (FB/struct member);
+  // split the value into bytes and store them directly.
+  for (int64_t i = 0; i < nbytes; ++i) {
+    Value byte = acc;
+    if (i > 0) {
+      auto sh = b.create<arith::ConstantOp>(loc, accTy,
+                                            b.getIntegerAttr(accTy, 8 * i));
+      byte = b.create<arith::ShRUIOp>(loc, acc, sh);
+    }
+    byte = b.create<arith::TruncIOp>(loc, i8, byte);
+    auto idx = b.create<arith::ConstantIndexOp>(loc, i);
+    b.create<memref::StoreOp>(loc, byte, addr, ValueRange{idx});
+  }
+  return success();
+}
 
 struct StoreOpLowering : public OpConversionPattern<scl::StoreOp> {
   using OpConversionPattern<scl::StoreOp>::OpConversionPattern;
@@ -369,8 +559,10 @@ struct StoreOpLowering : public OpConversionPattern<scl::StoreOp> {
   LogicalResult
   matchAndRewrite(scl::StoreOp op, scl::StoreOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<memref::StoreOp>(op, adaptor.getRhs(),
-                                                 adaptor.getLhs());
+    if (failed(storeToByteBuffer(rewriter, op.getLoc(), adaptor.getRhs(),
+                                 adaptor.getLhs())))
+      return failure();
+    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -389,9 +581,19 @@ struct TempVariableOpLowering
     if (!memref)
       return failure();
     // alloca requires an identity layout; reinterpret to the address type.
+    auto loc = op.getLoc();
+    auto zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+    if (memref.getRank() == 1) {
+      // i8 address: rank-1 byte view holding a single byte.
+      auto plain = MemRefType::get({1}, memref.getElementType());
+      auto alloca = rewriter.create<memref::AllocaOp>(loc, plain);
+      auto one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+      rewriter.replaceOpWithNewOp<memref::ReinterpretCastOp>(
+          op, memref, alloca, zero, ValueRange{one}, ValueRange{one});
+      return success();
+    }
     auto plain = MemRefType::get({}, memref.getElementType());
-    auto alloca = rewriter.create<memref::AllocaOp>(op.getLoc(), plain);
-    auto zero = rewriter.create<arith::ConstantIndexOp>(op.getLoc(), 0);
+    auto alloca = rewriter.create<memref::AllocaOp>(loc, plain);
     rewriter.replaceOpWithNewOp<memref::ReinterpretCastOp>(
         op, memref, alloca, zero, ValueRange{}, ValueRange{});
     return success();
@@ -447,22 +649,41 @@ struct UnaryNotOpLowering : public OpConversionPattern<scl::UnaryNotOp> {
 
 // MARK: DataBlockOpLowering
 
-/// Lower a data block declaration to a global 0-d memref.
 struct DataBlockOpLowering : public OpConversionPattern<scl::DataBlockOp> {
   using OpConversionPattern<scl::DataBlockOp>::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(scl::DataBlockOp op, scl::DataBlockOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto elemTy = getTypeConverter()->convertType(op.getType());
-    if (!elemTy)
-      return failure();
-    auto memrefTy = MemRefType::get(
-        {}, elemTy,
-        StridedLayoutAttr::get(op.getContext(), ShapedType::kDynamic, {}));
+    auto &layouts =
+        static_cast<const SclTypeConverter *>(typeConverter)->fbLayouts;
+    mlir::Type memrefTy;
+    if (auto idbTy = op.getType().dyn_cast<scl::InstanceDbType>()) {
+      // An instance DB of a FB is a flat byte buffer sized by the FB layout.
+      auto it = layouts.find(idbTy.getFbSymbol());
+      if (it == layouts.end())
+        return failure();
+      memrefTy = MemRefType::get({it->second.size},
+                                 IntegerType::get(op.getContext(), 8));
+    } else {
+      auto elemTy = getTypeConverter()->convertType(op.getType());
+      if (!elemTy)
+        return failure();
+      memrefTy = MemRefType::get(
+          {}, elemTy,
+          StridedLayoutAttr::get(op.getContext(), ShapedType::kDynamic, {}));
+    }
+    // A zero initializer makes the LLVM global defined (not external), so
+    // the JIT can resolve its symbol. Initial values are stored as a
+    // DenseElementsAttr over the equivalent ranked tensor type.
+    auto memref = memrefTy.cast<MemRefType>();
+    auto tensorTy = RankedTensorType::get(memref.getShape(),
+                                          memref.getElementType());
+    auto initValue = DenseElementsAttr::get(
+        tensorTy, rewriter.getZeroAttr(memref.getElementType()));
     rewriter.replaceOpWithNewOp<memref::GlobalOp>(
         op, op.getSymNameAttr(), /*sym_visibility=*/nullptr,
-        TypeAttr::get(memrefTy), /*initial_value=*/nullptr,
+        TypeAttr::get(memrefTy), /*initial_value=*/initValue,
         /*constant=*/nullptr, /*alignment=*/nullptr);
     return success();
   }
@@ -545,7 +766,19 @@ struct GetIndexOpLowering : public OpConversionPattern<scl::GetIndexOp> {
     if (addrTy.getRank() == 0 && addrTy.getElementType().isa<MemRefType>())
       base = rewriter.create<memref::LoadOp>(loc, base, ValueRange{});
     auto ctx = rewriter.getContext();
-    // 0-d view of the element at the flat offset: address of the element.
+    // Address of the element at the flat offset. i8 elements (byte buffers)
+    // get a rank-1 view so loads/stores can index bytes directly; other
+    // elements get a 0-d view.
+    if (elemTy.isInteger(8)) {
+      auto resTy = MemRefType::get({ShapedType::kDynamic}, elemTy,
+                                   StridedLayoutAttr::get(ctx,
+                                                          ShapedType::kDynamic,
+                                                          {1}));
+      auto one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+      rewriter.replaceOpWithNewOp<memref::ReinterpretCastOp>(
+          op, resTy, base, flat, ValueRange{one}, ValueRange{one});
+      return success();
+    }
     auto resTy = MemRefType::get(
         {}, elemTy, StridedLayoutAttr::get(ctx, ShapedType::kDynamic, {}));
     rewriter.replaceOpWithNewOp<memref::ReinterpretCastOp>(
@@ -554,24 +787,88 @@ struct GetIndexOpLowering : public OpConversionPattern<scl::GetIndexOp> {
   }
 };
 
-// MARK: loop lowerings
+// MARK: region moving helpers
 
-/// Replace the loop-body terminators (end/continue/exit) with cf branches.
-/// end/continue -> continueB, exit -> exitB.
-static void lowerLoopTerminators(ConversionPatternRewriter &rewriter,
-                                 Block *bodyB, Block *continueB, Block *exitB) {
-  for (auto &o : llvm::make_early_inc_range(bodyB->getOperations())) {
-    if (isa<scl::EndOp, scl::ContinueOp>(&o)) {
-      rewriter.setInsertionPointToEnd(bodyB);
-      rewriter.create<cf::BranchOp>(o.getLoc(), continueB);
-      rewriter.eraseOp(&o);
-    } else if (isa<scl::ExitOp>(&o)) {
-      rewriter.setInsertionPointToEnd(bodyB);
-      rewriter.create<cf::BranchOp>(o.getLoc(), exitB);
-      rewriter.eraseOp(&o);
+/// Move all blocks of `src` into `dst` before `before`; returns the moved
+/// entry block. After the move, `src` is empty.
+static Block *moveRegion(ConversionPatternRewriter &rewriter, Region &src,
+                         Region &dst, Block *before) {
+  if (src.empty())
+    return nullptr;
+  Block *entry = &src.front();
+  rewriter.inlineRegionBefore(src, dst, before->getIterator());
+  return entry;
+}
+
+/// Replace the region terminators in `blocks`: end/continue -> contB,
+/// exit -> exitB. Blocks left without a terminator get a branch to contB.
+static void lowerTerminatorsInBlocks(ConversionPatternRewriter &rewriter,
+                                     Location loc, ArrayRef<Block *> blocks,
+                                     Block *contB, Block *exitB) {
+  for (Block *b : blocks) {
+    for (auto &o : llvm::make_early_inc_range(b->getOperations())) {
+      if (isa<scl::EndOp, scl::ContinueOp>(&o)) {
+        rewriter.setInsertionPointToEnd(b);
+        rewriter.create<cf::BranchOp>(o.getLoc(), contB);
+        rewriter.eraseOp(&o);
+      } else if (isa<scl::ExitOp>(&o)) {
+        rewriter.setInsertionPointToEnd(b);
+        rewriter.create<cf::BranchOp>(o.getLoc(), exitB);
+        rewriter.eraseOp(&o);
+      }
+    }
+    if (b->empty() || !b->back().hasTrait<OpTrait::IsTerminator>()) {
+      rewriter.setInsertionPointToEnd(b);
+      rewriter.create<cf::BranchOp>(loc, contB);
     }
   }
 }
+
+/// Collect the blocks strictly between `from` (exclusive) and `to`
+/// (exclusive).
+static SmallVector<Block *> blocksBetween(Block *from, Block *to) {
+  SmallVector<Block *> result;
+  for (Block *b = from->getNextNode(); b && b != to; b = b->getNextNode())
+    result.push_back(b);
+  return result;
+}
+
+/// Collect the blocks from `from` (inclusive) up to `to` (exclusive).
+static SmallVector<Block *> blocksFrom(Block *from, Block *to) {
+  SmallVector<Block *> result;
+  for (Block *b = from; b && b != to; b = b->getNextNode())
+    result.push_back(b);
+  return result;
+}
+
+// MARK: IfThenElseOpLowering
+
+/// Lower `scl.if` to cf blocks: cond_br cond, thenEntry, elseEntry.
+struct IfThenElseOpLowering : public OpConversionPattern<scl::IfThenElseOp> {
+  using OpConversionPattern<scl::IfThenElseOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scl::IfThenElseOp op, scl::IfThenElseOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Block *head = op->getBlock();
+    Block *endB = rewriter.splitBlock(head, op->getIterator());
+    Region &parent = *head->getParent();
+
+    Block *thenEntry = moveRegion(rewriter, op.getThenBody(), parent, endB);
+    Block *elseEntry = endB;
+    if (!op.getElseBody().empty())
+      elseEntry = moveRegion(rewriter, op.getElseBody(), parent, endB);
+
+    rewriter.setInsertionPointToEnd(head);
+    rewriter.create<cf::CondBranchOp>(loc, adaptor.getCond(), thenEntry,
+                                      ValueRange{}, elseEntry, ValueRange{});
+    rewriter.eraseOp(op);
+    lowerTerminatorsInBlocks(rewriter, loc, blocksBetween(head, endB), endB,
+                             endB);
+    return success();
+  }
+};
 
 // MARK: ForDoOpLowering
 
@@ -599,27 +896,24 @@ struct ForDoOpLowering : public OpConversionPattern<scl::ForDoOp> {
     Block *endB = rewriter.splitBlock(head, op->getIterator());
     Region &parent = *head->getParent();
     Block *condB = rewriter.createBlock(&parent, endB->getIterator());
-    Block *bodyB = rewriter.createBlock(&parent, endB->getIterator());
     Block *incrB = rewriter.createBlock(&parent, endB->getIterator());
+    Block *bodyEntry = moveRegion(rewriter, op.getDoBody(), parent, endB);
+    auto bodyBlocks = blocksBetween(incrB, endB);
 
     // head: store init, jump to condition
     rewriter.setInsertionPointToEnd(head);
-    rewriter.create<memref::StoreOp>(loc, init, var, ValueRange{});
+    if (failed(storeToByteBuffer(rewriter, loc, init, var)))
+      return failure();
     rewriter.create<cf::BranchOp>(loc, condB);
 
-    // move the body
-    bodyB->getOperations().splice(bodyB->end(),
-                                 op.getDoBody().front().getOperations());
     rewriter.eraseOp(op);
-    lowerLoopTerminators(rewriter, bodyB, incrB, endB);
-    if (bodyB->empty() || !bodyB->back().hasTrait<OpTrait::IsTerminator>()) {
-      rewriter.setInsertionPointToEnd(bodyB);
-      rewriter.create<cf::BranchOp>(loc, incrB);
-    }
+    lowerTerminatorsInBlocks(rewriter, loc, bodyBlocks, incrB, endB);
 
     // cond: iv = load var; cond = step > 0 ? iv <= to : iv >= to
     rewriter.setInsertionPointToStart(condB);
-    Value iv = rewriter.create<memref::LoadOp>(loc, var, ValueRange{});
+    Value iv = loadFromByteBuffer(rewriter, loc, var, init.getType());
+    if (!iv)
+      return failure();
     auto zero = rewriter.create<arith::ConstantOp>(
         loc, step.getType(), rewriter.getIntegerAttr(step.getType(), 0));
     Value pos = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt,
@@ -629,16 +923,19 @@ struct ForDoOpLowering : public OpConversionPattern<scl::ForDoOp> {
     Value ge = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge,
                                               iv, to);
     Value cond = rewriter.create<arith::SelectOp>(loc, pos, le, ge);
-    rewriter.create<cf::CondBranchOp>(loc, cond, bodyB, ValueRange{}, endB,
-                                  ValueRange{});
+    rewriter.create<cf::CondBranchOp>(loc, cond, bodyEntry, ValueRange{}, endB,
+                                      ValueRange{});
 
     // incr: var += step; jump to condition
     rewriter.setInsertionPointToStart(incrB);
-    Value iv2 = rewriter.create<memref::LoadOp>(loc, var, ValueRange{});
+    Value iv2 = loadFromByteBuffer(rewriter, loc, var, init.getType());
+    if (!iv2)
+      return failure();
     Value next = iv2.getType().isa<FloatType>()
                      ? (Value)rewriter.create<arith::AddFOp>(loc, iv2, step)
                      : (Value)rewriter.create<arith::AddIOp>(loc, iv2, step);
-    rewriter.create<memref::StoreOp>(loc, next, var, ValueRange{});
+    if (failed(storeToByteBuffer(rewriter, loc, next, var)))
+      return failure();
     rewriter.create<cf::BranchOp>(loc, condB);
     return success();
   }
@@ -646,7 +943,6 @@ struct ForDoOpLowering : public OpConversionPattern<scl::ForDoOp> {
 
 // MARK: WhileDoOpLowering
 
-/// Lower `scl.while` to: br cond; cond: <whileBody> cond_br c, body, end; body: <doBody>...
 struct WhileDoOpLowering : public OpConversionPattern<scl::WhileDoOp> {
   using OpConversionPattern<scl::WhileDoOp>::OpConversionPattern;
 
@@ -657,41 +953,36 @@ struct WhileDoOpLowering : public OpConversionPattern<scl::WhileDoOp> {
     Block *head = op->getBlock();
     Block *endB = rewriter.splitBlock(head, op->getIterator());
     Region &parent = *head->getParent();
-    Block *condB = rewriter.createBlock(&parent, endB->getIterator());
-    Block *bodyB = rewriter.createBlock(&parent, endB->getIterator());
 
-    auto condOp = dyn_cast<scl::ConditionOp>(
-        op.getWhileBody().front().getTerminator());
-    if (!condOp)
+    Block *condEntry = moveRegion(rewriter, op.getWhileBody(), parent, endB);
+    Block *bodyEntry = moveRegion(rewriter, op.getDoBody(), parent, endB);
+    if (!condEntry || !bodyEntry)
       return failure();
-    // The ConditionOp stays as condB's terminator and is lowered by
-    // ConditionOpLowering, which uses the converted (i1) condition value.
-    condOp->setSuccessor(bodyB, 0);
-    condOp->setSuccessor(endB, 1);
+
+    // find the ConditionOp in the moved condition blocks
+    scl::ConditionOp condition = nullptr;
+    for (Block *b : blocksBetween(head, bodyEntry))
+      if (auto *t = b->getTerminator(); isa<scl::ConditionOp>(t))
+        condition = cast<scl::ConditionOp>(t);
+    if (!condition)
+      return failure();
+    condition->setSuccessor(bodyEntry, 0);
+    condition->setSuccessor(endB, 1);
 
     rewriter.setInsertionPointToEnd(head);
-    rewriter.create<cf::BranchOp>(loc, condB);
-
-    // move condition region (incl. the ConditionOp terminator) into condB
-    condB->getOperations().splice(condB->end(),
-                                  op.getWhileBody().front().getOperations());
-
-    // move body
-    bodyB->getOperations().splice(bodyB->end(),
-                                  op.getDoBody().front().getOperations());
+    rewriter.create<cf::BranchOp>(loc, condEntry);
     rewriter.eraseOp(op);
-    lowerLoopTerminators(rewriter, bodyB, condB, endB);
-    if (bodyB->empty() || !bodyB->back().hasTrait<OpTrait::IsTerminator>()) {
-      rewriter.setInsertionPointToEnd(bodyB);
-      rewriter.create<cf::BranchOp>(loc, condB);
-    }
+    lowerTerminatorsInBlocks(rewriter, loc, blocksBetween(head, bodyEntry),
+                             condEntry, endB);
+    lowerTerminatorsInBlocks(rewriter, loc, blocksFrom(bodyEntry, endB),
+                             condEntry, endB);
     return success();
   }
 };
 
+// MARK: ConditionOpLowering
+
 /// Lower `scl.condition %cond, ^true, ^false` to `cf.cond_br`.
-/// Runs after the condition producer has been converted, so the adaptor
-/// provides the converted i1 value.
 struct ConditionOpLowering : public OpConversionPattern<scl::ConditionOp> {
   using OpConversionPattern<scl::ConditionOp>::OpConversionPattern;
 
@@ -707,7 +998,6 @@ struct ConditionOpLowering : public OpConversionPattern<scl::ConditionOp> {
 
 // MARK: RepeatOpLowering
 
-/// Lower `scl.repeat` to: br body; body: <body> br check; check: until c ? exit : body
 struct RepeatOpLowering : public OpConversionPattern<scl::RepeatOp> {
   using OpConversionPattern<scl::RepeatOp>::OpConversionPattern;
 
@@ -718,38 +1008,39 @@ struct RepeatOpLowering : public OpConversionPattern<scl::RepeatOp> {
     Block *head = op->getBlock();
     Block *endB = rewriter.splitBlock(head, op->getIterator());
     Region &parent = *head->getParent();
-    Block *bodyB = rewriter.createBlock(&parent, endB->getIterator());
-    Block *checkB = rewriter.createBlock(&parent, endB->getIterator());
 
-    auto &repeatBody = op.getRepeatBody().front();
-    auto untilOp = dyn_cast<scl::UntilOp>(repeatBody.getTerminator());
+    Block *bodyEntry = moveRegion(rewriter, op.getRepeatBody(), parent, endB);
+    if (!bodyEntry)
+      return failure();
+
+    // find the UntilOp and its block (the check block)
+    scl::UntilOp untilOp = nullptr;
+    Block *checkB = nullptr;
+    auto bodyBlocks = blocksFrom(bodyEntry, endB);
+    for (Block *b : bodyBlocks)
+      if (auto *t = b->getTerminator(); isa<scl::UntilOp>(t)) {
+        untilOp = cast<scl::UntilOp>(t);
+        checkB = b;
+      }
     if (!untilOp)
       return failure();
-    // The UntilOp moves to checkB and is lowered by UntilOpLowering, which
-    // uses the converted (i1) condition value. until cond -> exit, else repeat.
-    untilOp->setSuccessor(endB, 0);
-    untilOp->setSuccessor(bodyB, 1);
+    untilOp->setSuccessor(endB, 0);      // until cond -> exit
+    untilOp->setSuccessor(bodyEntry, 1); // else repeat
 
     rewriter.setInsertionPointToEnd(head);
-    rewriter.create<cf::BranchOp>(loc, bodyB);
-
-    // move body (all ops except the UntilOp terminator) into bodyB
-    bodyB->getOperations().splice(bodyB->end(), repeatBody.getOperations(),
-                                  repeatBody.begin(), untilOp->getIterator());
+    rewriter.create<cf::BranchOp>(loc, bodyEntry);
     rewriter.eraseOp(op);
-    lowerLoopTerminators(rewriter, bodyB, checkB, endB);
-    if (bodyB->empty() || !bodyB->back().hasTrait<OpTrait::IsTerminator>()) {
-      rewriter.setInsertionPointToEnd(bodyB);
-      rewriter.create<cf::BranchOp>(loc, checkB);
-    }
-
-    // move the UntilOp terminator into checkB
-    checkB->getOperations().splice(checkB->end(), repeatBody.getOperations());
+    SmallVector<Block *> rest;
+    for (Block *b : bodyBlocks)
+      if (b != checkB)
+        rest.push_back(b);
+    lowerTerminatorsInBlocks(rewriter, loc, rest, checkB, endB);
     return success();
   }
 };
 
-/// Lower `scl.until %cond, ^exit, ^repeat` to `cf.cond_br`.
+// MARK: UntilOpLowering
+
 struct UntilOpLowering : public OpConversionPattern<scl::UntilOp> {
   using OpConversionPattern<scl::UntilOp>::OpConversionPattern;
 
@@ -762,6 +1053,322 @@ struct UntilOpLowering : public OpConversionPattern<scl::UntilOp> {
     return success();
   }
 };
+
+// MARK: CaseOpLowering
+
+/// Lower `scl.case` to `cf.switch`. The last body region is the else
+/// (default) block.
+struct CaseOpLowering : public OpConversionPattern<scl::CaseOp> {
+  using OpConversionPattern<scl::CaseOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scl::CaseOp op, scl::CaseOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Value sel = adaptor.getSelector();
+    if (!sel.getType().isa<IntegerType>())
+      return failure();
+    auto i32 = rewriter.getI32Type();
+    if (sel.getType() != i32) {
+      if (!sel.getType().isInteger(16) && !sel.getType().isInteger(32))
+        return failure();
+      sel = rewriter.create<arith::ExtSIOp>(loc, i32, sel);
+    }
+
+    Block *head = op->getBlock();
+    Block *endB = rewriter.splitBlock(head, op->getIterator());
+    Region &parent = *head->getParent();
+
+    unsigned numRegions = op.getBody().size();
+    if (numRegions == 0)
+      return failure();
+    SmallVector<Block *> entries;
+    for (unsigned i = 0; i < numRegions; ++i)
+      entries.push_back(moveRegion(rewriter, op.getBody()[i], parent, endB));
+    Block *defaultEntry = entries.back();
+
+    SmallVector<int32_t> caseValues;
+    SmallVector<Block *> caseDests;
+    SmallVector<ValueRange> caseOperands;
+    auto caseValuesAttr = op.getCaseValues();
+    for (unsigned i = 0; i + 1 < numRegions; ++i) {
+      auto values = caseValuesAttr[i].cast<DenseI32ArrayAttr>();
+      for (int32_t v : values.asArrayRef()) {
+        caseValues.push_back(v);
+        caseDests.push_back(entries[i]);
+        caseOperands.push_back(ValueRange{});
+      }
+    }
+
+    rewriter.setInsertionPointToEnd(head);
+    rewriter.create<cf::SwitchOp>(loc, sel, defaultEntry, ValueRange{},
+                                  caseValues, caseDests, caseOperands);
+    rewriter.eraseOp(op);
+    lowerTerminatorsInBlocks(rewriter, loc, blocksBetween(head, endB), endB,
+                             endB);
+    return success();
+  }
+};
+
+// MARK: FunctionBlockOpLowering
+
+/// Lower `scl.function_block` to `func.func`; its single argument is the
+/// instance DB buffer (a memref of i8).
+struct FunctionBlockOpLowering
+    : public OpConversionPattern<scl::FunctionBlockOp> {
+  using OpConversionPattern<scl::FunctionBlockOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scl::FunctionBlockOp op, scl::FunctionBlockOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto sclType = op.getFunctionType();
+
+    TypeConverter::SignatureConversion signatureConverter(
+        sclType.getNumInputs());
+    for (auto argType : llvm::enumerate(sclType.getInputs())) {
+      auto convertedType = typeConverter->convertType(argType.value());
+      if (!convertedType)
+        return failure();
+      signatureConverter.addInputs(argType.index(), convertedType);
+    }
+    auto inputs = signatureConverter.getConvertedTypes();
+
+    SmallVector<Type, 4> results;
+    if (failed(typeConverter->convertTypes(sclType.getResults(), results)))
+      return failure();
+
+    auto newFuncType = rewriter.getFunctionType(inputs, results);
+    auto newFuncOp = rewriter.create<FuncOp>(loc, op.getName(), newFuncType);
+    rewriter.inlineRegionBefore(op.getBody(), newFuncOp.getBody(),
+                                newFuncOp.getBody().end());
+    if (failed(rewriter.convertRegionTypes(&newFuncOp.getBody(), *typeConverter,
+                                           &signatureConverter)))
+      return failure();
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// MARK: VariableOpLowering
+
+/// FB member declarations carry no code; the layout lives in the IDB buffer.
+struct VariableOpLowering : public OpConversionPattern<scl::VariableOp> {
+  using OpConversionPattern<scl::VariableOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scl::VariableOp op, scl::VariableOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// MARK: GetVariableOpLowering
+
+/// Lower `scl.getvariable @name from %idb` to a 0-d i8 view of the instance
+/// buffer at the member's byte offset. The value is byte-assembled by
+/// Load/Store lowerings.
+struct GetVariableOpLowering : public OpConversionPattern<scl::GetVariableOp> {
+  using OpConversionPattern<scl::GetVariableOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scl::GetVariableOp op, scl::GetVariableOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto addrTy = op.getAddr().getType().cast<scl::AddressType>();
+    auto idbTy = addrTy.getElementType().dyn_cast<scl::InstanceDbType>();
+    if (!idbTy)
+      return failure();
+    auto &layouts =
+        static_cast<const SclTypeConverter *>(typeConverter)->fbLayouts;
+    auto it = layouts.find(idbTy.getFbSymbol());
+    if (it == layouts.end())
+      return failure();
+    const FbMemberLayout *member = nullptr;
+    for (auto &m : it->second.members)
+      if (m.name == op.getSymName())
+        member = &m;
+    if (!member)
+      return failure();
+
+    auto ctx = op.getContext();
+    auto i8 = IntegerType::get(ctx, 8);
+    // Rank-1 byte view of the member window, created in a single cast from
+    // the instance buffer (chaining casts would lose the offset when
+    // ReinterpretCastOp::fold fires).
+    auto resTy = MemRefType::get(
+        {ShapedType::kDynamic}, i8,
+        StridedLayoutAttr::get(ctx, ShapedType::kDynamic, {1}));
+    auto off = rewriter.create<arith::ConstantIndexOp>(loc, member->offset);
+    auto size = rewriter.create<arith::ConstantIndexOp>(
+        loc, byteSize(member->type, layouts));
+    auto one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+    rewriter.replaceOpWithNewOp<memref::ReinterpretCastOp>(
+        op, resTy, adaptor.getAddr(), off, ValueRange{size}, ValueRange{one});
+    return success();
+  }
+};
+
+// MARK: GetElementOpLowering
+
+/// Lower `scl.getelement @name from %structAddr` to a 0-d i8 view at the
+/// member's byte offset within the struct byte buffer.
+struct GetElementOpLowering : public OpConversionPattern<scl::GetElementOp> {
+  using OpConversionPattern<scl::GetElementOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scl::GetElementOp op, scl::GetElementOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto addrTy = op.getAddr().getType().cast<scl::AddressType>();
+    auto structTy = addrTy.getElementType().dyn_cast<scl::StructType>();
+    if (!structTy)
+      return failure();
+    auto &layouts =
+        static_cast<const SclTypeConverter *>(typeConverter)->fbLayouts;
+
+    // byte offset of the member within the struct
+    int64_t offset = 0;
+    Type memberTy;
+    for (auto [name, elem] :
+         llvm::zip(structTy.getElementNames(), structTy.getElementTypes())) {
+      if (name.getValue() == op.getName())
+        memberTy = elem;
+      if (memberTy)
+        break;
+      offset += byteSize(elem, layouts);
+    }
+    if (!memberTy)
+      return failure();
+    // The converted member address type must match: 0-d strided memref of the
+    // converted member type... but the buffer is i8, so we produce an i8 view
+    // and let Load/Store byte-assemble. The op's declared result type converts
+    // to 0-d strided memref of the member type; to keep types consistent we
+    // reinterpret the loaded buffer (memref<Nxi8>) — see below.
+    auto ctx = op.getContext();
+    auto i8 = IntegerType::get(ctx, 8);
+    // load the struct buffer out of the 0-d wrapper
+    Value base = adaptor.getAddr();
+    auto wrapperTy = base.getType().cast<MemRefType>();
+    if (wrapperTy.getRank() == 0 &&
+        wrapperTy.getElementType().isa<MemRefType>())
+      base = rewriter.create<memref::LoadOp>(loc, base, ValueRange{});
+    // Rank-1 byte view of the member window in a single cast (chained casts
+    // lose the offset in ReinterpretCastOp::fold).
+    auto resTy = MemRefType::get(
+        {ShapedType::kDynamic}, i8,
+        StridedLayoutAttr::get(ctx, ShapedType::kDynamic, {1}));
+    auto off = rewriter.create<arith::ConstantIndexOp>(loc, offset);
+    auto size = rewriter.create<arith::ConstantIndexOp>(
+        loc, byteSize(memberTy, layouts));
+    auto one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+    auto view = rewriter.create<memref::ReinterpretCastOp>(
+        loc, resTy, base, off, ValueRange{size}, ValueRange{one});
+    rewriter.replaceOp(op, view);
+    return success();
+  }
+};
+
+// MARK: CallFbOpLowering
+
+struct CallFbOpLowering : public OpConversionPattern<scl::CallFbOp> {
+  using OpConversionPattern<scl::CallFbOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scl::CallFbOp op, scl::CallFbOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto call = rewriter.create<func::CallOp>(op.getLoc(), op.getFb(),
+                                              TypeRange{},
+                                              ValueRange{adaptor.getIdb()});
+    rewriter.replaceOp(op, call.getResults());
+    return success();
+  }
+};
+
+// MARK: ExpOpLowering
+
+struct ExpOpLowering : public OpConversionPattern<scl::ExpOp> {
+  using OpConversionPattern<scl::ExpOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scl::ExpOp op, scl::ExpOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    if (all_of_type<FloatType>(adaptor.getOperands())) {
+      rewriter.replaceOpWithNewOp<math::PowFOp>(op, adaptor.getLhs(),
+                                                adaptor.getRhs());
+      return success();
+    }
+    if (all_of_type<IntegerType>(adaptor.getOperands())) {
+      rewriter.replaceOpWithNewOp<math::IPowIOp>(op, adaptor.getLhs(),
+                                                 adaptor.getRhs());
+      return success();
+    }
+    return failure();
+  }
+};
+
+// MARK: BitCastOpLowering / IntegerCastOpLowering
+
+struct BitCastOpLowering : public OpConversionPattern<scl::BitCastOp> {
+  using OpConversionPattern<scl::BitCastOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scl::BitCastOp op, scl::BitCastOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto resTy = typeConverter->convertType(op.getType());
+    if (!resTy)
+      return failure();
+    rewriter.replaceOpWithNewOp<arith::BitcastOp>(op, resTy,
+                                                  adaptor.getValue());
+    return success();
+  }
+};
+
+struct IntegerCastOpLowering : public OpConversionPattern<scl::IntegerCastOp> {
+  using OpConversionPattern<scl::IntegerCastOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scl::IntegerCastOp op, scl::IntegerCastOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto resTy = typeConverter->convertType(op.getType()).cast<IntegerType>();
+    auto srcTy = adaptor.getValue().getType().cast<IntegerType>();
+    if (resTy.getWidth() > srcTy.getWidth())
+      rewriter.replaceOpWithNewOp<arith::ExtSIOp>(op, resTy, adaptor.getValue());
+    else if (resTy.getWidth() < srcTy.getWidth())
+      rewriter.replaceOpWithNewOp<arith::TruncIOp>(op, resTy,
+                                                   adaptor.getValue());
+    else
+      rewriter.replaceOp(op, adaptor.getValue());
+    return success();
+  }
+};
+
+// MARK: date/time constant lowerings
+
+/// Lower a date/time constant op to an integer constant of the converted
+/// type, using its value attribute.
+template <typename SclOp>
+struct TimeConstantOpLowering : public OpConversionPattern<SclOp> {
+  using OpConversionPattern<SclOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(SclOp op, typename SclOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto resTy = this->typeConverter->convertType(op.getType());
+    if (!resTy || !resTy.template isa<IntegerType>())
+      return failure();
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(
+        op, resTy, rewriter.getIntegerAttr(resTy, op.getValue()));
+    return success();
+  }
+};
+using ConstantS5TimeOpLowering = TimeConstantOpLowering<scl::ConstantS5TimeOp>;
+using ConstantTimeOpLowering = TimeConstantOpLowering<scl::ConstantTimeOp>;
+using ConstantDateOpLowering = TimeConstantOpLowering<scl::ConstantDateOp>;
+using ConstantTimeOfDayOpLowering = TimeConstantOpLowering<scl::ConstantTimeOfDayOp>;
+using ConstantDateAndTimeOpLowering = TimeConstantOpLowering<scl::ConstantDateAndTimeOp>;
 
 } // end anonymous namespace.
 
@@ -780,6 +1387,7 @@ struct SclToStdLoweringPass
     registry.insert<arith::ArithDialect>();
     registry.insert<func::FuncDialect>();
     registry.insert<cf::ControlFlowDialect>();
+    registry.insert<math::MathDialect>();
   }
   void runOnOperation() final;
 
@@ -794,6 +1402,7 @@ void SclToStdLoweringPass::runOnOperation() {
   target.addLegalDialect<scf::SCFDialect>();
   target.addLegalDialect<memref::MemRefDialect>();
   target.addLegalDialect<arith::ArithDialect>();
+  target.addLegalDialect<math::MathDialect>();
   target.addLegalDialect<func::FuncDialect>();
   target.addLegalDialect<cf::ControlFlowDialect>();
   target.addLegalOp<func::FuncOp>();
@@ -802,20 +1411,27 @@ void SclToStdLoweringPass::runOnOperation() {
   // We want to lower all of SCL except for control flow:
   target.addIllegalDialect<scl::SclDialect>();
 
-  SclTypeConverter converter{};
+  // Compute FB instance layouts before conversion (the ops are erased).
+  SclTypeConverter converter{computeFbLayouts(getOperation())};
 
   RewritePatternSet patterns(context);
   patterns.add<
-      AddOpLowering, AndOpLowering, CallFcOpLowering, ConditionOpLowering,
-      ConstantOpLowering, DataBlockOpLowering, DialectCastOpLowering,
-      DivOpLowering, EndOpLowering, EqualLowering, ForDoOpLowering,
-      FunctionOpLowering, GetGlobalOpLowering, GetIndexOpLowering,
-      GreaterEqualLowering, GreaterThanLowering, IfThenElseOpLowering,
-      LessEqualLowering, LessThanLowering, LoadOpLowering, ModOpLowering,
-      MulOpLowering, NotEqualLowering, OrOpLowering, RepeatOpLowering,
-      ReturnOpLowering, ReturnValueOpLowering, StoreOpLowering, SubOpLowering,
+      AddOpLowering, AndOpLowering, BitCastOpLowering, CallFbOpLowering,
+      CallFcOpLowering, CaseOpLowering, ConditionOpLowering,
+      ConstantDateAndTimeOpLowering, ConstantDateOpLowering,
+      ConstantOpLowering, ConstantS5TimeOpLowering, ConstantTimeOfDayOpLowering,
+      ConstantTimeOpLowering, DataBlockOpLowering, DialectCastOpLowering,
+      DivOpLowering, EndOpLowering, EqualLowering, ExpOpLowering,
+      ForDoOpLowering, FunctionBlockOpLowering, FunctionOpLowering,
+      GetElementOpLowering, GetGlobalOpLowering, GetIndexOpLowering,
+      GetVariableOpLowering, GreaterEqualLowering, GreaterThanLowering,
+      IfThenElseOpLowering, IntegerCastOpLowering, LessEqualLowering,
+      LessThanLowering, LoadOpLowering, ModOpLowering, MulOpLowering,
+      NotEqualLowering, OrOpLowering, RepeatOpLowering, ReturnOpLowering,
+      ReturnValueOpLowering, StoreOpLowering, SubOpLowering,
       TempVariableOpLowering, UnaryMinusOpLowering, UnaryNotOpLowering,
-      UntilOpLowering, WhileDoOpLowering, XOrOpLowering>(converter, context);
+      UntilOpLowering, VariableOpLowering, WhileDoOpLowering,
+      XOrOpLowering>(converter, context);
 
   if (failed(applyPartialConversion(getOperation(), target,
                                     std::move(patterns))))

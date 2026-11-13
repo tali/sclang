@@ -20,15 +20,15 @@ var
 end_var
 
 begin
-// CHECK: %out = scl.getvariable @out from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.int>
-// CHECK: %state = scl.getvariable @state from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.int>
-// CHECK: %0 = scl.load %state : !scl.address<!scl.int> : !scl.int
-// CHECK: scl.store %out : !scl.address<!scl.int> = %0 : !scl.int
+// CHECK: %out = scl.getvariable @out from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.char>
+// CHECK: %state = scl.getvariable @state from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.char>
+// CHECK: %0 = scl.load %state : !scl.address<!scl.char> : !scl.int
+// CHECK: scl.store %out : !scl.address<!scl.char> = %0 : !scl.int
   out := state;
 
-// CHECK: %in = scl.getvariable @in from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.int>
-// CHECK: %1 = scl.load %in : !scl.address<!scl.int> : !scl.int
-// CHECK: scl.store %state : !scl.address<!scl.int> = %1 : !scl.int
+// CHECK: %in{{[a-z0-9_]*}} = scl.getvariable @in from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.char>
+// CHECK: %{{[0-9]+}} = scl.load %in{{[a-z0-9_]*}} : !scl.address<!scl.char> : !scl.int
+// CHECK: scl.store %state{{[a-z0-9_]*}} : !scl.address<!scl.char> = %{{[0-9]+}} : !scl.int
   state := in;
 
 // CHECK: scl.return
@@ -57,17 +57,17 @@ function fc1 : int
 begin
 
 
-// CHECK: %db1 = scl.getglobal @db1 : !scl.address<!scl.idb<fb1>>
-// CHECK: %in = scl.getvariable @in from %db1 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.int>
-// CHECK: scl.store %in : !scl.address<!scl.int> = %c1 : !scl.int
+// CHECK: %db1{{[a-z0-9_]*}} = scl.getglobal @db1 : !scl.address<!scl.idb<fb1>>
+// CHECK: %in{{[a-z0-9_]*}} = scl.getvariable @in from %db1{{[a-z0-9_]*}} : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.char>
+// CHECK: scl.store %in{{[a-z0-9_]*}} : !scl.address<!scl.char> = %c1 : !scl.int
   "db1".in := 1;
 
-// CHECK: scl.call.fb @fb1(%db1 : !scl.address<!scl.idb<fb1>>)
+// CHECK: scl.call.fb @fb1(%db1{{[a-z0-9_]*}} : !scl.address<!scl.idb<fb1>>)
   fb1."db1"();
 
-// CHECK: %out = scl.getvariable @out from %db1 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.int>
-// CHECK: %0 = scl.load %out : !scl.address<!scl.int>
-// CHECK: scl.store %fc1 : !scl.address<!scl.int> = %0 : !scl.int
+// CHECK: %out{{[a-z0-9_]*}} = scl.getvariable @out from %db1{{[a-z0-9_]*}} : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.char>
+// CHECK: %{{[0-9]+}} = scl.load %out{{[a-z0-9_]*}} : !scl.address<!scl.char>
+// CHECK: scl.store %fc1 : !scl.address<!scl.int> = %{{[0-9]+}} : !scl.int
   fc1 := "db1".out;
 
 end_function

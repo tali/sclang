@@ -1,0 +1,14 @@
+// RUN: sclang-gen --emit=mlir %s | FileCheck %s
+
+// CHECK-LABEL: scl.function @g
+function g : int
+label
+  again;
+end_label
+begin
+  g := 0;
+// CHECK: cf.br ^bb{{[0-9]+}}
+  goto again;
+// CHECK: ^bb{{[0-9]+}}:
+  again: g := 1;
+end_function

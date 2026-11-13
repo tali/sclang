@@ -32,24 +32,24 @@ end_var
 
 
 begin
-// CHECK: %i1 = scl.getvariable @i1 from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.int>
-// CHECK: scl.store %i1 : !scl.address<!scl.int> = [[CI1]] : !scl.int
+// CHECK: %i1 = scl.getvariable @i1 from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.char>
+// CHECK: scl.store %i1 : !scl.address<!scl.char> = [[CI1]] : !scl.int
   i1 := ci1;
 
-// CHECK: %i2 = scl.getvariable @i2 from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.int>
-// CHECK: scl.store %i2 : !scl.address<!scl.int> = [[CI2]] : !scl.int
+// CHECK: %i2 = scl.getvariable @i2 from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.char>
+// CHECK: scl.store %i2 : !scl.address<!scl.char> = [[CI2]] : !scl.int
   i2 := ci2;
 
-// CHECK: %r1 = scl.getvariable @r1 from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.real>
-// CHECK: scl.store %r1 : !scl.address<!scl.real> = [[CR1]] : !scl.real
+// CHECK: %r1 = scl.getvariable @r1 from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.char>
+// CHECK: scl.store %r1 : !scl.address<!scl.char> = [[CR1]] : !scl.real
   r1 := cr1;
 
-// CHECK: %r2 = scl.getvariable @r2 from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.real>
-// CHECK: scl.store %r2 : !scl.address<!scl.real> = [[CR2]] : !scl.real
+// CHECK: %r2 = scl.getvariable @r2 from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.char>
+// CHECK: scl.store %r2 : !scl.address<!scl.char> = [[CR2]] : !scl.real
   r2 := cr2;
 
-// CHECK: %r3 = scl.getvariable @r3 from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.real>
-// CHECK: scl.store %r3 : !scl.address<!scl.real> = [[CR3]] : !scl.real
+// CHECK: %r3 = scl.getvariable @r3 from %arg0 : !scl.address<!scl.idb<fb1>> -> !scl.address<!scl.char>
+// CHECK: scl.store %r3 : !scl.address<!scl.char> = [[CR3]] : !scl.real
   r3 := cr3;
 
 // CHECK: scl.return

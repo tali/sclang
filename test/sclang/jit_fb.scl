@@ -1,0 +1,42 @@
+// RUN: sclang --opt --emit=jit %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+
+// CHECK: start OB1
+// CHECK: fb works
+// CHECK: exit OB1
+function_block fb1
+var_input
+  in : int;
+end_var
+var_output
+  out : int;
+end_var
+var
+  state : int := 0;
+end_var
+begin
+  out := state + in;
+  state := in;
+end_function_block
+
+data_block db1
+  fb1
+end_data_block
+
+function OB1 : int
+begin
+  "db1".in := 40;
+  fb1."db1"();
+  "db1".in := 2;
+  fb1."db1"();
+  if "db1".out = 42 then
+    // DEBUG PRINT fb works
+  end_if;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  // DEBUG PRINT start OB1
+  OB1();
+  // DEBUG PRINT exit OB1
+end_function

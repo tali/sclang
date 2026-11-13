@@ -26,7 +26,7 @@ begin
 // CHECK-DAG:      [[I:%[0-9]+]] = scl.load %i : !scl.address<!scl.int>
 // CHECK-DAG:      [[J:%[0-9]+]] = scl.load %j : !scl.address<!scl.int>
 // CHECK-DAG:      [[X:%[0-9]+]] = scl.mul [[I]], [[J]]
-// CHECK:          scl.store [[E]] : !scl.address<!scl.int> = [[X]] : !scl.int
+// CHECK:          scl.store [[E]] : !scl.address<!scl.char> = [[X]] : !scl.int
 // CHECK:        }
 // CHECK:      }
 

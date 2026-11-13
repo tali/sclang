@@ -484,6 +484,7 @@ public:
     Instr_Exit,
     Instr_Goto,
     Instr_DebugPrint,
+    Instr_CaseLabel,
   };
 
   InstructionAST(Location loc, InstrASTKind kind)
@@ -834,6 +835,26 @@ public:
   /// LLVM style RTTI
   static bool classof(const InstructionAST *i) {
     return i->getKind() == Instr_Goto;
+  }
+};
+
+/// A case element label inside a CASE body: `value, value: ...`.
+/// The instructions following it (up to the next label) form the case body.
+class CaseLabelAST : public InstructionAST {
+  std::vector<std::unique_ptr<ExpressionAST>> values;
+
+public:
+  CaseLabelAST(Location loc, std::vector<std::unique_ptr<ExpressionAST>> values)
+      : InstructionAST(std::move(loc), Instr_CaseLabel),
+        values(std::move(values)) {}
+
+  llvm::ArrayRef<std::unique_ptr<ExpressionAST>> getValues() const {
+    return values;
+  }
+
+  /// LLVM style RTTI
+  static bool classof(const InstructionAST *i) {
+    return i->getKind() == Instr_CaseLabel;
   }
 };
 

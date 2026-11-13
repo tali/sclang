@@ -1,0 +1,11 @@
+// RUN: sclang-gen --emit=mlir %s | FileCheck %s
+
+// CHECK: scl.function @ob1() {
+organization_block ob1
+var
+  x : int;
+end_var
+begin
+// CHECK: scl.tmpvar "x" : !scl.address<!scl.int>
+// CHECK: scl.return
+end_organization_block

@@ -1,0 +1,31 @@
+// RUN: sclang --opt --emit=jit %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+
+// CHECK: start OB1
+// CHECK: two
+// CHECK: exit OB1
+function OB1 : int
+var
+  x : int;
+end_var
+begin
+  x := 2;
+  case x of
+    1: // DEBUG PRINT one
+      ;
+    2: // DEBUG PRINT two
+      ;
+    3: // DEBUG PRINT three
+      ;
+  else
+    // DEBUG PRINT other
+    ;
+  end_case;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  // DEBUG PRINT start OB1
+  OB1();
+  // DEBUG PRINT exit OB1
+end_function
