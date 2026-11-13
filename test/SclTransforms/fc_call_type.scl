@@ -1,0 +1,15 @@
+// RUN: sclang-gen --emit=mlir-std %s | FileCheck %s
+
+// A call used as a value gets the callee's result type, not a hardcoded int.
+// CHECK: func.func @g() -> f32
+// CHECK-LABEL: func.func @f
+// CHECK:         %{{[0-9]+}} = call @g() : () -> f32
+// CHECK:         memref.store {{.*}} : memref<f32, strided<[], offset: ?>>
+function g : real
+begin
+  g := 1.5;
+end_function
+function f : real
+begin
+  f := g();
+end_function

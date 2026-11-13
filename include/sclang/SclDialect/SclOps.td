@@ -303,7 +303,13 @@ def ConstantDateAndTimeOp : SclOp<"constant.dt",
 def GetElementOp : SclOp<"getelement",
     [Pure, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
   let summary = "get the address of a struct element";
-  let arguments = (ins Scl_AddressType:$addr, StrAttr:$name);
+  let arguments = (ins
+    Scl_AddressType:$addr,
+    StrAttr:$name,
+    // Declared struct type of the base when the base is itself a byte view
+    // (nested struct member); not set for plain struct addresses.
+    OptionalAttr<TypeAttr>:$baseType
+  );
   let results = (outs Scl_AddressType:$element);
   let assemblyFormat = "attr-dict $name `from` $addr `:` type($addr) `->` type($element)";
 }
@@ -317,7 +323,13 @@ def GetGlobalOp : SclOp<"getglobal",
 
 def GetIndexOp : SclOp<"getindex", [Pure]> {
   let summary = "get the address of an indexed element";
-  let arguments = (ins Scl_AddressType:$addr, Variadic<Scl_IntegerType>:$indices);
+  let arguments = (ins
+    Scl_AddressType:$addr,
+    Variadic<Scl_IntegerType>:$indices,
+    // Declared array type when the base is a byte view (array member of a
+    // FB/struct); not set for plain array addresses.
+    OptionalAttr<TypeAttr>:$arrayType
+  );
   let results = (outs Scl_AddressType:$element);
   let assemblyFormat = "attr-dict $indices `:` type($indices) `from` $addr `:` type($addr) `->` type($element)";
 }
@@ -387,7 +399,9 @@ def ForDoOp : SclOp<"for"> {
   let assemblyFormat = "attr-dict $var `:` type($var) `=` $init `:` type($init) `to` $to `:` type($to) (`by` $by^ `:` type($by))? `do` $doBody";
 }
 
-def IfThenElseOp : SclOp<"if", [SingleBlockImplicitTerminator<"scl::EndOp">]> {
+// No SingleBlockImplicitTerminator: a then-region may legitimately end with
+// a different terminator (e.g. `continue` inside a loop).
+def IfThenElseOp : SclOp<"if", []> {
   let summary = "if-then-else operation";
   let description = [{
     Example:
@@ -411,7 +425,7 @@ def CaseOp : SclOp<"case"> {
     values which select that region. The last region is the else block.
 
     Example:
-      scl.case %sel : !scl.int, [[1, 2], [3]] {
+      scl.case %sel : !scl.int [array<i32: 1, 2>, array<i32: 3>] {
         ...
       } {
         ...

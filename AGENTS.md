@@ -58,7 +58,7 @@ has no `\b` — use python3 for regex edits.
   `sclang --opt --emit=jit %s 2>&1 | FileCheck %s` for JIT tests.
 - SSA names print as `%alloca`, `%reinterpret_cast`, `%0`… — match with
   `%[a-z_0-9]+` / `%[0-9]+`, not literal names.
-- 53 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, sclang JIT).
+- 62 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, sclang JIT).
 
 ## Key design decisions (do not regress)
 
@@ -80,22 +80,47 @@ has no `\b` — use python3 for regex edits.
 - Arrays lower to memref + flat row-major offset (lower bound subtracted), computed
   in `index` type (`arith.index_cast`, not `extsi` — extsi rejects index results).
 - FB/DB/struct memory model: an instance DB or struct is a **flat byte buffer**
-  `memref<Nxi8>`; the FB layout (member name -> byte offset/size/type) is computed by
-  `computeFbLayouts` in `runOnOperation` *before* conversion (ops are erased during
-  conversion) and cached in `SclTypeConverter::fbLayouts`. `scl.function_block` ->
-  `func.func(memref<Nxi8>)`, `scl.data_block` of FB type -> `memref.global` **with a
-  zero ElementsAttr initializer** (a global without initializer lowers to an
-  `external` LLVM global and the JIT cannot resolve its symbol), `scl.call.fb` ->
-  `func.call`, `scl.var` in an FB is erased (declaration only).
-- Member addresses (`scl.getvariable`/`scl.getelement`) are **`!scl.address<!scl.char>`**
-  in MLIRGen; `SclTypeConverter` maps `address<char>` to a **rank-1 byte view**
-  `memref<?xi8, strided<[1], offset: ?>>` created by a *single*
-  `memref.reinterpret_cast` from the base buffer at the member's byte offset.
-  **Never chain reinterpret_casts**: `ReinterpretCastOp::fold` rewrites
+  `memref<Nxi8>`; the FB layout (member name -> byte offset/size/type + optional
+  constant cold-start init bits) is computed by `computeFbLayouts` in
+  `runOnOperation` *before* conversion (ops are erased during conversion) and
+  cached in `SclTypeConverter::fbLayouts`. `scl.function_block` ->
+  `func.func(memref<Nxi8>)`, `scl.data_block` of FB type -> `memref.global` whose
+  **ElementsAttr initializer bakes in the FB members' cold-start values** (a
+  global without initializer lowers to an `external` LLVM global and the JIT
+  cannot resolve its symbol; initializers must NOT be emitted in the FB body —
+  that would re-initialize on every call). `scl.call.fb` -> `func.call`,
+  `scl.var` in an FB is erased (declaration only).
+- `address<composite>` (array/struct/IDB) converts **directly to the buffer
+  memref** (identity layout; `memref.alloca` for locals, `memref.copy` for
+  whole-buffer assignment of inputs). Do NOT wrap composite values in a 0-d
+  `memref<memref<...>>` slot: a local array/struct var would load a descriptor
+  from an uninitialized alloca and crash at runtime.
+- Scalar FB/struct member addresses (`scl.getvariable`/`scl.getelement`) are
+  **`!scl.address<!scl.char>`** in MLIRGen; `SclTypeConverter` maps `address<char>`
+  to a **rank-1 byte view** `memref<?xi8, strided<[1], offset: ?>>`. MLIRGen tracks
+  `byteViewTypes` (byte-view value -> declared SCL member type) so loads use the
+  declared member type; `getindex`/`getelement` on a byte view carry the declared
+  array/struct type in the `arrayType`/`baseType` attrs. Lowerings resolve any
+  view chain with `resolveByteViewRoot` and create **one** cast from the root
+  buffer. **Never chain reinterpret_casts**: `ReinterpretCastOp::fold` rewrites
   `reinterpret_cast(reinterpret_cast(x))` -> `reinterpret_cast(x)` keeping only the
-  outer offset, silently dropping the member offset. Loads/stores of members
-  byte-assemble directly from that view (`loadFromByteBuffer`/`storeToByteBuffer`
-  index `view[%i]`); loads use the *declared member type*, not the i8 address type.
+  outer offset. Loads/stores byte-assemble from the view directly
+  (`loadFromByteBuffer`/`storeToByteBuffer` index `view[%i]`; i1 bool members are
+  special-cased — `extui`/`trunci` between i8 and i1 are invalid).
+- `continue`/`exit` (also nested inside if/case in a loop body) lower via
+  `ContinueOpLowering`/`ExitOpLowering` to branches recorded in
+  `LoopTerminatorTargets` by the loop lowerings (dialect conversion is pre-order,
+  so loop patterns run before the nested ops; rewriting/erasing nested ops inside
+  the loop pattern does NOT work — deferred erasure skips them and direct
+  `erase()` dangles the worklist).
+- Assignments insert an implicit `scl.int.cast` between integer types (target =
+  declared member type for byte-view lvalues). `call.fc` results are typed from
+  the callee's signature (pre-pass `functionResultTypes`), not hardcoded int.
+  Boolean literals are i1 (`true`/`false`), and loop conditions go through
+  `mlirGenRValue` so a bool variable condition is loaded, not passed as an address.
+- `string[n]` is an array of n chars; `s := 'lit'` stores the literal bytes
+  zero-padded. Case labels support ranges (`1..3:` expands in the parser);
+  `scl.case` lowers to `cf.switch` for any integer selector width.
 - `case` -> new `scl.case` op (selector + per-region `array<i32>` case values +
   variadic regions, last = else) -> `cf.switch`. `goto`/labels -> real blocks +
   `cf.br` emitted in MLIRGen (forward gotos create the label block on demand; code
@@ -106,18 +131,16 @@ has no `\b` — use python3 for regex edits.
 
 ## Known gaps (parsed but not lowered / not code-generated)
 
-- Composite members (arrays/structs as FB or struct members): their member address
-  is an i8 byte view, so `getindex`/nested element access on them is not lowered
-  correctly yet. Scalar members (int/real/bool/char/date/time) work end to end,
-  including JIT (test/sclang/jit_fb.scl).
-- FB member initializers (`var state : int := 5` inside an FB) are dropped —
-  the IDB global is zero-initialized, so only `:= 0` is correct today.
-- Strings (`scl.string` constants / string vars) are not implemented.
-- `case` ranges (`1..5`) and CASE on non-integer selectors are not supported;
-  only literal value lists on int selectors.
-- Nested `continue`/`exit` inside `if` regions within loops are not remapped
-  (only terminators directly in loop-body blocks are).
+- Array-of-struct members (`a[i].x`): the byte-view chain has a dynamic offset
+  at the inner cast, which `resolveByteViewRoot` cannot fold statically.
+- String comparison, string var-to-var assignment, and string literals outside
+  assignments are not implemented. Strings are zero-padded (SCL pads with
+  spaces).
+- Non-constant FB member initializers are ignored (the IDB global is zeroed).
+- CASE on real/bool selectors is rejected (integer selectors of any width work).
 - `goto` following another terminator is a compile error by design.
+- Whole-array var-to-var assignment (`a := b`) is not lowered (only
+  whole-buffer *input argument* copies via `memref.copy`).
 
 ## Repo hygiene
 

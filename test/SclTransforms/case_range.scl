@@ -1,0 +1,23 @@
+// RUN: sclang-gen --emit=mlir-std %s | FileCheck %s
+
+// CHECK-LABEL: func.func @f
+// CHECK:         cf.switch {{.*}} : i32, [
+// CHECK-DAG:     1: ^
+// CHECK-DAG:     2: ^
+// CHECK-DAG:     3: ^
+// CHECK-DAG:     5: ^
+// CHECK-DAG:     7: ^
+// CHECK-DAG:     8: ^
+function f : int
+var_temp
+  x : int;
+end_var
+begin
+  x := 3;
+  case x of
+    1..3: f := 10;
+    5, 7..8: f := 20;
+  else
+    f := 30;
+  end_case;
+end_function

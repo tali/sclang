@@ -983,16 +983,48 @@ private:
     if (!expr)
       return parseError<InstructionAST>("expression", "in a statement");
 
-    // A label: `name:` (jump label) or `value, value:` (case element).
-    if (lexer.getCurToken() == tok_comma || lexer.getCurToken() == tok_colon) {
+    // A label: `name:` (jump label) or `value, value:` / `lo..hi:` (case
+    // element).
+    if (lexer.getCurToken() == tok_comma || lexer.getCurToken() == tok_colon ||
+        lexer.getCurToken() == tok_range) {
       std::vector<std::unique_ptr<ExpressionAST>> values;
-      values.push_back(std::move(expr));
+      // Push one label value; a following `..` makes it a case range which
+      // is expanded to the individual integer values.
+      auto pushValue = [&](std::unique_ptr<ExpressionAST> value) -> bool {
+        if (lexer.getCurToken() != tok_range) {
+          values.push_back(std::move(value));
+          return true;
+        }
+        auto labelLoc = value->loc();
+        lexer.consume(tok_range);
+        auto hiExpr = ParseExpression();
+        if (!hiExpr)
+          return false;
+        auto *loC = llvm::dyn_cast<IntegerConstantAST>(value.get());
+        auto *hiC = llvm::dyn_cast<IntegerConstantAST>(hiExpr.get());
+        if (!loC || !hiC) {
+          parseError<ExpressionAST>("integer constants", "in case range");
+          return false;
+        }
+        int32_t lo = loC->getValue(), hi = hiC->getValue();
+        if (hi < lo) {
+          parseError<ExpressionAST>("ascending range", "in case range");
+          return false;
+        }
+        for (int32_t v = lo; v <= hi; ++v)
+          values.push_back(
+              std::make_unique<IntegerConstantAST>(labelLoc, v, tok_int));
+        return true;
+      };
+      if (!pushValue(std::move(expr)))
+        return nullptr;
       while (lexer.getCurToken() == tok_comma) {
         lexer.consume(tok_comma);
         auto value = ParseExpression();
         if (!value)
           return parseError<InstructionAST>("expression", "in label values");
-        values.push_back(std::move(value));
+        if (!pushValue(std::move(value)))
+          return nullptr;
       }
       if (lexer.getCurToken() != tok_colon)
         return parseError<InstructionAST>(tok_colon, "to end a label");

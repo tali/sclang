@@ -1,0 +1,31 @@
+// RUN: sclang-gen --emit=mlir-std %s | FileCheck %s
+
+// Array member of a FB: the member is a byte window in the IDB buffer; the
+// element address is a byte view at flat*2.
+// CHECK: func.func @fb1(%arg0: memref<8xi8>)
+function_block fb1
+var_output
+  a : array[1..3] of int;
+end_var
+var_input
+  i : int;
+end_var
+begin
+  a[i] := i;
+end_function_block
+
+// CHECK: memref.global @db1 : memref<8xi8>
+data_block db1
+  fb1
+end_data_block
+
+// CHECK-LABEL: func.func @fc1
+// CHECK:         %[[DB:[0-9]+]] = memref.get_global @db1 : memref<8xi8>
+// CHECK:         call @fb1(%[[DB]]) : (memref<8xi8>) -> ()
+// CHECK:         memref.reinterpret_cast {{.*}} to offset: [%c2], sizes: [%c2]
+function fc1 : int
+begin
+  "db1".i := 2;
+  fb1."db1"();
+  fc1 := "db1".a[2];
+end_function

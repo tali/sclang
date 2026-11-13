@@ -1,0 +1,24 @@
+// RUN: sclang-gen --emit=mlir-std %s | FileCheck %s
+
+// continue/exit nested inside an if within a for body must branch to the
+// loop's increment/exit blocks, not to the if's end block.
+// CHECK-LABEL: func.func @f
+// CHECK:         arith.remsi
+// CHECK:         cf.cond_br {{.*}}, ^[[CONT:bb[0-9]+]], ^[[BODY:bb[0-9]+]]
+// CHECK:       ^[[BODY]]:
+// CHECK:         cf.br ^[[CONT]]
+function f : int
+var_temp
+  i : int;
+  sum : int;
+end_var
+begin
+  sum := 0;
+  for i := 1 to 10 do
+    if i mod 2 = 0 then
+      continue;
+    end_if;
+    sum := sum + i;
+  end_for;
+  f := sum;
+end_function

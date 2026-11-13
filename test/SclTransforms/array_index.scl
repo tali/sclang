@@ -1,9 +1,8 @@
 // RUN: sclang-gen --emit=mlir-std %s | FileCheck %s
 
 // CHECK-LABEL: func.func @arr
-// CHECK:         %[[A:[a-z_0-9]+]] = memref.alloca() : memref<memref<3xi16>>
-// CHECK:         %[[BASE:[0-9]+]] = memref.load %{{[a-z_0-9]+}}[] : memref<memref<3xi16>, strided<[], offset: ?>>
-// CHECK:         %[[EL:[a-z_0-9]+]] = memref.reinterpret_cast %[[BASE]] to offset: [%c1]
+// CHECK:         %[[A:[a-z_0-9]+]] = memref.alloca() : memref<3xi16>
+// CHECK:         %[[EL:[a-z_0-9]+]] = memref.reinterpret_cast %[[A]] to offset: [%c1]
 // CHECK:         memref.store %c42_i16, %[[EL]][] : memref<i16, strided<[], offset: ?>>
 function arr : int
 var

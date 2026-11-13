@@ -1,7 +1,8 @@
 // RUN: sclang-gen --emit=mlir-std %s | FileCheck %s
 
 // CHECK-LABEL: func.func @f
-// CHECK:         memref.alloca() : memref<memref<6xi8>>
+// CHECK:         memref.alloca() : memref<6xi8>
+// CHECK:         memref.copy
 // CHECK:         memref.reinterpret_cast {{%[a-z_0-9]+}} to offset: [%c0], sizes: [%c2]
 function f : int
 var_input

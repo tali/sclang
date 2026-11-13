@@ -97,6 +97,17 @@ public:
     // add them to the module.
     theModule = mlir::ModuleOp::create(builder.getUnknownLoc());
 
+    // Pre-pass: collect function result types and FB names so that calls and
+    // type references can be resolved regardless of definition order.
+    for (const auto &unit : *moduleAST) {
+      if (auto *fn = llvm::dyn_cast<FunctionAST>(unit.get()))
+        functionResultTypes[fn->getIdentifier()] = getType(fn->getType());
+      else if (auto *ob = llvm::dyn_cast<OrganizationBlockAST>(unit.get()))
+        functionResultTypes[ob->getIdentifier()] = builder.getNoneType();
+      else if (auto *fb = llvm::dyn_cast<FunctionBlockAST>(unit.get()))
+        fbNames[fb->getIdentifier()] = true;
+    }
+
     for (const auto &unit : *moduleAST) {
       builder.clearInsertionPoint();
       if (auto *udt = llvm::dyn_cast<UserDefinedTypeAST>(unit.get())) {
@@ -145,6 +156,15 @@ private:
   llvm::StringMap<mlir::Block *> labelBlocks;
   /// User-defined type name -> struct type.
   llvm::StringMap<mlir::Type> udtTypes;
+  /// Byte-view address value -> declared SCL type of the member it points
+  /// into (FB/struct members are addressed as i8 byte views; the declared
+  /// type is needed to type loads and to resolve nested member access).
+  llvm::DenseMap<mlir::Value, mlir::Type> byteViewTypes;
+  /// Function/OB name -> result type, collected in a pre-pass over the
+  /// module so calls can be typed even before the callee is generated.
+  llvm::StringMap<mlir::Type> functionResultTypes;
+  /// Names of all function blocks in the module (for type resolution).
+  llvm::StringMap<bool> fbNames;
 
   /// Does the current insertion block already end with a terminator?
   bool blockHasTerminator() {
@@ -214,8 +234,8 @@ private:
                     std::vector<mlir::Type> &types,
                     std::vector<llvm::StringRef> &names) {
     const auto &values = decls.getValues();
-    types.reserve(types.size() + types.size());
-    names.reserve(names.size() + names.size());
+    types.reserve(types.size() + values.size());
+    names.reserve(names.size() + values.size());
     for (const auto &decl : values) {
       auto type = getType(decl->getDataType());
       // TODO: initializer
@@ -597,6 +617,58 @@ private:
         });
   }
 
+  /// Assign a string literal to a string variable: store the literal bytes
+  /// (zero-padded to the target length) into the char buffer byte by byte.
+  mlir::LogicalResult mlirGenStringAssignment(mlir::Location location,
+                                              const ExpressionAST *lvalue,
+                                              const StringConstantAST *str) {
+    mlir::Value lhs = mlirGenLValue(lvalue);
+    if (!lhs)
+      return mlir::failure();
+    auto baseElem = lhs.getType().cast<AddressType>().getElementType();
+    ArrayType arrTy;
+    mlir::TypeAttr arrayTypeAttr;
+    if (auto at = baseElem.dyn_cast<ArrayType>()) {
+      arrTy = at;
+    } else {
+      auto it = byteViewTypes.find(lhs);
+      if (it == byteViewTypes.end() || !it->second.isa<ArrayType>()) {
+        emitError(location) << "string literal assigned to non-string target";
+        return mlir::failure();
+      }
+      arrTy = it->second.cast<ArrayType>();
+      arrayTypeAttr = mlir::TypeAttr::get(arrTy);
+    }
+    auto elemTy = arrTy.getElementType();
+    if (!elemTy.isa<IntegerType>() ||
+        elemTy.cast<IntegerType>().getWidth() != 8) {
+      emitError(location) << "string target is not an array of char";
+      return mlir::failure();
+    }
+    auto dims = arrTy.getDimensions();
+    if (dims.size() != 1) {
+      emitError(location) << "only 1-d strings are supported";
+      return mlir::failure();
+    }
+    int64_t count = dims[0].second - dims[0].first + 1;
+    auto intTy = getType(tok_int);
+    auto i16 = builder.getIntegerType(16);
+    auto charAddrTy = AddressType::get(elemTy);
+    auto i8 = builder.getIntegerType(8);
+    auto value = str->getValue();
+    for (int64_t i = 0; i < count; ++i) {
+      uint8_t byte = i < (int64_t)value.size() ? (uint8_t)value[i] : 0;
+      auto idx = builder.create<ConstantOp>(
+          location, intTy, builder.getIntegerAttr(i16, dims[0].first + i));
+      auto elem = builder.create<GetIndexOp>(location, charAddrTy, lhs,
+                                             mlir::ValueRange{idx}, arrayTypeAttr);
+      auto byteVal = builder.create<ConstantOp>(
+          location, elemTy, builder.getIntegerAttr(i8, byte));
+      builder.create<StoreOp>(location, elem, byteVal);
+    }
+    return mlir::success();
+  }
+
   /// Codegen a variable assignment
   mlir::LogicalResult mlirGen(const ValueAssignmentAST *instr) {
     auto location = loc(instr->loc());
@@ -604,12 +676,25 @@ private:
     const auto expr = llvm::cast<BinaryExpressionAST>(instr->getExpression());
     assert(expr->getOp() == tok_assignment);
 
+    if (auto *str = llvm::dyn_cast<StringConstantAST>(expr->getRhs()))
+      return mlirGenStringAssignment(location, expr->getLhs(), str);
+
     mlir::Value lhs = mlirGenLValue(expr->getLhs());
     if (!lhs)
       return mlir::failure();
     mlir::Value rhs = mlirGenRValue(expr->getRhs());
     if (!rhs)
       return mlir::failure();
+
+    // Implicit integer conversion on assignment (e.g. char -> int). For
+    // byte-view member addresses use the declared member type, not the i8
+    // address element type.
+    auto lhsElem = lhs.getType().cast<AddressType>().getElementType();
+    auto bvIt = byteViewTypes.find(lhs);
+    mlir::Type declared = bvIt != byteViewTypes.end() ? bvIt->second : lhsElem;
+    if (declared != rhs.getType() && declared.isa<IntegerType>() &&
+        rhs.getType().isa<IntegerType>())
+      rhs = builder.create<IntegerCastOp>(location, declared, rhs);
 
     builder.create<StoreOp>(location, lhs, rhs);
 
@@ -668,13 +753,31 @@ private:
         auto addr = mlirGen(expr);
         if (!addr)
           return nullptr;
-        auto base = mlirGen(bin->getLhs());
-        auto name = llvm::cast<SimpleVariableAST>(bin->getRhs())->getName();
-        auto ty = base ? memberDeclaredType(base, name) : nullptr;
+        // Declared member type: tracked for byte-view member addresses,
+        // otherwise derived from the base type.
+        mlir::Type ty = nullptr;
+        auto it = byteViewTypes.find(addr);
+        if (it != byteViewTypes.end())
+          ty = it->second;
+        else {
+          auto base = mlirGen(bin->getLhs());
+          auto name = llvm::cast<SimpleVariableAST>(bin->getRhs())->getName();
+          ty = base ? memberDeclaredType(base, name) : nullptr;
+        }
         if (!ty)
           return nullptr;
         return builder.create<LoadOp>(loc(expr->loc()), ty, addr);
       }
+    }
+    if (llvm::isa<IndexedVariableAST>(expr)) {
+      // Array member of a FB/struct: the element address is a byte view;
+      // load with the declared element type.
+      auto addr = mlirGen(expr);
+      if (!addr)
+        return nullptr;
+      auto it = byteViewTypes.find(addr);
+      if (it != byteViewTypes.end())
+        return builder.create<LoadOp>(loc(expr->loc()), it->second, addr);
     }
     return mlirGenRValue(mlirGen(expr));
   }
@@ -690,8 +793,14 @@ private:
 
   mlir::Value mlirGen(const IntegerConstantAST *expr) {
     auto location = loc(expr->loc());
-    auto type = getType(tok_int); // TBD use expr.getType()
-    auto attrType = builder.getIntegerType(16);
+    // Boolean literals are typed bool (i1); other integer literals are int.
+    mlir::Type type = getType(tok_int);
+    unsigned width = 16;
+    if (expr->getType() == tok_bool) {
+      type = getType(tok_bool);
+      width = 1;
+    }
+    auto attrType = builder.getIntegerType(width);
     auto value = builder.getIntegerAttr(attrType, expr->getValue());
     return builder.create<ConstantOp>(location, type, value);
   }
@@ -771,7 +880,9 @@ private:
       auto type = AddressType::get(i8);
       auto self = symbolTable.lookup("$self").getValue();
       assert(self);
-      return builder.create<GetVariableOp>(location, type, self, name);
+      auto result = builder.create<GetVariableOp>(location, type, self, name);
+      byteViewTypes[result] = variable.getType();
+      return result;
     }
     if (variable.isAddress())
       return variable.getValue();
@@ -823,9 +934,11 @@ private:
   mlir::Value mlirGenElement(mlir::Location location,
                              mlir::Value address, StringRef name) {
     mlir::Type baseType = address.getType().cast<AddressType>().getElementType();
+    auto i8 = IntegerType::get(builder.getContext(), 8);
+    mlir::Type resultType = AddressType::get(i8);
 
     return mlir::TypeSwitch<mlir::Type, mlir::Value>(baseType)
-    .Case<InstanceDbType>([&](auto idbType) -> GetVariableOp {
+    .Case<InstanceDbType>([&](auto idbType) -> mlir::Value {
       auto fbName = builder.getStringAttr(idbType.getFbSymbol());
       auto fb = mlir::SymbolTable::lookupNearestSymbolFrom<FunctionBlockOp>(
         theModule, fbName);
@@ -839,16 +952,41 @@ private:
         return nullptr;
       }
       // Address the member as an i8 view into the instance byte buffer.
-      auto i8 = IntegerType::get(builder.getContext(), 8);
-      mlir::Type resultType = AddressType::get(i8);
-
-      return builder.create<GetVariableOp>(location, resultType, address, name);
+      auto result = builder.create<GetVariableOp>(location, resultType, address, name);
+      byteViewTypes[result] = var.getType();
+      return result;
     })
-    .Case<StructType>([&](auto structType) -> GetElementOp {
-      auto i8 = IntegerType::get(builder.getContext(), 8);
-      mlir::Type resultType = AddressType::get(i8);
-
-      return builder.create<GetElementOp>(location, resultType, address, name);
+    .Case<StructType>([&](auto structType) -> mlir::Value {
+      auto result = builder.create<GetElementOp>(location, resultType, address,
+                                                 name, mlir::TypeAttr());
+      byteViewTypes[result] = structType.getElementType(name);
+      return result;
+    })
+    .Case<IntegerType>([&](auto charType) -> mlir::Value {
+      // Nested struct member: the base is itself a byte view; the declared
+      // struct type is tracked in byteViewTypes.
+      if (charType.getWidth() != 8) {
+        emitError(location) << "unsupported base type " << baseType
+                            << " for element '" << name << "'";
+        return nullptr;
+      }
+      auto it = byteViewTypes.find(address);
+      if (it == byteViewTypes.end() || !it->second.isa<StructType>()) {
+        emitError(location) << "unsupported base type " << baseType
+                            << " for element '" << name << "'";
+        return nullptr;
+      }
+      auto structType = it->second.cast<StructType>();
+      auto memberTy = structType.getElementType(name);
+      if (!memberTy) {
+        emitError(location) << "unknown element '" << name << "' in struct";
+        return nullptr;
+      }
+      auto baseAttr = mlir::TypeAttr::get(structType);
+      auto result = builder.create<GetElementOp>(location, resultType, address,
+                                                 name, baseAttr);
+      byteViewTypes[result] = memberTy;
+      return result;
     })
     .Default([&](auto baseType) {
       emitError(location) << "unsupported base type " << baseType << " for element '" << name << "'";
@@ -871,14 +1009,42 @@ private:
     auto location = loc(expr->loc());
 
     mlir::Value base = mlirGen(expr->getBase());
-    mlir::Type arrayType = base.getType().cast<AddressType>().getElementType();
-    mlir::Type elementType = arrayType.cast<ArrayType>().getElementType();
-    mlir::Type resultType = AddressType::get(elementType);
+    if (!base)
+      return nullptr;
+    auto baseElem = base.getType().cast<AddressType>().getElementType();
+    mlir::Type resultElem;
+    mlir::TypeAttr arrayTypeAttr;
+    ArrayType arrayTy;
+    if (auto at = baseElem.dyn_cast<ArrayType>()) {
+      // Plain array variable: element address has the element type.
+      arrayTy = at;
+      resultElem = at.getElementType();
+    } else if (baseElem.isa<IntegerType>() &&
+               baseElem.cast<IntegerType>().getWidth() == 8) {
+      // Array member of a FB/struct: the base is a byte view; keep the
+      // result a byte view and record the declared array type on the op.
+      auto it = byteViewTypes.find(base);
+      if (it == byteViewTypes.end() || !it->second.isa<ArrayType>()) {
+        emitError(location) << "cannot index into '" << baseElem << "'";
+        return nullptr;
+      }
+      arrayTy = it->second.cast<ArrayType>();
+      resultElem = baseElem;
+      arrayTypeAttr = mlir::TypeAttr::get(arrayTy);
+    } else {
+      emitError(location) << "cannot index into '" << baseElem << "'";
+      return nullptr;
+    }
+    mlir::Type resultType = AddressType::get(resultElem);
     SmallVector<mlir::Value, 1> indices;
     for (const auto & index : expr->getIndices()) {
       indices.push_back(mlirGenRValue(index.get()));
     }
-    return builder.create<GetIndexOp>(location, resultType, base, indices);
+    auto result = builder.create<GetIndexOp>(location, resultType, base, indices,
+                                             arrayTypeAttr);
+    if (arrayTypeAttr)
+      byteViewTypes[result] = arrayTy.getElementType();
+    return result;
   }
 
   mlir::Value mlirGen(const BinaryExpressionAST *expr) {
@@ -1076,7 +1242,16 @@ private:
     })))
       return nullptr;
 
-    mlir::Type resultType = getType(tok_int); // TODO: TBD
+    auto rtIt = functionResultTypes.find(callee);
+    if (rtIt == functionResultTypes.end()) {
+      emitError(location) << "unknown function '" << callee << "'";
+      return nullptr;
+    }
+    mlir::Type resultType = rtIt->second;
+    if (resultType.isa<mlir::NoneType>()) {
+      emitError(location) << "void function '" << callee << "' used as a value";
+      return nullptr;
+    }
 
     auto argNamesAttr = mlir::ArrayAttr::get(context, argNames);
     return builder.create<CallFcOp>(location, resultType, callee, arguments, argNamesAttr);
@@ -1240,12 +1415,24 @@ private:
     if (it != udtTypes.end())
       return it->second;
     // A reference to a function block type is an instance DB.
-    return InstanceDbType::get(builder.getContext(), type->getName());
+    if (fbNames.contains(type->getName()))
+      return InstanceDbType::get(builder.getContext(), type->getName());
+    emitError(loc(type->loc())) << "unknown type '" << type->getName() << "'";
+    return nullptr;
+  }
+
+  mlir::Type getType(const StringDataTypeSpecAST *type) {
+    // A string is a fixed-size buffer of chars (maxLen bytes).
+    auto charTy = IntegerType::get(builder.getContext(), 8);
+    std::vector<ArrayType::DimTy> dims;
+    dims.push_back(std::make_pair(0, (int)type->getMaxLen() - 1));
+    return ArrayType::get(dims, charTy);
   }
 
   mlir::Type getType(const DataTypeSpecAST *type) {
     return TypeSwitch<const DataTypeSpecAST *, mlir::Type>(type)
         .Case<ElementaryDataTypeAST>([&](auto type) { return getType(type); })
+        .Case<StringDataTypeSpecAST>([&](auto type) { return getType(type); })
         .Case<ArrayDataTypeSpecAST>([&](auto type) { return getType(type); })
         .Case<StructDataTypeSpecAST>([&](auto type) { return getType(type); })
         .Case<UserDefinedTypeIdentifierAST>([&](auto type) { return getType(type); })
@@ -1335,7 +1522,9 @@ private:
     auto old = builder.saveInsertionPoint();
 
     builder.createBlock(&whileDoOp.getWhileBody());
-    auto condition = mlirGen(whileDo->getCondition());
+    auto condition = mlirGenRValue(whileDo->getCondition());
+    if (!condition)
+      return mlir::failure();
     // Successor placeholders; the loop lowering sets the real targets.
     auto *condBlock = &whileDoOp.getWhileBody().front();
     auto *dummy = builder.createBlock(&whileDoOp.getWhileBody());
@@ -1363,7 +1552,9 @@ private:
     if (failed(mlirGen(repeatUntil->getCode())))
       return mlir::failure();
 
-    auto until = mlirGen(repeatUntil->getCondition());
+    auto until = mlirGenRValue(repeatUntil->getCondition());
+    if (!until)
+      return mlir::failure();
     // Successor placeholders; the loop lowering sets the real targets.
     auto *bodyBlock = &repeatOp.getRepeatBody().front();
     auto *dummy = builder.createBlock(&repeatOp.getRepeatBody());
