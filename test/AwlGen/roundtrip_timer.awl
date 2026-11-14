@@ -1,0 +1,30 @@
+// RUN: sclang-gen -x awl --emit=awl %s | FileCheck %s
+// RUN: sclang-gen -x awl --emit=awl %s | sclang-gen -x awl --emit=awl - | FileCheck %s
+// Timer/counter round trip: S5T# literals re-print as S5T# (not raw ints),
+// T/Z operands print without a size letter.
+// CHECK-LABEL: OB 1
+// CHECK: L S5T#1S
+// CHECK: SS T0
+// CHECK: U T1
+// CHECK: L T1
+// CHECK: T MW10
+// CHECK: L 3
+// CHECK: S Z5
+// CHECK: ZV Z5
+// CHECK: ZR Z5
+// CHECK: L Z5
+// CHECK: T MW12
+// CHECK: BE
+OB 1
+  L S5T#1S
+  SS T0
+  U T1
+  L T1
+  T MW10
+  L 3
+  S Z5
+  ZV Z5
+  ZR Z5
+  L Z5
+  T MW12
+  BE

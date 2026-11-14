@@ -141,6 +141,16 @@ static cl::opt<bool> dumpAreas(
     cl::desc("After --emit=jit, dump the sim runtime's memory areas and "
              "clock to stdout (only with --runtime=sim)"));
 
+/// Number of OB1 scans the JIT runs (models repeated PLC scan cycles), and
+/// the virtual milliseconds advanced between scans via scl_rt_cycle()
+/// (drives timer expiry in tests).
+static cl::opt<unsigned> jitCycles(
+    "jit-cycles", cl::init(1),
+    cl::desc("Number of OB1 scans to run with --emit=jit"));
+static cl::opt<uint64_t> cycleMs(
+    "cycle-ms", cl::init(100),
+    cl::desc("Virtual milliseconds advanced between JIT scans (scl_rt_cycle)"));
+
 /// Returns a SCL AST resulting from parsing the file or a nullptr on error.
 std::unique_ptr<sclang::ModuleAST> parseInputFile(llvm::StringRef filename) {
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> FileOrErr =
@@ -306,6 +316,8 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_update_inputs", (void *)&scl_rt_update_inputs);
     add("scl_rt_update_outputs", (void *)&scl_rt_update_outputs);
     add("scl_rt_cycle", (void *)&scl_rt_cycle);
+    add("scl_rt_timer_start", (void *)&scl_rt_timer_start);
+    add("scl_rt_counter_op", (void *)&scl_rt_counter_op);
     return map;
   });
 }
@@ -411,11 +423,16 @@ int runJit(mlir::ModuleOp module) {
     return -1;
   bindRuntimeSymbols(*engine);
 
-  // Invoke the JIT-compiled function.
-  auto invocationResult = engine->invoke("OB1");
-  if (invocationResult) {
-    llvm::errs() << "JIT invocation failed\n" << invocationResult << "\n";
-    return -1;
+  // Invoke the JIT-compiled function once per scan cycle, advancing the
+  // virtual clock between scans (drives %T timers / %C counters).
+  for (unsigned i = 0; i < jitCycles; ++i) {
+    auto invocationResult = engine->invoke("OB1");
+    if (invocationResult) {
+      llvm::errs() << "JIT invocation failed\n" << invocationResult << "\n";
+      return -1;
+    }
+    if (i + 1 < jitCycles)
+      scl_rt_cycle(cycleMs);
   }
 
   if (dumpAreas && runtimeKind == Sim)

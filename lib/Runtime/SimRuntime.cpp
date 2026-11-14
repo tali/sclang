@@ -27,6 +27,13 @@ namespace {
 /// scl_rt_sim_set_area_size() (driver CLI `--area-size`).
 constexpr uint64_t kDefaultAreaSize = 65536;
 
+struct TimerState {
+  uint8_t mode = 0;      // SclRtTimerMode
+  bool running = false;
+  uint64_t startMs = 0;  // clock at (re)start
+  uint64_t durMs = 0;    // decoded duration in ms
+};
+
 struct SimState {
   std::vector<uint8_t> areaBytes[256];   // indexed by area code (ASCII)
   uint64_t areaSize[256] = {};           // configured size, 0 = default
@@ -34,7 +41,38 @@ struct SimState {
   std::map<uint32_t, uint64_t> dbSize;   // configured DB sizes, 0 = grow lazily
   const SclRtVTable *vtable = nullptr;
   uint64_t clockMs = 0;
+  TimerState timers[256];                // indexed by timer number
+  uint32_t counters[256] = {};           // counter values (0..999)
 };
+
+/// Decode an S5TIME-encoded 16-bit value to milliseconds.
+static uint64_t s5timeToMs(uint64_t s5) {
+  static const uint64_t baseMs[4] = {10, 100, 1000, 10000};
+  uint64_t base = (s5 >> 12) & 3;
+  uint64_t bcd = s5 & 0xFFF;
+  uint64_t val = ((bcd >> 8) & 0xF) * 100 + ((bcd >> 4) & 0xF) * 10 + (bcd & 0xF);
+  return val * baseMs[base];
+}
+
+/// Current timer value in ms: while running, the remaining time (0 when
+/// expired); when stopped, the preset (writing %T sets the preset, as on S7).
+static uint64_t timerRemainingMs(const TimerState &t, uint64_t clockMs) {
+  if (!t.running)
+    return t.durMs;
+  uint64_t elapsed = clockMs - t.startMs;
+  return elapsed >= t.durMs ? 0 : t.durMs - elapsed;
+}
+
+/// Timer status bit (Q output): on-delay timers switch on after the delay,
+/// the others while running.
+static bool timerStatus(const TimerState &t, uint64_t clockMs) {
+  if (!t.running)
+    return false;
+  bool expired = (clockMs - t.startMs) >= t.durMs;
+  if (t.mode == SCL_RT_TIMER_ON_DELAY)
+    return expired;
+  return !expired;
+}
 
 SimState &state() {
   static SimState s;
@@ -93,6 +131,19 @@ int64_t scl_rt_read(uint8_t area, uint32_t db, uint32_t byteOff,
     fprintf(stderr, "scl_rt_read: invalid width %u\n", widthBytes);
     abort();
   }
+  // Timers/counters: the value is computed from the sim state (remaining
+  // time in ms / counter value), not stored in the area buffer.
+  if (area == SCL_RT_AREA_T && widthBytes > 1) {
+    uint64_t v = timerRemainingMs(state().timers[byteOff], state().clockMs);
+    if (widthBytes < 8) {
+      uint64_t signBit = 1ull << (widthBytes * 8 - 1);
+      if (v & signBit)
+        v |= ~0ull << (widthBytes * 8);
+    }
+    return (int64_t)v;
+  }
+  if (area == SCL_RT_AREA_C && widthBytes > 1)
+    return (int64_t)state().counters[byteOff];
   auto &buf = bufferFor(area, db, byteOff, widthBytes);
   // big-endian: byte 0 is the most significant byte
   uint64_t v = 0;
@@ -117,6 +168,16 @@ void scl_rt_write(uint8_t area, uint32_t db, uint32_t byteOff,
     fprintf(stderr, "scl_rt_write: invalid width %u\n", widthBytes);
     abort();
   }
+  // Writing a counter value (e.g. SCL `%Cn := v`) sets the count; writing a
+  // timer value (e.g. `%TWn := v`) sets the preset (TV).
+  if (area == SCL_RT_AREA_C && widthBytes > 1) {
+    state().counters[byteOff] = (uint32_t)(value > 999 ? 999 : value);
+    return;
+  }
+  if (area == SCL_RT_AREA_T && widthBytes > 1) {
+    state().timers[byteOff].durMs = value;
+    return;
+  }
   auto &buf = bufferFor(area, db, byteOff, widthBytes);
   // big-endian: the low byte of the value goes to the highest offset
   for (uint32_t i = 0; i < widthBytes; ++i)
@@ -131,6 +192,11 @@ bool scl_rt_read_bit(uint8_t area, uint32_t db, uint32_t byteOff,
     fprintf(stderr, "scl_rt_read_bit: invalid bit %u\n", bit);
     abort();
   }
+  // Timer/counter status bit (AWL `U T n` / `U Z n`).
+  if (bit == 0 && area == SCL_RT_AREA_T)
+    return timerStatus(state().timers[byteOff], state().clockMs);
+  if (bit == 0 && area == SCL_RT_AREA_C)
+    return state().counters[byteOff] > 0;
   auto &buf = bufferFor(area, db, byteOff, 1);
   return (buf[byteOff] >> bit) & 1;
 }
@@ -173,6 +239,59 @@ void scl_rt_cycle(uint64_t elapsedMs) {
   state().clockMs += elapsedMs;
 }
 
+void scl_rt_timer_start(uint32_t t, uint8_t mode, uint64_t durS5) {
+  auto &s = state();
+  if (s.vtable && s.vtable->timer_start) {
+    s.vtable->timer_start(t, mode, durS5);
+    return;
+  }
+  if (t > 255) {
+    fprintf(stderr, "scl_rt_timer_start: invalid timer %u\n", t);
+    abort();
+  }
+  uint64_t durMs = s5timeToMs(durS5);
+  TimerState &tm = s.timers[t];
+  if (mode == SCL_RT_TIMER_EXT_PULSE && tm.running) {
+    // SE retrigger extends the running pulse
+    tm.durMs = timerRemainingMs(tm, s.clockMs) + durMs;
+    tm.startMs = s.clockMs;
+  } else {
+    tm.mode = mode;
+    tm.running = true;
+    tm.startMs = s.clockMs;
+    tm.durMs = durMs;
+  }
+}
+
+void scl_rt_counter_op(uint32_t c, uint8_t op, uint64_t value) {
+  auto &s = state();
+  if (s.vtable && s.vtable->counter_op) {
+    s.vtable->counter_op(c, op, value);
+    return;
+  }
+  if (c > 255) {
+    fprintf(stderr, "scl_rt_counter_op: invalid counter %u\n", c);
+    abort();
+  }
+  switch (op) {
+  case SCL_RT_COUNTER_UP:
+    s.counters[c] = s.counters[c] >= 999 ? 999 : s.counters[c] + 1;
+    break;
+  case SCL_RT_COUNTER_DOWN:
+    s.counters[c] = s.counters[c] == 0 ? 0 : s.counters[c] - 1;
+    break;
+  case SCL_RT_COUNTER_SET:
+    s.counters[c] = (uint32_t)(value > 999 ? 999 : value);
+    break;
+  case SCL_RT_COUNTER_RESET:
+    s.counters[c] = 0;
+    break;
+  default:
+    fprintf(stderr, "scl_rt_counter_op: invalid op %u\n", op);
+    abort();
+  }
+}
+
 void scl_rt_register(const SclRtVTable *vtable) { state().vtable = vtable; }
 
 void scl_rt_sim_set_area_size(uint8_t area, uint64_t size) {
@@ -198,6 +317,10 @@ void scl_rt_sim_reset(void) {
   s.dbs.clear();
   s.dbSize.clear();
   s.clockMs = 0;
+  for (auto &t : s.timers)
+    t = TimerState{};
+  for (auto &c : s.counters)
+    c = 0;
 }
 
 uint64_t scl_rt_sim_clock_ms(void) { return state().clockMs; }
@@ -224,10 +347,20 @@ void scl_rt_sim_dump_areas(void) {
         printf("  %c[%zu]=%u\n", area, i, buf[i]);
     }
   };
-  for (char area : {'I', 'Q', 'M', 'T', 'C'})
+  for (char area : {'I', 'Q', 'M'})
     dumpBuf(area, 0, s.areaBytes[(uint8_t)area]);
   for (auto &kv : s.dbs)
     dumpBuf(SCL_RT_AREA_DB, kv.first, kv.second);
+  for (uint32_t t = 0; t < 256; ++t) {
+    if (!s.timers[t].running && s.timers[t].durMs == 0)
+      continue;
+    printf("T%u=%llums%s\n", t,
+           (unsigned long long)timerRemainingMs(s.timers[t], s.clockMs),
+           timerStatus(s.timers[t], s.clockMs) ? " on" : " off");
+  }
+  for (uint32_t c = 0; c < 256; ++c)
+    if (s.counters[c] != 0)
+      printf("C%u=%u%s\n", c, s.counters[c], s.counters[c] > 0 ? " on" : "");
   printf("clock=%llums\n", (unsigned long long)s.clockMs);
 }
 

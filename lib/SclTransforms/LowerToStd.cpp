@@ -2087,6 +2087,62 @@ struct AwlNopOpLowering : public OpConversionPattern<awl::NopOp> {
   }
 };
 
+// SP/SE/SS/SV/SI T n -> @scl_rt_timer_start(timer: i32, mode: i8, dur: i64)
+struct AwlTimerStartLowering : public OpConversionPattern<awl::TimerStartOp> {
+  using OpConversionPattern<awl::TimerStartOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::TimerStartOp op, awl::TimerStartOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto dt = op.getTimer().getType().dyn_cast<scl::DirectType>();
+    if (!dt || dt.getArea() != scl::DirectArea::Timer)
+      return rewriter.notifyMatchFailure(op, "timer_start needs a T operand");
+    auto loc = op.getLoc();
+    ModuleOp module = op->template getParentOfType<ModuleOp>();
+    auto i8 = rewriter.getI8Type();
+    auto i32 = rewriter.getI32Type();
+    auto i64 = rewriter.getI64Type();
+    Value timerC = rewriter.create<arith::ConstantOp>(
+        loc, i32, rewriter.getI32IntegerAttr(dt.getByte()));
+    Value modeC = rewriter.create<arith::ConstantOp>(
+        loc, i8, rewriter.getI8IntegerAttr(op.getMode()));
+    Value dur = convertScalarTo(rewriter, loc, adaptor.getDur(), i64);
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_timer_start",
+                                rewriter.getFunctionType({i32, i8, i64}, {}));
+    rewriter.create<func::CallOp>(loc, fn, TypeRange{},
+                                  ValueRange{timerC, modeC, dur});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// ZV/ZR/S/R C n -> @scl_rt_counter_op(counter: i32, op: i8, value: i64)
+struct AwlCounterOpLowering : public OpConversionPattern<awl::CounterOp> {
+  using OpConversionPattern<awl::CounterOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::CounterOp op, awl::CounterOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto dt = op.getCounter().getType().dyn_cast<scl::DirectType>();
+    if (!dt || dt.getArea() != scl::DirectArea::Counter)
+      return rewriter.notifyMatchFailure(op, "counter needs a Z operand");
+    auto loc = op.getLoc();
+    ModuleOp module = op->template getParentOfType<ModuleOp>();
+    auto i8 = rewriter.getI8Type();
+    auto i32 = rewriter.getI32Type();
+    auto i64 = rewriter.getI64Type();
+    Value cntC = rewriter.create<arith::ConstantOp>(
+        loc, i32, rewriter.getI32IntegerAttr(dt.getByte()));
+    Value opC = rewriter.create<arith::ConstantOp>(
+        loc, i8, rewriter.getI8IntegerAttr(op.getOp()));
+    Value val = convertScalarTo(rewriter, loc, adaptor.getValue(), i64);
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_counter_op",
+                                rewriter.getFunctionType({i32, i8, i64}, {}));
+    rewriter.create<func::CallOp>(loc, fn, TypeRange{},
+                                  ValueRange{cntC, opC, val});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 /// Lower `awl.block` to `func.func`: split the flat block at labels/jumps,
 /// wire cf branches, `awl.be` -> `func.return`. The remaining awl ops are
 /// converted by their own patterns afterwards (conversion is pre-order).
@@ -2272,12 +2328,13 @@ void SclToStdLoweringPass::runOnOperation() {
       AwlAddLowering, AwlAndLowering, AwlAssignOpLowering, AwlBlockOpLowering,
       AwlCallOpLowering, AwlCastOpLowering, AwlCmpEqLowering, AwlCmpGeLowering,
       AwlCmpGtLowering, AwlCmpLeLowering, AwlCmpLtLowering, AwlCmpNeLowering,
-      AwlConstOpLowering, AwlDirectOpLowering, AwlDivLowering,
-      AwlLoadOpLowering, AwlMulLowering, AwlNegOpLowering, AwlNopOpLowering,
-      AwlNotOpLowering, AwlOrLowering, AwlRloLowering<awl::RloAndOp, false>,
+      AwlConstOpLowering, AwlCounterOpLowering, AwlDirectOpLowering,
+      AwlDivLowering, AwlLoadOpLowering, AwlMulLowering, AwlNegOpLowering,
+      AwlNopOpLowering, AwlNotOpLowering, AwlOrLowering,
+      AwlRloLowering<awl::RloAndOp, false>,
       AwlRloLowering<awl::RloOrOp, true>, AwlSetResetLowering<awl::ResetOp, false>,
       AwlSetResetLowering<awl::SetOp, true>, AwlStoreOpLowering, AwlSubLowering,
-      AwlXOrLowering>(converter, context);
+      AwlTimerStartLowering, AwlXOrLowering>(converter, context);
   patterns.add<ForDoOpLowering, WhileDoOpLowering, RepeatOpLowering,
                ContinueOpLowering, ExitOpLowering>(converter, context,
                                                     loopTargets);

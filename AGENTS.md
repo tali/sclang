@@ -52,8 +52,18 @@ one-line pointer here.
   exporting `scl_host_runtime_vtable()` and registers its vtable via
   `scl_rt_register` (LLVM 17: `DynamicLibrary::getPermanentLibrary` returns a
   value, check `isValid()`; `llvm::JITSymbolFlags`, not `llvm::orc::…`).
-  `%T`/`%C` are accepted and treated as plain areas (IEC timer semantics and
-  callers of `scl_rt_cycle` are a known gap).
+  `%T`/`%C` are accepted; the sim runtime implements IEC timer/counter
+  semantics (phase 3): `scl_rt_timer_start(i32 t, i8 mode, i64 durS5)` and
+  `scl_rt_counter_op(i32 c, i8 op, i64 val)` (ABI v2 — appended to
+  `SclRtVTable`, NULL-able for older host libs). T/C reads return the timer
+  value in ms (remaining while running, preset when stopped; writing `%T`
+  sets the preset) / counter value; bit-0 reads return status (timer Q /
+  counter>0). AWL side: `SP/SE/SS/SV/SI T n`, `ZV/ZR/S/R C n`, `S5T#1S`
+  literals (encoded (base<<12)|BCD; `S5T#vMS` = v*10ms), `L T0` = value
+  (width 16), `U T0` = status (width 1). The JIT driver runs
+  `--jit-cycles=N` OB1 scans with `scl_rt_cycle(--cycle-ms)` between them
+  (drives timer expiry). Deviations: `L Tn` returns plain ms (not
+  S5TIME-BCD); timer Q for SS = expired, else = running.
 
 ## LLVM version
 
@@ -105,11 +115,12 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 78 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 82 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
-  (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip, to_awl +
-  to_awl_areas (SclTransforms), jit_areas + jit_tc + jit_awl (.scl/.awl
-  cross-check) + jit_awl_backend (SCL->AWL->JIT) in sclang.
+  (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
+  timer/timer_lower, to_awl + to_awl_areas (SclTransforms), jit_areas + jit_tc
+  + jit_awl (.scl/.awl cross-check) + jit_awl_backend (SCL->AWL->JIT) +
+  jit_timer (AWL timers/counters via --jit-cycles/--cycle-ms) in sclang.
 
 ## Key design decisions (do not regress)
 
@@ -261,7 +272,8 @@ has no `\b` — use python3 for regex edits.
 ## Known gaps (parsed but not lowered / not code-generated)
 
 AWL known gaps (both directions): CC (conditional call), CALL FB n / CALL DB
-m, IEC timer instructions (SD/SI/…), FC parameter passing.
+m, FC parameter passing. (IEC timer instructions SP/SE/SS/SV/SI and counters
+ZV/ZR are implemented — see the memory-areas bullet.)
 
 Memory areas `%I`/`%Q`/`%M`/`%DB…`/`%T`/`%C` are implemented (see above):
 `!scl.direct` type, `scl.getdirect`, `%`-address parsing, lowering to the
@@ -269,9 +281,8 @@ Memory areas `%I`/`%Q`/`%M`/`%DB…`/`%T`/`%C` are implemented (see above):
 `--runtime=host --runtime-lib=…`, OB scan-cycle hooks, big-endian.
 
 Remaining technical gaps:
-- IEC timer semantics (S5TIME encoding, timer start/reset) and anything
-  calling `scl_rt_cycle` — `%T`/`%C` are plain byte areas in the sim.
-
+- SCL-side timer FBs (TON/TOF/TP) need CALL FB support; the sim models raw
+  %T/%C areas + AWL timer instructions (see above).
 - Array-of-struct members (`a[i].x`): the byte-view chain has a dynamic offset
   at the inner cast, which `resolveByteViewRoot` cannot fold statically.
 - String comparison, string var-to-var assignment, and string literals outside

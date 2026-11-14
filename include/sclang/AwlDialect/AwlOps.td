@@ -216,6 +216,24 @@ def CallOp : AwlOp<"call", [DeclareOpInterfaceMethods<CallOpInterface>]> {
   let assemblyFormat = "attr-dict $callee `(` $arguments `)` `:` functional-type($arguments, results)";
 }
 
+// MARK: timers (SP/SE/SS/SV/SI T n) and counters (ZV/ZR/S/R C n)
+
+// Timer start: pops the S5TIME-encoded duration from ACC1, starts the timer.
+// `mode` is one of SclRtTimerMode (SP=0, SE=1, SS=2, SV=3, SI=4).
+def TimerStartOp : AwlOp<"timer_start"> {
+  let summary = "SP/SE/SS/SV/SI: start timer with ACC1 = S5TIME duration";
+  let arguments = (ins I32Attr:$mode, AnyType:$dur, Awl_Direct:$timer);
+  let assemblyFormat = "attr-dict $mode `,` $dur `:` type($dur) `,` $timer `:` type($timer)";
+}
+
+// Counter operation. `op` is one of SclRtCounterOp (ZV=0, ZR=1, S=2, R=3);
+// `value` is the new count for S (from ACC1), 0 otherwise.
+def CounterOp : AwlOp<"counter"> {
+  let summary = "ZV/ZR/S/R: counter operation on C n";
+  let arguments = (ins I32Attr:$op, AnyType:$value, Awl_Direct:$counter);
+  let assemblyFormat = "attr-dict $op `,` $value `:` type($value) `,` $counter `:` type($counter)";
+}
+
 def NopOp : AwlOp<"nop"> {
   let summary = "NOP 0/1";
   let assemblyFormat = "attr-dict";

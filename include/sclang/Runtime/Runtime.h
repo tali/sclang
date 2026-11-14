@@ -75,6 +75,34 @@ void scl_rt_update_outputs(void);
 /// Advance the virtual clock by `elapsedMs` milliseconds.
 void scl_rt_cycle(uint64_t elapsedMs);
 
+/// Timer modes for scl_rt_timer_start (the S7 AWL timer instructions).
+enum SclRtTimerMode {
+  SCL_RT_TIMER_PULSE = 0,     ///< SP: output while the timer runs
+  SCL_RT_TIMER_EXT_PULSE = 1, ///< SE: retriggerable pulse
+  SCL_RT_TIMER_ON_DELAY = 2,  ///< SS: output after the delay has elapsed
+  SCL_RT_TIMER_OFF_DELAY = 3, ///< SV: output until the delay has elapsed
+  SCL_RT_TIMER_IMPULSE = 4,   ///< SI: impulse
+};
+/// Start (or retrigger, for SE) timer `t` with the S5TIME-encoded 16-bit
+/// duration `durS5` taken from ACC1 (AWL `SP/SE/SS/SV/SI T n`).
+void scl_rt_timer_start(uint32_t t, uint8_t mode, uint64_t durS5);
+
+/// Counter operations for scl_rt_counter_op (AWL `ZV`/`ZR`/`S`/`R C n`).
+enum SclRtCounterOp {
+  SCL_RT_COUNTER_UP = 0,   ///< ZV: increment (saturates at 999)
+  SCL_RT_COUNTER_DOWN = 1, ///< ZR: decrement (floors at 0)
+  SCL_RT_COUNTER_SET = 2,  ///< S: set the count to the ACC1 value
+  SCL_RT_COUNTER_RESET = 3 ///< R: reset the count to 0
+};
+/// Apply a counter operation; `value` is only used for SCL_RT_COUNTER_SET.
+void scl_rt_counter_op(uint32_t c, uint8_t op, uint64_t value);
+
+/// Timer/counter semantics (simulation): reads of the `T`/`C` areas return
+/// the current timer remaining time in ms / the counter value, and bit 0
+/// reads return the status (timer Q output / counter != 0). The timer
+/// duration is decoded from S5TIME: bits 12-15 select the time base
+/// (0=10ms, 1=100ms, 2=1s, 3=10s), bits 0-11 hold the BCD value 0..999.
+
 /// Host-provided runtime operations. A host registers a vtable with
 /// scl_rt_register(); the bound runtime forwards all ABI calls through it.
 typedef struct SclRtVTable {
@@ -88,6 +116,10 @@ typedef struct SclRtVTable {
   void (*update_inputs)(void);
   void (*update_outputs)(void);
   void (*cycle)(uint64_t elapsedMs);
+  /* Appended for timers/counters (v2). May be NULL in older host runtimes;
+     the sim then handles timer/counter operations itself. */
+  void (*timer_start)(uint32_t t, uint8_t mode, uint64_t durS5);
+  void (*counter_op)(uint32_t c, uint8_t op, uint64_t value);
 } SclRtVTable;
 
 /// Register a host vtable; all subsequent ABI calls forward through it.

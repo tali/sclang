@@ -1,0 +1,27 @@
+// RUN: sclang -x awl --emit=jit --dump-areas --jit-cycles=3 --cycle-ms=600 %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// IEC timers/counters in the sim runtime: the on-delay timer T0 (S5T#1S)
+// is started once (M0.0 flag) and expires after 1200ms of virtual clock;
+// counter Z5 is set to 3, incremented, decremented. Remaining time and
+// status are readable via `L T0` / `U T0`.
+// CHECK: Q:
+// CHECK: Q[0]=1
+// CHECK: M:
+// CHECK: M[0]=1
+// CHECK: T0=0ms on
+// CHECK: C5=3 on
+// CHECK: clock=1200ms
+OB 1
+  U M0.0
+  SPB cont
+  S M0.0
+  L S5T#1S
+  SS T0
+cont:
+  U T0
+  = A0.0
+  L 3
+  S Z5
+  ZV Z5
+  ZR Z5
+  BE

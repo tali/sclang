@@ -25,6 +25,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <cctype>
+#include <cstring>
 
 using namespace mlir;
 using namespace mlir::awl;
@@ -109,6 +110,52 @@ private:
     if (cur.empty())
       return t; // eof
     char c = cur.front();
+    // S5T#<value><base> literal, e.g. S5T#2S or S5T#500MS -> S5TIME-encoded
+    // integer (bits 12-15 time base, bits 0-11 BCD value)
+    if (cur.size() >= 4 && tolower((unsigned char)cur[0]) == 's' &&
+        tolower((unsigned char)cur[1]) == '5' &&
+        tolower((unsigned char)cur[2]) == 't' && cur[3] == '#') {
+      cur = cur.drop_front(4);
+      std::string s;
+      while (!cur.empty() && isalnum((unsigned char)cur.front())) {
+        s += (char)toupper((unsigned char)cur.front());
+        cur = cur.drop_front();
+      }
+      // base suffix: MS -> 10ms (code 0), S -> 1s (code 2); the leading
+      // digits are the (decimal, <= 999) value, BCD-encoded into bits 0-11
+      static const char *suffixes[] = {"MS", "S"};
+      static const int codes[] = {0, 2};
+      int code = -1;
+      size_t valLen = 0;
+      for (int i = 0; i < 2; ++i) {
+        size_t n = strlen(suffixes[i]);
+        if (s.size() > n && s.compare(s.size() - n, n, suffixes[i]) == 0) {
+          code = codes[i];
+          valLen = s.size() - n;
+          break;
+        }
+      }
+      int64_t val = -1;
+      if (code >= 0 && valLen > 0) {
+        val = 0;
+        for (size_t i = 0; i < valLen; ++i) {
+          if (!isdigit((unsigned char)s[i]))
+            val = -1;
+          else
+            val = val >= 0 ? val * 10 + (s[i] - '0') : -1;
+        }
+      }
+      if (val < 0 || val > 999) {
+        llvm::errs() << file << ":" << lineNo << ":" << colNo
+                     << ": bad S5TIME literal 'S5T#" << s << "'\n";
+        t.tok = Tok::eof;
+        return t;
+      }
+      int64_t bcd = ((val / 100) << 8) | (((val / 10) % 10) << 4) | (val % 10);
+      t.intVal = ((int64_t)code << 12) | bcd;
+      t.tok = Tok::integer;
+      return t;
+    }
     if (isalpha(c) || c == '_') {
       auto begin = cur.begin();
       while (!cur.empty() && (isalnum(cur.front()) || cur.front() == '_'))
@@ -450,6 +497,10 @@ private:
     if (m == "AW" || m == "OW" || m == "XOW" || m == "AD" || m == "OD" ||
         m == "XOD")
       return parseWordLogic(m);
+    if (m == "SP" || m == "SE" || m == "SS" || m == "SV" || m == "SI")
+      return parseTimerStart(m);
+    if (m == "ZV" || m == "ZR")
+      return parseCounterZW(m == "ZV");
     if (m == "SPA" || m == "SPB" || m == "SPN")
       return parseJump(m);
     if (m == "CALL" || m == "UC")
@@ -513,7 +564,9 @@ private:
   }
 
   // Parse an operand: E/A/M/T/Z [B|W|D] byte [.bit] or DBn.DB[XBWD] byte [.bit]
-  mlir::Value parseOperand() {
+  // `bitContext`: for T/Z operands without a size letter, `U T0`-style bit
+  // access yields the status bit (width 1, bit 0); otherwise the 16-bit value.
+  mlir::Value parseOperand(bool bitContext = false) {
     if (lexer.getCurToken() != Tok::ident)
       return (error("expected operand"), nullptr);
     std::string w = upperIdent();
@@ -629,6 +682,18 @@ private:
       lexer.next();
       hasBit = true;
     }
+    // T/Z (timer/counter) operands: `T 0` / `Z 0` without a size letter is the
+    // 16-bit value; in a bit context (`U T0`) it is the status bit 0.
+    if ((area == mlir::scl::DirectArea::Timer ||
+         area == mlir::scl::DirectArea::Counter) &&
+        width == 1 && !hasBit) {
+      if (bitContext) {
+        bit = 0;
+        hasBit = true;
+      } else {
+        width = 16;
+      }
+    }
     if (width == 1 && !hasBit)
       return (error("bit access '" + w + "' requires a bit number (.bit)"), nullptr);
     if (width != 1 && hasBit)
@@ -641,7 +706,7 @@ private:
   }
 
   mlir::Value parseBitOperand() {
-    mlir::Value v = parseOperand();
+    mlir::Value v = parseOperand(true);
     if (!v)
       return nullptr;
     if (!isBit(v))
@@ -650,7 +715,7 @@ private:
   }
 
   mlir::Value parseValueOperand() {
-    mlir::Value v = parseOperand();
+    mlir::Value v = parseOperand(false);
     if (!v)
       return nullptr;
     if (isBit(v))
@@ -779,15 +844,84 @@ private:
   }
 
   bool parseSetReset(bool set) {
-    mlir::Value addr = parseBitOperand();
-    if (!addr)
+    mlir::Value v = parseOperand(false);
+    if (!v)
       return false;
+    auto dt = v.getType().cast<mlir::scl::DirectType>();
+    // `S C n` sets the counter to ACC1, `R C n` resets it to 0
+    if (dt.getArea() == mlir::scl::DirectArea::Counter && dt.getWidth() != 1) {
+      mlir::Value val;
+      int op;
+      if (set) {
+        val = popAcc();
+        if (!val)
+          return false;
+        op = 2; // SCL_RT_COUNTER_SET
+      } else {
+        auto i16 = builder.getI16Type();
+        val = builder.create<awl::ConstOp>(loc(), i16,
+                                            builder.getIntegerAttr(i16, 0));
+        op = 3; // SCL_RT_COUNTER_RESET
+      }
+      llvm::SmallVector<mlir::NamedAttribute, 1> attrs;
+      attrs.push_back(builder.getNamedAttr("op", builder.getI32IntegerAttr(op)));
+      builder.create<awl::CounterOp>(loc(), mlir::TypeRange{},
+                                     mlir::ValueRange{val, v}, attrs);
+      auto i1 = builder.getI1Type();
+      rlo = builder.create<awl::ConstOp>(
+          loc(), i1, builder.getIntegerAttr(i1, set ? 1 : 0));
+      rloActive = true;
+      return true;
+    }
+    if (!isBit(v))
+      return error("expected a bit operand (e.g. M 0.0)");
     auto i1 = builder.getI1Type();
     if (set)
-      rlo = builder.create<awl::SetOp>(loc(), i1, addr);
+      rlo = builder.create<awl::SetOp>(loc(), i1, v);
     else
-      rlo = builder.create<awl::ResetOp>(loc(), i1, addr);
+      rlo = builder.create<awl::ResetOp>(loc(), i1, v);
     rloActive = true;
+    return true;
+  }
+
+  // SP/SE/SS/SV/SI T n: start timer n with ACC1 = S5TIME duration
+  bool parseTimerStart(const std::string &m) {
+    mlir::Value dur = popAcc();
+    if (!dur)
+      return false;
+    mlir::Value t = parseOperand(false);
+    if (!t)
+      return false;
+    auto dt = t.getType().cast<mlir::scl::DirectType>();
+    if (dt.getArea() != mlir::scl::DirectArea::Timer)
+      return error("timer instruction " + m + " needs a T operand");
+    int mode = m == "SP" ? 0 : m == "SE" ? 1 : m == "SS" ? 2 : m == "SV" ? 3 : 4;
+    llvm::SmallVector<mlir::NamedAttribute, 1> attrs;
+    attrs.push_back(
+        builder.getNamedAttr("mode", builder.getI32IntegerAttr(mode)));
+    builder.create<awl::TimerStartOp>(loc(), mlir::TypeRange{},
+                                      mlir::ValueRange{dur, t}, attrs);
+    rloActive = false;
+    return true;
+  }
+
+  // ZV/ZR Z n: increment/decrement counter n
+  bool parseCounterZW(bool up) {
+    mlir::Value c = parseOperand(false);
+    if (!c)
+      return false;
+    auto dt = c.getType().cast<mlir::scl::DirectType>();
+    if (dt.getArea() != mlir::scl::DirectArea::Counter)
+      return error("ZV/ZR need a Z (counter) operand");
+    auto i16 = builder.getI16Type();
+    mlir::Value zero = builder.create<awl::ConstOp>(
+        loc(), i16, builder.getIntegerAttr(i16, 0));
+    llvm::SmallVector<mlir::NamedAttribute, 1> attrs;
+    attrs.push_back(builder.getNamedAttr(
+        "op", builder.getI32IntegerAttr(up ? 0 : 1)));
+    builder.create<awl::CounterOp>(loc(), mlir::TypeRange{},
+                                   mlir::ValueRange{zero, c}, attrs);
+    rloActive = false;
     return true;
   }
 

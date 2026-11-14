@@ -50,7 +50,8 @@
 
 ## Pending
 
-- IEC timer semantics and `scl_rt_cycle` callers.
+- IEC timer semantics beyond the sim model (see above); SCL-side timer FBs
+  (TON/TOF/TP) need CALL FB support.
 - AWL operand mapping (below) and the SCL->AWL backend.
 
 ## Addressing model
@@ -98,12 +99,23 @@ bit = bit. No inline memref access for areas.
 OB entry emits `@scl_rt_update_inputs()`, OB exit (before return) emits
 `@scl_rt_update_outputs()` — models S7 cyclic execution (read inputs → run OB1
 → write outputs) and gives host runtimes synchronization points. Timers and
-counters (T/C areas) go through `scl_rt_timer_*`/`scl_rt_counter_*` with the
-virtual clock advanced by `@scl_rt_cycle(ms)` — scope decision pending.
+counters (T/C areas) are implemented (phase 3): the sim runtime keeps timer
+state (mode, running, start, duration) and counter values; AWL timer
+instructions (`SP/SE/SS/SV/SI T n`) lower to `@scl_rt_timer_start(i32, i8, i64)`
+and counter instructions (`ZV/ZR/S/R C n`) to `@scl_rt_counter_op(i32, i8, i64)`
+(ABI v2, appended to the vtable, NULL-able for older hosts). Reads of `T`/`C`
+return the current timer value in ms (remaining while running, preset when
+stopped — writing `%T` sets the preset) / the counter value; bit 0 reads return
+the status (timer Q / counter != 0). The virtual clock advances via
+`@scl_rt_cycle(ms)`, driven between JIT scans by `--jit-cycles=N --cycle-ms=M`.
+S5TIME literals (`S5T#1S`) encode to (base<<12)|BCD; the sim decodes them.
+Deviations: `L Tn` returns plain ms, not the S5TIME-BCD word of real S7;
+`S5T#vMS` is parsed as v*10ms (unit suffix MS/S), and S5T#100MS means 1s.
 
 ## Testing
 
 - lit parse tests for `%`-addresses; lowering tests (`scl.load %I0.0` →
   `call @scl_rt_read_bit(...)`).
 - JIT sim tests: program writes `%Q…`/reads `%M…`, debug-prints results;
-  timer test advancing the virtual clock explicitly.
+  timer test advancing the virtual clock explicitly (jit_timer.awl:
+  `--jit-cycles=3 --cycle-ms=600` expires a 1s on-delay timer).

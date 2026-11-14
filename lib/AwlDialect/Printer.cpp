@@ -48,6 +48,7 @@ struct TextPrinter {
   DenseMap<Value, char> bracketOpen; // const-true -> 'A' or 'O'
   DenseSet<Operation *> bracketClose; // And/Or(i1) closing a bracket
   DenseMap<Value, std::string> directText;
+  DenseMap<Value, std::string> s5Text; // S5TIME consts -> "S5T#.." literal
 
   explicit TextPrinter(raw_ostream &os) : os(os) {}
 
@@ -83,10 +84,13 @@ struct TextPrinter {
       default: break;
       }
       s = std::string(1, a);
-      if (w != 1)
+      // T/Z operands print without a size letter (T0 / Z0), bit access as T0.0
+      bool isTimerCounter = dt.getArea() == scl::DirectArea::Timer ||
+                            dt.getArea() == scl::DirectArea::Counter;
+      if (w != 1 && !isTimerCounter)
         s += sizeLetter;
       s += std::to_string(dt.getByte());
-      if (w == 1)
+      if (w == 1 && !isTimerCounter)
         s += "." + std::to_string(dt.getBit());
     }
     return s;
@@ -164,16 +168,44 @@ struct TextPrinter {
     // rlo-init consts: const true whose uses are only rlo ops / assigns as
     // the rlo operand (the neutral RLO at the start of a logic chain)
     for (Operation &o : flat->getOperations()) {
-      if (auto c = dyn_cast<ConstOp>(&o)) {
-        if (!isConstTrue(c.getResult()) || bracketOpen.count(c.getResult()))
-          continue;
-        Value res = c->getResult(0);
-        bool onlyRloInit = llvm::all_of(res.getUsers(), [&](Operation *u) {
-          return (isa<RloAndOp, RloOrOp>(u) && u->getOperand(0) == res) ||
-                 (isa<AssignOp>(u) && u->getOperand(0) == res);
-        });
+      auto c = dyn_cast<ConstOp>(&o);
+      if (!c)
+        continue;
+      Value res = c->getResult(0);
+      if (isConstTrue(res) && !bracketOpen.count(res)) {
+        bool onlyRloInit =
+            res.use_empty() ||
+            llvm::all_of(res.getUsers(), [&](Operation *u) {
+              return (isa<RloAndOp, RloOrOp>(u) && u->getOperand(0) == res) ||
+                     (isa<AssignOp>(u) && u->getOperand(0) == res);
+            });
         if (onlyRloInit)
-          skipConsts.insert(c.getResult());
+          skipConsts.insert(res);
+      }
+      // the placeholder value operand of ZV/ZR/R counter ops is not printed
+      if (!res.use_empty() &&
+          llvm::all_of(res.getUsers(), [&](Operation *u) {
+            return isa<CounterOp>(u) && u->getOperand(0) == res &&
+                   cast<CounterOp>(u).getOp() != 2;
+          }))
+        skipConsts.insert(res);
+      // S5TIME consts feeding a timer start print as S5T# literals
+      if (auto ia = o.getAttrOfType<IntegerAttr>("value")) {
+        for (Operation *u : res.getUsers()) {
+          if (auto ts = dyn_cast<TimerStartOp>(u)) {
+            if (ts.getDur() == res) {
+              uint64_t v = ia.getValue().getZExtValue();
+              uint64_t code = (v >> 12) & 3, bcd = v & 0xFFF;
+              uint64_t val =
+                  ((bcd >> 8) & 0xF) * 100 + ((bcd >> 4) & 0xF) * 10 + (bcd & 0xF);
+              // print with the short units the lexer understands:
+              // MS = 10ms (code 0), S = 1s (code 2); codes 1/3 fold x10
+              uint64_t eff = (code == 1 || code == 3) ? val * 10 : val;
+              s5Text[res] = "S5T#" + std::to_string(eff) +
+                            (code <= 1 ? "MS" : "S");
+            }
+          }
+        }
       }
     }
   }
@@ -204,7 +236,11 @@ struct TextPrinter {
             os << "  " << it->second << "(\n";
           continue;
         }
-        os << "  L " << constText(c.getValue(), c.getResult().getType())
+        auto s5 = s5Text.find(c.getResult());
+        os << "  L "
+           << (s5 != s5Text.end() ? s5->second
+                                  : constText(c.getValue(),
+                                              c.getResult().getType()))
            << '\n';
         acc.push_back(c.getResult());
         continue;
@@ -344,6 +380,22 @@ struct TextPrinter {
           os << "  UC FC " << callee.drop_front(2) << '\n';
         else
           os << "  // unsupported call @" << callee << '\n';
+        continue;
+      }
+      if (auto ts = dyn_cast<TimerStartOp>(&o)) {
+        static const char *mn[] = {"SP", "SE", "SS", "SV", "SI"};
+        int mode = ts.getMode();
+        popAcc(); // the S5TIME duration
+        os << "  " << (mode >= 0 && mode < 5 ? mn[mode] : "SP") << ' '
+           << directTextOf(ts.getTimer()) << '\n';
+        continue;
+      }
+      if (auto co = dyn_cast<CounterOp>(&o)) {
+        int op = co.getOp();
+        const char *mn = op == 0 ? "ZV" : op == 1 ? "ZR" : op == 2 ? "S" : "R";
+        if (op == 2)
+          popAcc(); // S C n takes the count from ACC1
+        os << "  " << mn << ' ' << directTextOf(co.getCounter()) << '\n';
         continue;
       }
       if (isa<NopOp>(&o)) {

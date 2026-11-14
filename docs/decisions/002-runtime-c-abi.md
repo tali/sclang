@@ -1,6 +1,6 @@
 # ADR 002: Peripheral/memory access via a fixed C ABI runtime
 
-- **Status**: accepted and implemented (sim runtime + JIT binding + host vtable via --runtime-lib)
+- **Status**: accepted and implemented (sim runtime + JIT binding + host vtable via --runtime-lib; v2 appends timer_start/counter_op to the vtable)
 - **Date**: 2025 (review session)
 
 ## Context
