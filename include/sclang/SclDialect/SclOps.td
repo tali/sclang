@@ -463,7 +463,7 @@ def CaseOp : SclOp<"case"> {
   }];
 
   let arguments = (ins
-    Scl_NumericType:$selector,
+    AnyTypeOf<[Scl_IntegerType, Scl_RealType, Scl_LogicalType]>:$selector,
     ArrayAttr:$caseValues
   );
   let regions = (region VariadicRegion<SizedRegion<1>>:$body);

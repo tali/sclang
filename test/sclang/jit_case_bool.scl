@@ -1,0 +1,28 @@
+// RUN: sclang --opt --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// CASE on a bool selector: `true` selects the 1-label (r=1). The selector
+// lowers to i1 and must be ZERO-extended to i32 for cf.switch (extsi would
+// give -1 for true).
+// CHECK: M:
+// CHECK: M[1]=1
+// CHECK: clock=0ms
+function OB1 : int
+var_temp
+  b : bool;
+  r : int;
+end_var
+begin
+  b := true;
+  case b of
+    true: r := 1;
+    false: r := 2;
+  else
+    r := 3;
+  end_case;
+  %MW0 := r;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

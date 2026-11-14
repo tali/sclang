@@ -1768,6 +1768,106 @@ private:
     return mlir::success();
   }
 
+  mlir::LogicalResult getConstantReal(const ExpressionAST *expr,
+                                       double &value) {
+    return TypeSwitch<const ExpressionAST *, mlir::LogicalResult>(expr)
+        .Case<RealConstantAST>([&](auto expr) {
+          value = expr->getValue();
+          return mlir::success();
+        })
+        .Case<IntegerConstantAST>([&](auto expr) {
+          value = expr->getValue();
+          return mlir::success();
+        })
+        .Case<SimpleVariableAST>([&](auto expr) {
+          auto constSymbol = symbolTable.lookup(expr->getName());
+          if (!constSymbol.isConst()) {
+            emitError(loc(expr->loc())) << "not a constant: " << expr->getName();
+            return mlir::failure();
+          }
+          return getConstantReal(constSymbol.getConstValue(), value);
+        })
+        .Default([&](auto expr) {
+          emitError(loc(expr->loc())) << "constant real expected";
+          return mlir::failure();
+        });
+  }
+
+  /// CASE on a real selector: cf.switch needs integers, so emit a nested
+  /// if-chain comparing the selector with cmpf-oeq against each case value.
+  mlir::LogicalResult mlirGenRealCase(mlir::Location location,
+                                      const CaseOfAST *caseOf,
+                                      mlir::Value selector) {
+    struct CaseGroup {
+      std::vector<double> values;
+      std::vector<const InstructionAST *> body;
+    };
+    std::vector<CaseGroup> groups;
+    for (const auto &instr : caseOf->getCode()->getInstructions()) {
+      if (auto *label = llvm::dyn_cast<CaseLabelAST>(instr.get())) {
+        CaseGroup group;
+        for (const auto &value : label->getValues()) {
+          double v;
+          if (failed(getConstantReal(value.get(), v)))
+            return mlir::failure();
+          group.values.push_back(v);
+        }
+        groups.push_back(std::move(group));
+      } else {
+        if (groups.empty()) {
+          emitError(loc(instr->loc()))
+              << "instruction before the first case label";
+          return mlir::failure();
+        }
+        groups.back().body.push_back(instr.get());
+      }
+    }
+    auto old = builder.saveInsertionPoint();
+    auto f32 = builder.getF32Type();
+    std::function<mlir::LogicalResult(unsigned)> emitChain =
+        [&](unsigned i) -> mlir::LogicalResult {
+      mlir::Value cond;
+      for (double v : groups[i].values) {
+        auto c = builder.create<ConstantOp>(
+            location, selector.getType(), builder.getFloatAttr(f32, v));
+        auto eq = builder.create<EqualOp>(location, selector, c);
+        cond = cond ? mlir::Value(builder.create<OrOp>(location, cond, eq))
+                    : mlir::Value(eq);
+      }
+      if (!cond)
+        cond = builder.create<ConstantOp>(
+            location, getType(tok_bool),
+            builder.getIntegerAttr(builder.getI1Type(), 1));
+      auto ifOp = builder.create<IfThenElseOp>(location, cond);
+      builder.createBlock(&ifOp.getThenBody());
+      builder.setInsertionPointToStart(&ifOp.getThenBody().front());
+      for (auto *instr : groups[i].body)
+        if (failed(mlirGen(instr)))
+          return mlir::failure();
+      createEndOp(location);
+      mlir::Block *elseB = builder.createBlock(&ifOp.getElseBody());
+      builder.setInsertionPointToStart(elseB);
+      mlir::LogicalResult r = mlir::success();
+      if (i + 1 < groups.size()) {
+        r = emitChain(i + 1);
+      } else if (caseOf->getElseBlock().has_value()) {
+        r = mlirGen(caseOf->getElseBlock().value());
+      }
+      // the recursion left the insertion point inside the nested if; go back
+      // to this else block to terminate it
+      builder.setInsertionPointToEnd(elseB);
+      createEndOp(location);
+      return r;
+    };
+    mlir::LogicalResult r = mlir::success();
+    if (!groups.empty())
+      r = emitChain(0);
+    else if (caseOf->getElseBlock().has_value())
+      r = mlirGen(caseOf->getElseBlock().value());
+    builder.restoreInsertionPoint(old);
+    return r;
+  }
+
   /// Codegen a case-of selection into a scl.case op with one region per
   /// case label plus an else region.
   mlir::LogicalResult mlirGen(const CaseOfAST *caseOf) {
@@ -1775,8 +1875,11 @@ private:
     mlir::Value selector = mlirGenRValue(caseOf->getExpr());
     if (!selector)
       return mlir::failure();
-    if (!selector.getType().isa<IntegerType>()) {
-      emitError(location) << "case selector must be an integer";
+    if (selector.getType().isa<RealType>())
+      return mlirGenRealCase(location, caseOf, selector);
+    if (!selector.getType().isa<IntegerType>() &&
+        !selector.getType().isa<LogicalType>()) {
+      emitError(location) << "case selector must be an integer, bool or real";
       return mlir::failure();
     }
 

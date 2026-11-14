@@ -1494,7 +1494,12 @@ struct CaseOpLowering : public OpConversionPattern<scl::CaseOp> {
     if (sel.getType() != i32) {
       auto width = sel.getType().getIntOrFloatBitWidth();
       if (width < 32)
-        sel = rewriter.create<arith::ExtSIOp>(loc, i32, sel);
+        // width 1 (bool): extsi would sign-extend true to -1; case values
+        // are 1/0, so zero-extend
+        if (width == 1)
+          sel = rewriter.create<arith::ExtUIOp>(loc, i32, sel);
+        else
+          sel = rewriter.create<arith::ExtSIOp>(loc, i32, sel);
       else if (width > 32)
         sel = rewriter.create<arith::TruncIOp>(loc, i32, sel);
     }

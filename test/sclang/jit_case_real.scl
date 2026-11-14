@@ -1,0 +1,27 @@
+// RUN: sclang --opt --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// CASE on a real selector lowers to a nested if-chain with float compares
+// (cf.switch needs integers). 2.5 matches the `2.5, 3.5` label -> r=2.
+// CHECK: M:
+// CHECK: M[1]=2
+// CHECK: clock=0ms
+function OB1 : int
+var_temp
+  x : real;
+  r : int;
+end_var
+begin
+  x := 2.5;
+  case x of
+    1.5: r := 1;
+    2.5, 3.5: r := 2;
+  else
+    r := 3;
+  end_case;
+  %MW0 := r;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

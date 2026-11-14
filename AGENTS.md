@@ -115,15 +115,16 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 89 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 91 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
   (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
   timer/timer_lower/call_fb/cc, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
   jit_areas + jit_tc + jit_awl (.scl/.awl cross-check) + jit_awl_backend
   (SCL->AWL->JIT) + jit_timer (AWL timers/counters via --jit-cycles/--cycle-ms)
   + jit_fb_awl (CALL FB n, DB m via --dump-areas) + jit_cc (CC via
-  --dump-areas) + jit_string (string compare/copy via --dump-areas) in
-  sclang; string_compare in SclGen/MLIR.
+  --dump-areas) + jit_string (string compare/copy) + jit_case_bool +
+  jit_case_real (CASE on bool/real selectors) in sclang; string_compare in
+  SclGen/MLIR.
 
 ## Key design decisions (do not regress)
 
@@ -193,7 +194,13 @@ has no `\b` — use python3 for regex edits.
   ParseStringLiteralExpression must copy it BEFORE `consume()` (an identifier
   token after the literal clobbered it: 'hi' became 'th'). Case labels
   support ranges (`1..3:` expands in the parser); `scl.case` lowers to
-  `cf.switch` for any integer selector width.
+  `cf.switch` for integer selectors of any width and bool selectors
+  (`scl.case` accepts a LogicalType selector; the lowering ZERO-extends i1
+  to i32 — extsi would turn true into -1 and never match case value 1);
+  real selectors are lowered in MLIRGen to a nested if-chain of float
+  cmpeq (`mlirGenRealCase`), since cf.switch needs integers. When emitting a
+  nested if-chain manually, reset the insertion point to the else block
+  before its createEndOp (recursion leaves the IP inside the nested if).
 - `case` -> new `scl.case` op (selector + per-region `array<i32>` case values +
   variadic regions, last = else) -> `cf.switch`. `goto`/labels -> real blocks +
   `cf.br` emitted in MLIRGen (forward gotos create the label block on demand; code
@@ -340,7 +347,7 @@ Remaining technical gaps:
 - String literals outside assignments/comparisons are not implemented.
   Strings are zero-padded (SCL pads with spaces — documented deviation).
 - Non-constant FB member initializers are ignored (the IDB global is zeroed).
-- CASE on real/bool selectors is rejected (integer selectors of any width work).
+- CASE on real/bool selectors works (see above).
 - `goto` following another terminator is a compile error by design.
 - Whole-array var-to-var assignment now works for 1-d arrays with scalar
   element types (element-wise copy in MLIRGen); array-of-struct elements are
