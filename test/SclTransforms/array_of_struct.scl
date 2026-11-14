@@ -1,0 +1,34 @@
+// RUN: sclang-gen --emit=mlir-std %s | FileCheck %s
+// Array-of-struct member access (a[i].x): the array of structs is a flat
+// byte buffer (memref<12xi8>), the element address is a static-size byte
+// window (memref<4xi8, strided<[1], offset: ?>>) at flat*4, and the member
+// is a byte view at the cumulative offset from the root buffer.
+type point_t
+  struct
+    x : int;
+    y : int;
+  end_struct
+end_type
+
+// CHECK-LABEL: func.func @OB1
+// CHECK: memref.alloca() : memref<12xi8>
+// the member view is a single cast from the root buffer at the dynamic
+// element offset (flat*4) plus the member offset; the intermediate
+// 4-byte element window is folded away by reinterpret_cast folding
+// CHECK: memref.reinterpret_cast {{.*}} to offset: [%c4], sizes: [%c2], strides: [%c1] : memref<12xi8> to memref<?xi8, strided<[1], offset: ?>>
+function OB1 : int
+var_temp
+  pts : array[0..2] of point_t;
+  r : int;
+end_var
+begin
+  pts[1].x := 42;
+  r := pts[1].x;
+end_function
+
+type point_t
+  struct
+    x : int;
+    y : int;
+  end_struct
+end_type

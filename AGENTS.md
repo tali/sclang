@@ -115,7 +115,7 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 91 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 93 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
   (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
   timer/timer_lower/call_fb/cc, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
@@ -123,8 +123,9 @@ has no `\b` — use python3 for regex edits.
   (SCL->AWL->JIT) + jit_timer (AWL timers/counters via --jit-cycles/--cycle-ms)
   + jit_fb_awl (CALL FB n, DB m via --dump-areas) + jit_cc (CC via
   --dump-areas) + jit_string (string compare/copy) + jit_case_bool +
-  jit_case_real (CASE on bool/real selectors) in sclang; string_compare in
-  SclGen/MLIR.
+  jit_case_real (CASE on bool/real selectors) + jit_array_of_struct
+  (a[i].x) in sclang; string_compare in SclGen/MLIR; array_of_struct in
+  SclTransforms.
 
 ## Key design decisions (do not regress)
 
@@ -156,11 +157,21 @@ has no `\b` — use python3 for regex edits.
   cannot resolve its symbol; initializers must NOT be emitted in the FB body —
   that would re-initialize on every call). `scl.call.fb` -> `func.call`,
   `scl.var` in an FB is erased (declaration only).
-- `address<composite>` (array/struct/IDB) converts **directly to the buffer
-  memref** (identity layout; `memref.alloca` for locals, `memref.copy` for
-  whole-buffer assignment of inputs). Do NOT wrap composite values in a 0-d
-  `memref<memref<...>>` slot: a local array/struct var would load a descriptor
-  from an uninitialized alloca and crash at runtime.
+- `address<composite>` (array/IDB) converts **directly to the buffer memref**
+  (identity layout; `memref.alloca` for locals, `memref.copy` for
+  whole-buffer assignment of inputs). `address<struct>` converts to a
+  **rank-1 i8 window** `memref<Nxi8, strided<[1], offset: ?>>` (static size N
+  = byteSize of the struct), so that `a[i].x` on an array-of-structs chains
+  through `resolveByteViewRoot` with a dynamic offset. An **array of
+  composites** (array of struct/array) also converts to a flat i8 byte
+  buffer, and GetIndexOpLowering produces a static-size window for composite
+  elements (`makeByteView(..., staticSize=true)`); scalar elements keep the
+  dynamic-size byte view. TempVariableOpLowering allocas the full window
+  (`memref<Nxi8>`) for static-size rank-1 strided types; storeToByteBuffer
+  casts the buffer to the window type before `memref.copy` when types differ.
+  Do NOT wrap composite values in a 0-d `memref<memref<...>>` slot: a local
+  array/struct var would load a descriptor from an uninitialized alloca and
+  crash at runtime.
 - Scalar FB/struct member addresses (`scl.getvariable`/`scl.getelement`) are
   **`!scl.address<!scl.char>`** in MLIRGen; `SclTypeConverter` maps `address<char>`
   to a **rank-1 byte view** `memref<?xi8, strided<[1], offset: ?>>`. MLIRGen tracks
@@ -342,8 +353,7 @@ Remaining technical gaps:
 - SCL-side timer FBs (TON/TOF/TP): CALL FB now works (see above), but the
   TON/TOF/TP semantics themselves are still only modeled via raw %T/%C areas
   + AWL timer instructions.
-- Array-of-struct members (`a[i].x`): the byte-view chain has a dynamic offset
-  at the inner cast, which `resolveByteViewRoot` cannot fold statically.
+- Array-of-struct members (`a[i].x`) work (see above).
 - String literals outside assignments/comparisons are not implemented.
   Strings are zero-padded (SCL pads with spaces — documented deviation).
 - Non-constant FB member initializers are ignored (the IDB global is zeroed).

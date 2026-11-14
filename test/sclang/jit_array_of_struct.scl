@@ -1,0 +1,33 @@
+// RUN: sclang --opt --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// Array-of-struct with a dynamic index: pts[2].x=11, pts[2].y=22,
+// pts[0].x=33, sum = 66 = 0x42 (big-endian low byte of %MW0 at M[1]).
+// CHECK: M:
+// CHECK: M[1]=66
+// CHECK: clock=0ms
+type point_t
+  struct
+    x : int;
+    y : int;
+  end_struct
+end_type
+
+function OB1 : int
+var_temp
+  pts : array[0..2] of point_t;
+  i : int;
+  r : int;
+end_var
+begin
+  i := 2;
+  pts[i].x := 11;
+  pts[i].y := 22;
+  pts[0].x := 33;
+  r := pts[2].x + pts[2].y + pts[0].x;
+  %MW0 := r;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

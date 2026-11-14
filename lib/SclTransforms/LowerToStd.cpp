@@ -151,7 +151,16 @@ public:
       auto celem = convertType(elem);
       if (!celem)
         return Type();
-      // An address of a composite (array/struct/IDB) IS the buffer memref.
+      // An address of a struct is a rank-1 i8 window of the struct buffer
+      // (static size, dynamic offset), so that getelement/getindex on
+      // struct array elements chain through resolveByteViewRoot with a
+      // dynamic offset.
+      if (auto st = elem.dyn_cast<scl::StructType>())
+        return (Type)mlir::MemRefType::get(
+            {byteSize(st, fbLayouts)}, IntegerType::get(type.getContext(), 8),
+            StridedLayoutAttr::get(type.getContext(), ShapedType::kDynamic,
+                                   {1}));
+      // An address of a composite (array/IDB) IS the buffer memref.
       if (celem.isa<MemRefType>())
         return celem;
       // An i8 address is a rank-1 byte view into a byte buffer (FB/struct
@@ -189,6 +198,12 @@ public:
       auto elem = convertType(type.getElementType());
       if (!elem)
         return Type();
+      // An array of composites (struct/array elements) is a flat byte
+      // buffer, so that element addresses take the byte-view path in
+      // GetIndexOpLowering (a memref<N x memref<…>> would not).
+      if (elem.isa<MemRefType>())
+        return (Type)MemRefType::get(
+            {byteSize(type, fbLayouts)}, IntegerType::get(type.getContext(), 8));
       return (Type)MemRefType::get(shape, elem);
     });
     // A struct or instance DB is a flat byte buffer; members are addressed by
@@ -705,8 +720,22 @@ static LogicalResult storeToByteBuffer(OpBuilder &b, Location loc, Value value,
   auto memTy = addr.getType().cast<MemRefType>();
   auto zero = b.create<arith::ConstantIndexOp>(loc, 0);
   // Whole-buffer assignment (array/struct value stored into its buffer).
-  if (value.getType().isa<MemRefType>() && addr.getType() == value.getType()) {
-    b.create<memref::CopyOp>(loc, value, addr);
+  if (value.getType().isa<MemRefType>() && addr.getType().isa<MemRefType>()) {
+    Value src = value;
+    auto am = addr.getType().cast<MemRefType>();
+    if (src.getType() != addr.getType()) {
+      // struct window address: cast the buffer to the window type first
+      if (am.getRank() == 1 && am.getElementType().isInteger(8) &&
+          am.getShape()[0] != ShapedType::kDynamic) {
+        auto n = b.create<arith::ConstantIndexOp>(loc, am.getShape()[0]);
+        auto one = b.create<arith::ConstantIndexOp>(loc, 1);
+        src = b.create<memref::ReinterpretCastOp>(loc, am, value, zero,
+                                                 ValueRange{n}, ValueRange{one});
+      } else {
+        return failure();
+      }
+    }
+    b.create<memref::CopyOp>(loc, src, addr);
     return success();
   }
   if (memTy.getElementType() == value.getType()) {
@@ -803,6 +832,17 @@ struct TempVariableOpLowering
     // alloca requires an identity layout; reinterpret to the address type.
     auto zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
     if (memref.getRank() == 1) {
+      if (memref.getShape()[0] != ShapedType::kDynamic) {
+        // struct window: alloca the whole buffer and cast to the window type
+        auto plain = MemRefType::get({memref.getShape()[0]},
+                                     memref.getElementType());
+        auto alloca = rewriter.create<memref::AllocaOp>(loc, plain);
+        auto n = rewriter.create<arith::ConstantIndexOp>(loc, memref.getShape()[0]);
+        auto one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+        rewriter.replaceOpWithNewOp<memref::ReinterpretCastOp>(
+            op, memref, alloca, zero, ValueRange{n}, ValueRange{one});
+        return success();
+      }
       // i8 address: rank-1 byte view holding a single byte.
       auto plain = MemRefType::get({1}, memref.getElementType());
       auto alloca = rewriter.create<memref::AllocaOp>(loc, plain);
@@ -1007,10 +1047,11 @@ static Value combineOffsets(OpBuilder &b, Location loc, int64_t constOff,
 /// Create a rank-1 i8 byte view of `size` bytes at `off` from a single cast
 /// of the root buffer.
 static Value makeByteView(OpBuilder &b, Location loc, Value root, Value off,
-                          int64_t size, MLIRContext *ctx) {
+                          int64_t size, MLIRContext *ctx,
+                          bool staticSize = false) {
   auto i8 = IntegerType::get(ctx, 8);
   auto resTy = MemRefType::get(
-      {ShapedType::kDynamic}, i8,
+      {staticSize ? size : ShapedType::kDynamic}, i8,
       StridedLayoutAttr::get(ctx, ShapedType::kDynamic, {1}));
   auto sizeV = b.create<arith::ConstantIndexOp>(loc, size);
   auto one = b.create<arith::ConstantIndexOp>(loc, 1);
@@ -1104,7 +1145,10 @@ struct GetIndexOpLowering : public OpConversionPattern<scl::GetIndexOp> {
         byteFlat = rewriter.create<arith::MulIOp>(loc, flat, scale);
       }
       Value off = combineOffsets(rewriter, loc, constOff, dynOff, byteFlat);
-      Value view = makeByteView(rewriter, loc, root, off, elemBytes, ctx);
+      bool compositeElem =
+          arrayTy.getElementType().isa<scl::StructType, scl::ArrayType>();
+      Value view = makeByteView(rewriter, loc, root, off, elemBytes, ctx,
+                                compositeElem);
       rewriter.replaceOp(op, view);
       return success();
     }
