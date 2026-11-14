@@ -12,6 +12,7 @@ test_suite(
         "//test/SclGen/MLIR:lit",
         "//test/SclGen/Parse:lit",
         "//test/SclTransforms:lit",
+        "//test/AwlGen:lit",
     ],
 )
 
@@ -21,6 +22,7 @@ test_suite(
         "//test/SclGen/MLIR:lit",
         "//test/SclGen/Parse:lit",
         "//test/SclTransforms:lit",
+        "//test/AwlGen:lit",
         "//test/sclang:lit",
     ],
 )

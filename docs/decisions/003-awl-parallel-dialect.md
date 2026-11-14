@@ -1,6 +1,6 @@
 # ADR 003: AWL as a parallel source dialect converging at std IR
 
-- **Status**: accepted (planned; not yet implemented)
+- **Status**: accepted and implemented (frontend; SCL->AWL backend pending)
 - **Date**: 2025 (review session)
 
 ## Context

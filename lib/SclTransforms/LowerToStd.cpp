@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "sclang/SclDialect/Dialect.h"
+#include "sclang/AwlDialect/AwlOps.h"
 #include "sclang/SclTransforms/Passes.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -498,7 +499,7 @@ struct FunctionOpLowering : public OpConversionPattern<scl::FunctionOp> {
     // An organization block models one scan cycle: read the process image
     // of the inputs on entry, write the outputs on exit (ADR 002).
     if (op->hasAttr("scl.organization_block")) {
-      auto module = op->getParentOfType<ModuleOp>();
+      auto module = op->template getParentOfType<ModuleOp>();
       auto voidFn = rewriter.getFunctionType({}, {});
       auto updIn = getOrInsertRtFunc(rewriter, module, "scl_rt_update_inputs",
                                      voidFn);
@@ -586,7 +587,7 @@ struct LoadOpLowering : public OpConversionPattern<scl::LoadOp> {
     if (auto dt = op.getAddress().getType().cast<scl::AddressType>()
                       .getElementType().dyn_cast<scl::DirectType>()) {
       Value loaded = lowerDirectLoad(rewriter, op.getLoc(), dt, resTy,
-                                     op->getParentOfType<ModuleOp>());
+                                     op->template getParentOfType<ModuleOp>());
       rewriter.replaceOp(op, loaded);
       return success();
     }
@@ -750,7 +751,7 @@ struct StoreOpLowering : public OpConversionPattern<scl::StoreOp> {
     if (auto dt = op.getLhs().getType().cast<scl::AddressType>()
                       .getElementType().dyn_cast<scl::DirectType>()) {
       if (failed(lowerDirectStore(rewriter, op.getLoc(), dt, adaptor.getRhs(),
-                                  op->getParentOfType<ModuleOp>())))
+                                  op->template getParentOfType<ModuleOp>())))
         return failure();
       rewriter.eraseOp(op);
       return success();
@@ -1809,6 +1810,399 @@ using ConstantDateAndTimeOpLowering = TimeConstantOpLowering<scl::ConstantDateAn
 } // end anonymous namespace.
 
 
+// MARK: AWL dialect lowering (ADR 003)
+//
+// The awl dialect (AWL/STL frontend output and SCL->AWL backend target)
+// converges at std IR together with scl: !scl.direct operands lower to the
+// runtime C ABI calls (ADR 002), accumulator/RLO ops to arith, jumps to cf
+// blocks.
+
+/// Convert an int/float value to `ty` (ext/trunc/sitofp/fptosi).
+static Value convertScalarTo(OpBuilder &b, Location loc, Value v, Type ty) {
+  Type src = v.getType();
+  if (src == ty)
+    return v;
+  if (src.isa<FloatType>() && ty.isa<FloatType>())
+    return v; // same width assumed
+  if (src.isa<FloatType>() && ty.isa<IntegerType>())
+    return b.create<arith::FPToSIOp>(loc, ty, v);
+  if (src.isa<IntegerType>() && ty.isa<FloatType>())
+    return b.create<arith::SIToFPOp>(loc, ty, v);
+  if (src.isa<IntegerType>() && ty.isa<IntegerType>()) {
+    if (src.getIntOrFloatBitWidth() < ty.getIntOrFloatBitWidth())
+      return b.create<arith::ExtSIOp>(loc, ty, v);
+    return b.create<arith::TruncIOp>(loc, ty, v);
+  }
+  return nullptr;
+}
+
+struct AwlDirectOpLowering : public OpConversionPattern<awl::DirectOp> {
+  using OpConversionPattern<awl::DirectOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::DirectOp op, awl::DirectOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto resTy = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resTy)
+      return failure();
+    auto dt = op.getResult().getType().cast<scl::DirectType>();
+    int64_t packed = ((int64_t)(uint8_t)dt.getArea() << 56) |
+                     ((int64_t)(uint32_t)dt.getDb() << 40) |
+                     ((int64_t)(uint32_t)dt.getByte() << 16) |
+                     ((int64_t)(uint32_t)dt.getBit() << 8) | (uint32_t)dt.getWidth();
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(
+        op, resTy, rewriter.getIntegerAttr(resTy, packed));
+    return success();
+  }
+};
+
+struct AwlConstOpLowering : public OpConversionPattern<awl::ConstOp> {
+  using OpConversionPattern<awl::ConstOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::ConstOp op, awl::ConstOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(op,
+        op.getValue().cast<TypedAttr>());
+    return success();
+  }
+};
+
+struct AwlLoadOpLowering : public OpConversionPattern<awl::LoadOp> {
+  using OpConversionPattern<awl::LoadOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::LoadOp op, awl::LoadOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto dt = op.getAddr().getType().template cast<scl::DirectType>();
+    auto resTy = typeConverter->convertType(op.getType());
+    if (!resTy)
+      return failure();
+    Value v = lowerDirectLoad(rewriter, op.getLoc(), dt, resTy,
+                              op->template getParentOfType<ModuleOp>());
+    rewriter.replaceOp(op, v);
+    return success();
+  }
+};
+
+struct AwlStoreOpLowering : public OpConversionPattern<awl::StoreOp> {
+  using OpConversionPattern<awl::StoreOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::StoreOp op, awl::StoreOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto dt = op.getAddr().getType().template cast<scl::DirectType>();
+    if (failed(lowerDirectStore(rewriter, op.getLoc(), dt, adaptor.getValue(),
+                                op->template getParentOfType<ModuleOp>())))
+      return failure();
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+template <typename RloOp, bool isOr>
+struct AwlRloLowering : public OpConversionPattern<RloOp> {
+  using OpConversionPattern<RloOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(RloOp op, typename RloOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto dt = op.getAddr().getType().template cast<scl::DirectType>();
+    auto i1 = rewriter.getI1Type();
+    Value bit = lowerDirectLoad(rewriter, op.getLoc(), dt, i1,
+                                op->template getParentOfType<ModuleOp>());
+    if (op.getNegate()) {
+      auto trueC = rewriter.create<arith::ConstantOp>(
+          op.getLoc(), i1, rewriter.getIntegerAttr(i1, 1));
+      bit = rewriter.create<arith::XOrIOp>(op.getLoc(), bit, trueC);
+    }
+    Value r = isOr ? (Value)rewriter.create<arith::OrIOp>(op.getLoc(),
+                                                          adaptor.getRlo(), bit)
+                   : (Value)rewriter.create<arith::AndIOp>(op.getLoc(),
+                                                           adaptor.getRlo(), bit);
+    rewriter.replaceOp(op, r);
+    return success();
+  }
+};
+
+struct AwlNotOpLowering : public OpConversionPattern<awl::NotOp> {
+  using OpConversionPattern<awl::NotOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::NotOp op, awl::NotOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto i1 = rewriter.getI1Type();
+    auto trueC = rewriter.create<arith::ConstantOp>(op.getLoc(), i1,
+                                                    rewriter.getIntegerAttr(i1, 1));
+    rewriter.replaceOpWithNewOp<arith::XOrIOp>(op, adaptor.getRlo(), trueC);
+    return success();
+  }
+};
+
+struct AwlAssignOpLowering : public OpConversionPattern<awl::AssignOp> {
+  using OpConversionPattern<awl::AssignOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::AssignOp op, awl::AssignOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto dt = op.getAddr().getType().template cast<scl::DirectType>();
+    if (failed(lowerDirectStore(rewriter, op.getLoc(), dt, adaptor.getRlo(),
+                                op->template getParentOfType<ModuleOp>())))
+      return failure();
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+template <typename SetResetOp, bool set>
+struct AwlSetResetLowering : public OpConversionPattern<SetResetOp> {
+  using OpConversionPattern<SetResetOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(SetResetOp op, typename SetResetOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto dt = op.getAddr().getType().template cast<scl::DirectType>();
+    auto i1 = rewriter.getI1Type();
+    auto v = rewriter.create<arith::ConstantOp>(
+        op.getLoc(), i1, rewriter.getIntegerAttr(i1, set ? 1 : 0));
+    if (failed(lowerDirectStore(rewriter, op.getLoc(), dt, v,
+                                op->template getParentOfType<ModuleOp>())))
+      return failure();
+    rewriter.replaceOp(op, v);
+    return success();
+  }
+};
+
+template <typename AwlOp, typename LoweredFloatOp, typename LoweredIntOp>
+struct AwlArithLowering : public OpConversionPattern<AwlOp> {
+  using OpConversionPattern<AwlOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(AwlOp op, typename AwlOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto resTy = this->typeConverter->convertType(op.getType());
+    if (!resTy)
+      return failure();
+    Value l = convertScalarTo(rewriter, op.getLoc(), adaptor.getLhs(), resTy);
+    Value r = convertScalarTo(rewriter, op.getLoc(), adaptor.getRhs(), resTy);
+    if (!l || !r)
+      return failure();
+    if (resTy.template isa<FloatType>())
+      rewriter.replaceOpWithNewOp<LoweredFloatOp>(op, resTy, l, r);
+    else
+      rewriter.replaceOpWithNewOp<LoweredIntOp>(op, resTy, l, r);
+    return success();
+  }
+};
+using AwlAddLowering = AwlArithLowering<awl::AddOp, arith::AddFOp, arith::AddIOp>;
+using AwlSubLowering = AwlArithLowering<awl::SubOp, arith::SubFOp, arith::SubIOp>;
+using AwlMulLowering = AwlArithLowering<awl::MulOp, arith::MulFOp, arith::MulIOp>;
+using AwlDivLowering = AwlArithLowering<awl::DivOp, arith::DivFOp, arith::DivSIOp>;
+using AwlAndLowering = AwlArithLowering<awl::AndOp, arith::AndIOp, arith::AndIOp>;
+using AwlOrLowering = AwlArithLowering<awl::OrOp, arith::OrIOp, arith::OrIOp>;
+using AwlXOrLowering = AwlArithLowering<awl::XOrOp, arith::XOrIOp, arith::XOrIOp>;
+
+struct AwlNegOpLowering : public OpConversionPattern<awl::NegOp> {
+  using OpConversionPattern<awl::NegOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::NegOp op, awl::NegOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto resTy = typeConverter->convertType(op.getType());
+    Value v = convertScalarTo(rewriter, op.getLoc(), adaptor.getRhs(), resTy);
+    if (!v)
+      return failure();
+    if (resTy.template isa<FloatType>()) {
+      rewriter.replaceOpWithNewOp<arith::NegFOp>(op, resTy, v);
+    } else {
+      auto zero = rewriter.create<arith::ConstantOp>(
+          op.getLoc(), resTy, rewriter.getIntegerAttr(resTy, 0));
+      rewriter.replaceOpWithNewOp<arith::SubIOp>(op, resTy, zero, v);
+    }
+    return success();
+  }
+};
+
+struct AwlCastOpLowering : public OpConversionPattern<awl::CastOp> {
+  using OpConversionPattern<awl::CastOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::CastOp op, awl::CastOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto resTy = typeConverter->convertType(op.getType());
+    if (!resTy)
+      return failure();
+    Value v = convertScalarTo(rewriter, op.getLoc(), adaptor.getValue(), resTy);
+    if (!v)
+      return failure();
+    rewriter.replaceOp(op, v);
+    return success();
+  }
+};
+
+template <typename AwlOp, CmpIPredicate predI, CmpFPredicate predF>
+struct AwlCmpLowering : public OpConversionPattern<AwlOp> {
+  using OpConversionPattern<AwlOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(AwlOp op, typename AwlOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value l = adaptor.getLhs();
+    Value r = adaptor.getRhs();
+    if (l.getType() != r.getType()) {
+      // normalize to the wider type
+      Type ty = l.getType().template isa<FloatType>() || r.getType().template isa<FloatType>()
+                    ? (Type)rewriter.getF32Type()
+                    : (l.getType().getIntOrFloatBitWidth() >=
+                               r.getType().getIntOrFloatBitWidth()
+                           ? l.getType()
+                           : r.getType());
+      l = convertScalarTo(rewriter, op.getLoc(), l, ty);
+      r = convertScalarTo(rewriter, op.getLoc(), r, ty);
+      if (!l || !r)
+        return failure();
+    }
+    if (l.getType().template isa<FloatType>())
+      rewriter.replaceOpWithNewOp<arith::CmpFOp>(op, predF, l, r);
+    else
+      rewriter.replaceOpWithNewOp<arith::CmpIOp>(op, predI, l, r);
+    return success();
+  }
+};
+using AwlCmpEqLowering = AwlCmpLowering<awl::CmpEqOp, CmpIPredicate::eq, CmpFPredicate::OEQ>;
+using AwlCmpNeLowering = AwlCmpLowering<awl::CmpNeOp, CmpIPredicate::ne, CmpFPredicate::UNE>;
+using AwlCmpLtLowering = AwlCmpLowering<awl::CmpLtOp, CmpIPredicate::slt, CmpFPredicate::OLT>;
+using AwlCmpLeLowering = AwlCmpLowering<awl::CmpLeOp, CmpIPredicate::sle, CmpFPredicate::OLE>;
+using AwlCmpGtLowering = AwlCmpLowering<awl::CmpGtOp, CmpIPredicate::sgt, CmpFPredicate::OGT>;
+using AwlCmpGeLowering = AwlCmpLowering<awl::CmpGeOp, CmpIPredicate::sge, CmpFPredicate::OGE>;
+
+struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
+  using OpConversionPattern<awl::CallOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::CallOp op, awl::CallOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto call = rewriter.create<func::CallOp>(op.getLoc(), op.getCallee(),
+                                              TypeRange{},
+                                              adaptor.getArguments());
+    rewriter.replaceOp(op, call.getResults());
+    return success();
+  }
+};
+
+struct AwlNopOpLowering : public OpConversionPattern<awl::NopOp> {
+  using OpConversionPattern<awl::NopOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::NopOp op, awl::NopOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Lower `awl.block` to `func.func`: split the flat block at labels/jumps,
+/// wire cf branches, `awl.be` -> `func.return`. The remaining awl ops are
+/// converted by their own patterns afterwards (conversion is pre-order).
+struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
+  using OpConversionPattern<awl::BlockOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::BlockOp op, awl::BlockOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto func = rewriter.create<func::FuncOp>(
+        loc, op.getSymName(), rewriter.getFunctionType({}, {}));
+    rewriter.inlineRegionBefore(op.getBody(), func.getBody(),
+                                func.getBody().end());
+    Block *flat = &func.getBody().front();
+
+    // Collect cut ops (labels, jumps, be) and split the flat block before
+    // each of them, so every cut starts a new block.
+    SmallVector<Operation *, 16> cuts;
+    for (auto &o : flat->getOperations())
+      if (isa<awl::LabelOp, awl::JumpOp, awl::JumpIfOp, awl::JumpIfNotOp,
+              awl::BeOp>(&o))
+        cuts.push_back(&o);
+    DenseMap<Operation *, Block *> cutBlock;
+    for (auto *cut : cuts)
+      cutBlock[cut] = rewriter.splitBlock(cut->getBlock(), cut->getIterator());
+
+    // Pass 1: register labels.
+    llvm::StringMap<Block *> labels;
+    for (auto *cut : cuts)
+      if (auto l = dyn_cast<awl::LabelOp>(cut)) {
+        if (!labels.try_emplace(l.getName(), cutBlock[cut]).second) {
+          emitError(l.getLoc()) << "duplicate label '" << l.getName() << "'";
+          return failure();
+        }
+        rewriter.eraseOp(l);
+      }
+
+    // Pass 2: wire jumps and be.
+    for (auto *cut : cuts) {
+      Block *b = cutBlock[cut];
+      if (auto j = dyn_cast<awl::JumpOp>(cut)) {
+        auto it = labels.find(j.getLabel());
+        if (it == labels.end()) {
+          emitError(j.getLoc()) << "undefined label '" << j.getLabel() << "'";
+          return failure();
+        }
+        // ops after an unconditional jump are unreachable: move them to a
+        // fresh dead block (kept valid by the fallthrough pass below)
+        auto nextIt = std::next(j->getIterator());
+        if (nextIt != b->end())
+          rewriter.splitBlock(b, nextIt);
+        rewriter.setInsertionPointToEnd(b);
+        rewriter.create<cf::BranchOp>(loc, it->second);
+        rewriter.eraseOp(j);
+      } else if (auto j = dyn_cast<awl::JumpIfOp>(cut)) {
+        auto it = labels.find(j.getLabel());
+        if (it == labels.end()) {
+          emitError(j.getLoc()) << "undefined label '" << j.getLabel() << "'";
+          return failure();
+        }
+        auto nextIt = std::next(j->getIterator());
+        Block *fall =
+            nextIt != b->end() ? rewriter.splitBlock(b, nextIt) : b->getNextNode();
+        if (!fall) {
+          emitError(j.getLoc()) << "jump_if without fallthrough block";
+          return failure();
+        }
+        rewriter.setInsertionPointToEnd(b);
+        rewriter.create<cf::CondBranchOp>(loc, j.getRlo(), it->second,
+                                          ValueRange{}, fall, ValueRange{});
+        rewriter.eraseOp(j);
+      } else if (auto j = dyn_cast<awl::JumpIfNotOp>(cut)) {
+        auto it = labels.find(j.getLabel());
+        if (it == labels.end()) {
+          emitError(j.getLoc()) << "undefined label '" << j.getLabel() << "'";
+          return failure();
+        }
+        auto nextIt = std::next(j->getIterator());
+        Block *fall =
+            nextIt != b->end() ? rewriter.splitBlock(b, nextIt) : b->getNextNode();
+        if (!fall) {
+          emitError(j.getLoc()) << "jump_if_not without fallthrough block";
+          return failure();
+        }
+        rewriter.setInsertionPointToEnd(b);
+        rewriter.create<cf::CondBranchOp>(loc, j.getRlo(), fall, ValueRange{},
+                                          it->second, ValueRange{});
+        rewriter.eraseOp(j);
+      } else if (auto be = dyn_cast<awl::BeOp>(cut)) {
+        rewriter.setInsertionPointToEnd(b);
+        rewriter.create<func::ReturnOp>(loc);
+        rewriter.eraseOp(be);
+      }
+    }
+
+    // Pass 3: fallthrough branches for blocks left without a terminator.
+    for (Block &b : func.getBody()) {
+      if (&b == &func.getBody().back())
+        continue;
+      if (b.empty() || !b.back().hasTrait<OpTrait::IsTerminator>()) {
+        rewriter.setInsertionPointToEnd(&b);
+        rewriter.create<cf::BranchOp>(loc, b.getNextNode());
+      }
+    }
+    // The last block must end with a return (from awl.be).
+    Block &last = func.getBody().back();
+    if (last.empty() || !last.back().hasTrait<OpTrait::IsTerminator>()) {
+      rewriter.setInsertionPointToEnd(&last);
+      rewriter.create<func::ReturnOp>(loc);
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 // MARK: SclToStdLoweringPass
 
 /// This is a partial lowering to affine loops of the toy operations that are
@@ -1824,6 +2218,7 @@ struct SclToStdLoweringPass
     registry.insert<func::FuncDialect>();
     registry.insert<cf::ControlFlowDialect>();
     registry.insert<math::MathDialect>();
+    registry.insert<awl::AwlDialect>();
   }
   void runOnOperation() final;
 
@@ -1846,6 +2241,8 @@ void SclToStdLoweringPass::runOnOperation() {
 
   // We want to lower all of SCL except for control flow:
   target.addIllegalDialect<scl::SclDialect>();
+  // ... and all of AWL (parallel source dialect, ADR 003):
+  target.addIllegalDialect<awl::AwlDialect>();
 
   // Compute FB instance layouts before conversion (the ops are erased).
   SclTypeConverter converter{computeFbLayouts(getOperation())};
@@ -1870,6 +2267,17 @@ void SclToStdLoweringPass::runOnOperation() {
       TempVariableOpLowering, UnaryMinusOpLowering, UnaryNotOpLowering,
       UntilOpLowering, VariableOpLowering,
       XOrOpLowering>(converter, context);
+  // AWL dialect (ADR 003)
+  patterns.add<
+      AwlAddLowering, AwlAndLowering, AwlAssignOpLowering, AwlBlockOpLowering,
+      AwlCallOpLowering, AwlCastOpLowering, AwlCmpEqLowering, AwlCmpGeLowering,
+      AwlCmpGtLowering, AwlCmpLeLowering, AwlCmpLtLowering, AwlCmpNeLowering,
+      AwlConstOpLowering, AwlDirectOpLowering, AwlDivLowering,
+      AwlLoadOpLowering, AwlMulLowering, AwlNegOpLowering, AwlNopOpLowering,
+      AwlNotOpLowering, AwlOrLowering, AwlRloLowering<awl::RloAndOp, false>,
+      AwlRloLowering<awl::RloOrOp, true>, AwlSetResetLowering<awl::ResetOp, false>,
+      AwlSetResetLowering<awl::SetOp, true>, AwlStoreOpLowering, AwlSubLowering,
+      AwlXOrLowering>(converter, context);
   patterns.add<ForDoOpLowering, WhileDoOpLowering, RepeatOpLowering,
                ContinueOpLowering, ExitOpLowering>(converter, context,
                                                     loopTargets);

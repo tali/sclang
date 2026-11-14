@@ -31,7 +31,8 @@ one-line pointer here.
 
 ```
 .scl ──> sclang-gen (SclGen: Lexer → Parser → AST → MLIRGen) ──> scl dialect ops
-      ──> LowerToStd pass (lib/SclTransforms/LowerToStd.cpp, partial conversion)
+.awl ──> sclang-gen -x awl (AwlGen: Lexer → Parser → codegen) ──> awl dialect ops
+      both ──> LowerToStd pass (lib/SclTransforms/LowerToStd.cpp, partial conversion)
       ──> func/arith/memref/scf/cf (+ calls to the runtime C ABI for % areas)
       ──> sclang (sclang/LowerToLLVM.cpp: scf→cf, memref→llvm, arith/func/cf→llvm)
       ──> LLVM IR / ExecutionEngine JIT (sim runtime bound via registerSymbols)
@@ -89,7 +90,14 @@ has no `\b` — use python3 for regex edits.
 ## Tests
 
 - lit tests live in `test/SclGen/Parse`, `test/SclGen/MLIR`, `test/SclTransforms`,
-  `test/sclang`; BUILD files glob `*.scl`, so new files are picked up automatically.
+  `test/AwlGen`, `test/sclang`; BUILD files glob `*.scl` (sclang dir also `*.awl`),
+  so new files are picked up automatically. `test/lit.cfg.py` suffixes include
+  `.awl`; the tools list includes `not` (negative tests need `not … | FileCheck`,
+  lit's internal shell has pipefail so a bare failing pipeline fails the RUN).
+- Run a subset via the *binary* test dirs:
+  `cd build.release/tools/sclang/test && ../../bin/llvm-lit -sv AwlGen sclang`
+  (running llvm-lit on `../test/...` directly misses the site-config tool
+  substitutions). `ninja check-sclang` covers everything.
 - RUN conventions: `sclang-gen --emit=mlir-std %s | FileCheck %s` for lowering tests,
   `sclang --opt --emit=jit %s 2>&1 | FileCheck %s` for JIT tests.
 - SSA names print as `%alloca`, `%reinterpret_cast`, `%0`… — match with
@@ -97,9 +105,10 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 68 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, sclang JIT),
-  incl. direct_address (Parse), direct (MLIR), direct + big_endian
-  (SclTransforms), jit_areas + jit_tc (JIT).
+- 74 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+  sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
+  (SclTransforms), AwlGen ops/lower/areas/err_label, jit_areas + jit_tc +
+  jit_awl (.scl/.awl cross-check, identical JIT output) in sclang.
 
 ## Key design decisions (do not regress)
 
@@ -169,6 +178,30 @@ has no `\b` — use python3 for regex edits.
 - `--emit=mlir-std` always runs canonicalizer+CSE after LowerToStd, so
   single-predecessor blocks (e.g. a forward goto) are folded away; test irreducible
   CFGs (backward gotos) if you want `cf.br` to survive in CHECK lines.
+- **AWL frontend (ADR 003, implemented)**: `.awl` / `-x awl` in both drivers ->
+  `sclang::awlGen` (`lib/AwlGen/AwlGen.cpp`) -> `awl` dialect (`awl.block @OB1`
+  with flat ops ending in `awl.be`). The two accumulators are explicit SSA
+  values in codegen: `awl.load` pushes, arith pops 2/pushes 1, RLO is an i1
+  (`U/O/NOT/A(/O()`, `=`/`S`/`R`, jumps are `awl.jump*` with string labels).
+  LowerToStd's `AwlBlockOpLowering` converts `awl.block` to `func.func` and
+  splits the flat block at every label/jump/be (pass 1 registers labels, pass 2
+  wires `cf.br`/`cf.cond_br`, pass 3 adds fallthroughs, `be` -> `func.return`).
+  If `OB 1` exists, a `_mlir_ciface_OB1` wrapper calling `@OB1` is synthesized so
+  the JIT entry convention is unchanged. Operand syntax `E/A/M/T/Z [B|W|D]
+  byte[.bit]` and `DBn.DB[XBWD] byte[.bit]`; real literals `A 0.0` split into
+  byte/bit. **Label = fresh statement**: at a label the acc stack and RLO are
+  reset (next U/O/NOT uses the neutral value), otherwise the RLO SSA value from
+  a predecessor block would not dominate the label's block after splitting.
+  Pitfalls hit: lexer needs 2-token lookahead with per-token payload structs
+  (a single shared `identVal` is clobbered by the lookahead); do NOT
+  `module.push_back(op)` after creating an op with an insertion point inside the
+  module — double insertion corrupts the ilist and `mlir::verify` loops forever
+  (sample the hung process to see this).
+- `--dump-areas` (sclang driver, sim runtime only): after `--emit=jit`, calls
+  `scl_rt_sim_dump_areas()` (`lib/Runtime/SimRuntime.cpp`), which prints all
+  non-zero area/DB bytes (`M[20]=1`, `DB1[3]=7`, `clock=…ms`) — makes memory
+  writes observable in JIT tests (used by the SCL-vs-AWL cross-check
+  `test/sclang/jit_awl.{scl,awl}`, which must produce identical output).
 - **Big-endian storage (ADR 001, implemented)**: byte `i` of an N-byte value in a
   byte buffer holds bits `8*(N-1-i)..` (most significant byte first, S7 layout).
   Applied in `loadFromByteBuffer`/`storeToByteBuffer`, in the IDB cold-start
@@ -207,7 +240,11 @@ has no `\b` — use python3 for regex edits.
 ## Known gaps (parsed but not lowered / not code-generated)
 
 Planned next features (designs in `docs/design/`, ADRs in `docs/decisions/`):
-the AWL frontend and the SCL→AWL text backend.
+the SCL→AWL text backend (`docs/design/scl-to-awl.md`). The AWL frontend is
+implemented (see above).
+
+AWL frontend known gaps: CC (conditional call), CALL FB n / CALL DB m,
+IEC timer instructions (SD/SI/…), FC parameter passing.
 
 Memory areas `%I`/`%Q`/`%M`/`%DB…`/`%T`/`%C` are implemented (see above):
 `!scl.direct` type, `scl.getdirect`, `%`-address parsing, lowering to the

@@ -1,0 +1,25 @@
+// RUN: sclang --opt --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// Cross-check with jit_awl.scl (docs/design/awl-frontend.md): the same
+// program in AWL and SCL must produce identical JIT output.
+// CHECK: Q:
+// CHECK: Q[0]=1
+// CHECK: M:
+// CHECK: M[20]=1
+// CHECK: M[21]=2
+// CHECK: clock=0ms
+OB 1
+  L 258
+  T MW 20
+  L MW 20
+  L 0
+  >I
+  SPB set
+  R A 0.0
+  SPA done
+set:
+  S A 0.0
+done:
+  U E 0.0
+  = A 1.0
+  BE

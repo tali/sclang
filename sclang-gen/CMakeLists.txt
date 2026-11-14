@@ -6,8 +6,11 @@ add_llvm_executable(sclang-gen
 
   DEPENDS
   SclOpsIncGen
+  AwlOpsIncGen
   SclDialect
+  AwlDialect
   SclGen
+  AwlGen
   SclTransforms
 )
 set_target_properties(sclang-gen PROPERTIES FOLDER "Sclang")
@@ -22,7 +25,9 @@ target_link_libraries(sclang-gen
   PRIVATE
     ${dialect_libs}
     SclDialect
+    AwlDialect
     SclGen
+    AwlGen
     SclTransforms
     MLIRAnalysis
     MLIRCastInterfaces

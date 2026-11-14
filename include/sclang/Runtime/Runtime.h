@@ -104,6 +104,11 @@ void scl_rt_sim_set_db_size(uint32_t db, uint64_t size);
 void scl_rt_sim_reset(void);
 /// Virtual clock of the simulation in milliseconds.
 uint64_t scl_rt_sim_clock_ms(void);
+/// Dump all non-zero bytes of the simulated areas and DBs plus the virtual
+/// clock to stdout, one `AREA[byte]=value` entry per line (sim only; a no-op
+/// when a host vtable is registered). Used by the JIT driver's
+/// `--dump-areas` to make memory-area writes observable in tests.
+void scl_rt_sim_dump_areas(void);
 
 /// Entry point a host runtime shared library must export when loaded with
 /// `--runtime-lib=path.so`: returns the vtable the driver registers via

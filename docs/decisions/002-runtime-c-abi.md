@@ -1,6 +1,6 @@
 # ADR 002: Peripheral/memory access via a fixed C ABI runtime
 
-- **Status**: accepted (planned; not yet implemented)
+- **Status**: accepted and implemented (sim runtime + JIT binding + host vtable via --runtime-lib)
 - **Date**: 2025 (review session)
 
 ## Context

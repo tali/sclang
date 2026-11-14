@@ -14,8 +14,11 @@ add_llvm_executable(sclang
 
   DEPENDS
   SclOpsIncGen
+  AwlOpsIncGen
   SclDialect
+  AwlDialect
   SclGen
+  AwlGen
   SclRuntime
   SclTransforms
 )
@@ -32,7 +35,9 @@ target_link_libraries(sclang
     ${dialect_libs}
     ${conversion_libs}
     SclDialect
+    AwlDialect
     SclGen
+    AwlGen
     SclRuntime
     SclTransforms
     MLIRAnalysis

@@ -1,0 +1,22 @@
+// RUN: sclang-gen -x awl --emit=mlir-std %s | FileCheck %s
+// AWL memory areas: DBn operands map to area 'D' with the DB number,
+// bit operands (X) use the bit ABI, word operands (W) the byte ABI.
+// CHECK-DAG: func.func private @scl_rt_read_bit(i8, i32, i32, i8) -> i1
+// CHECK-DAG: func.func private @scl_rt_write(i8, i32, i32, i8, i64)
+// CHECK-DAG: func.func private @scl_rt_read(i8, i32, i32, i8) -> i64
+// CHECK-DAG: func.func private @scl_rt_write_bit(i8, i32, i32, i8, i1)
+// CHECK-LABEL: func.func @OB1()
+// CHECK: %{{.*}} = call @scl_rt_read_bit(%c68_i8, %c1_i32, %c0_i32, %c0_i8) : (i8, i32, i32, i8) -> i1
+// CHECK: call @scl_rt_write_bit(%c81_i8, %c0_i32, %c0_i32, %c0_i8, %{{.*}})
+// CHECK: %{{.*}} = call @scl_rt_read(%c68_i8, %c1_i32, %c2_i32, %c2_i8) : (i8, i32, i32, i8) -> i64
+// CHECK: %{{.*}} = arith.addi %{{.*}}, %{{.*}} : i16
+// CHECK: call @scl_rt_write(%c68_i8, %c1_i32, %c4_i32, %c2_i8, %{{.*}})
+// CHECK: return
+OB 1
+  U DB1.DBX 0.0
+  = A 0.0
+  L DB1.DBW 2
+  L 1
+  +I
+  T DB1.DBW 4
+  BE

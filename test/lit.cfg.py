@@ -14,7 +14,7 @@ config.name = 'SCLANG'
 config.test_format = lit.formats.ShTest(not llvm_config.use_lit_shell)
 
 # suffixes: A list of file extensions to treat as test files.
-config.suffixes = ['.mlir', '.scl', '.ll']
+config.suffixes = ['.mlir', '.scl', '.awl', '.ll']
 
 # test_source_root: The root path where tests are located.
 config.test_source_root = os.path.dirname(__file__)
@@ -32,6 +32,7 @@ config.excludes = ['Inputs', 'CMakeLists.txt']
 tool_dirs = [config.sclang_tools_dir, config.mlir_tools_dir, config.llvm_tools_dir]
 tools = [
     'sclang-gen',
-    'sclang'
+    'sclang',
+    'not'
 ]
 llvm_config.add_tool_substitutions(tools, tool_dirs)

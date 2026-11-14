@@ -1,0 +1,23 @@
+// RUN: sclang --opt --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// Cross-check with jit_awl.awl (docs/design/awl-frontend.md): the same
+// program in SCL and AWL must produce identical JIT output.
+// CHECK: Q:
+// CHECK: Q[0]=1
+// CHECK: M:
+// CHECK: M[20]=1
+// CHECK: M[21]=2
+// CHECK: clock=0ms
+function OB1 : int
+begin
+  %MW20 := 258;
+  IF %MW20 > 0 THEN
+    %Q0.0 := TRUE;
+  END_IF;
+  %Q1.0 := %I0.0;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

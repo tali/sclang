@@ -1,0 +1,5 @@
+// RUN: not sclang-gen -x awl --emit=mlir-std %s 2>&1 | FileCheck %s
+// CHECK: undefined label 'NOPE'
+OB 1
+  SPA NOPE
+  BE

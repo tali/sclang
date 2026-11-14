@@ -1,0 +1,32 @@
+// RUN: sclang-gen -x awl --emit=mlir-std %s | FileCheck %s
+// AWL lowering (ADR 003): awl.block splits into cf blocks at labels/jumps,
+// direct operands become scl_rt_* runtime calls (ADR 002).
+// CHECK-DAG: func.func private @scl_rt_write_bit(i8, i32, i32, i8, i1)
+// CHECK-DAG: func.func private @scl_rt_read(i8, i32, i32, i8) -> i64
+// CHECK-LABEL: func.func @OB1()
+// CHECK: %{{.*}} = call @scl_rt_read(%{{.*}}, %{{.*}}, %c0_i32, %c2_i8) : (i8, i32, i32, i8) -> i64
+// CHECK: %{{.*}} = arith.cmpi eq, %{{.*}}, %{{.*}} : i16
+// CHECK: cf.cond_br %{{.*}}, ^bb2, ^bb1
+// CHECK: call @scl_rt_write_bit(%c81_i8, %c0_i32, %c1_i32, %c0_i8, %true)
+// CHECK: cf.br ^bb2
+// CHECK: %{{.*}} = call @scl_rt_read(%{{.*}}, %{{.*}}, %c2_i32, %c2_i8) : (i8, i32, i32, i8) -> i64
+// CHECK: %{{.*}} = arith.cmpi sgt, %{{.*}}, %{{.*}} : i16
+// CHECK: cf.cond_br %{{.*}}, ^bb4, ^bb3
+// CHECK: call @scl_rt_write_bit(%c81_i8, %c0_i32, %c1_i32, %c0_i8, %false)
+// CHECK: return
+// CHECK-LABEL: func.func @_mlir_ciface_OB1()
+// CHECK: call @OB1() : () -> ()
+OB 1
+  L MW 0
+  L 5
+  ==I
+  SPB skip
+  S A 1.0
+skip:
+  L MW 2
+  L 0
+  >I
+  SPB big
+  R A 1.0
+big:
+  BE

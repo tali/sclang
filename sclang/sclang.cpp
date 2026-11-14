@@ -21,8 +21,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "sclang/SclDialect/Dialect.h"
+#include "sclang/AwlDialect/Dialect.h"
 #include "sclang/SclGen/MLIRGen.h"
 #include "sclang/SclGen/Parser.h"
+#include "sclang/AwlGen/AwlGen.h"
 #include "sclang/Runtime/Runtime.h"
 #include "sclang/SclTransforms/Passes.h"
 #include <memory>
@@ -72,11 +74,12 @@ static cl::opt<std::string> inputFilename(cl::Positional,
                                           cl::value_desc("filename"));
 
 namespace {
-enum InputType { Scl, MLIR };
+enum InputType { Scl, MLIR, Awl };
 }
 static cl::opt<enum InputType> inputType(
     "x", cl::init(Scl), cl::desc("Select input file"),
     cl::values(clEnumValN(Scl, "scl", "load the input file as an SCL source")),
+    cl::values(clEnumValN(Awl, "awl", "load the input file as an AWL (STL) source")),
     cl::values(clEnumValN(MLIR, "mlir",
                           "load the input file as an MLIR file")));
 
@@ -130,6 +133,14 @@ static cl::opt<std::string> runtimeLib(
                             "(used with --runtime=host)"),
     cl::value_desc("path.so"));
 
+/// After a JIT run with the sim runtime, dump all non-zero memory-area bytes
+/// and the virtual clock to stdout (makes %I/%Q/%M/%DB writes observable in
+/// tests, e.g. for SCL-vs-AWL cross-checks).
+static cl::opt<bool> dumpAreas(
+    "dump-areas", cl::init(false),
+    cl::desc("After --emit=jit, dump the sim runtime's memory areas and "
+             "clock to stdout (only with --runtime=sim)"));
+
 /// Returns a SCL AST resulting from parsing the file or a nullptr on error.
 std::unique_ptr<sclang::ModuleAST> parseInputFile(llvm::StringRef filename) {
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> FileOrErr =
@@ -145,9 +156,22 @@ std::unique_ptr<sclang::ModuleAST> parseInputFile(llvm::StringRef filename) {
 }
 
 int loadMLIR(mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &module) {
-  // Handle '.scl' input to the compiler.
+  // Handle '.scl' / '.awl' input to the compiler.
   if (inputType != InputType::MLIR &&
       !llvm::StringRef(inputFilename).endswith(".mlir")) {
+    bool isAwl = inputType == InputType::Awl ||
+                 llvm::StringRef(inputFilename).endswith(".awl");
+    if (isAwl) {
+      llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
+          llvm::MemoryBuffer::getFileOrSTDIN(inputFilename);
+      if (std::error_code EC = fileOrErr.getError()) {
+        llvm::errs() << "Could not open input file: " << EC.message() << "\n";
+        return 6;
+      }
+      module = sclang::awlGen(context, fileOrErr.get()->getBuffer(),
+                              std::string(inputFilename));
+      return !module ? 1 : 0;
+    }
     auto moduleAST = parseInputFile(inputFilename);
     if (!moduleAST)
       return 6;
@@ -394,6 +418,9 @@ int runJit(mlir::ModuleOp module) {
     return -1;
   }
 
+  if (dumpAreas && runtimeKind == Sim)
+    scl_rt_sim_dump_areas();
+
   return 0;
 }
 
@@ -413,6 +440,7 @@ int main(int argc, char **argv) {
   mlir::MLIRContext context;
   // Load our Dialect in this MLIR Context.
   context.getOrLoadDialect<mlir::scl::SclDialect>();
+  context.getOrLoadDialect<mlir::awl::AwlDialect>();
   context.getOrLoadDialect<mlir::cf::ControlFlowDialect>();
   context.getOrLoadDialect<mlir::math::MathDialect>();
   // Load other target dialects

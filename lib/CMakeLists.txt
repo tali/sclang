@@ -1,4 +1,6 @@
 add_subdirectory(SclDialect)
+add_subdirectory(AwlDialect)
 add_subdirectory(SclGen)
+add_subdirectory(AwlGen)
 add_subdirectory(Runtime)
 add_subdirectory(SclTransforms)

@@ -1,6 +1,13 @@
 # Design: AWL (STL) frontend
 
-- **Status**: planned
+- **Status**: implemented (AWL frontend: `.awl`/`-x awl` -> awl dialect ->
+  LowerToStd -> JIT; tests in test/AwlGen + test/sclang/jit_awl.{scl,awl}).
+  Deviations from the plan below: ACC is a codegen-time SSA stack (no phis —
+  labels reset the statement state instead, see AGENTS.md); `awl.block` is
+  lowered by splitting the flat block at labels/jumps in AwlBlockOpLowering
+  rather than emitting cf blocks during codegen; CC and CALL FB/DB are
+  rejected for now; `_mlir_ciface_OB1` is synthesized when OB 1 exists.
+  Remaining: SCL->AWL text backend (scl-to-awl.md), timers.
 - Related: ADR 003 (parallel dialect), ADR 002 (runtime ABI), `memory-areas.md`
 
 Target: classic S7-300/400 AWL (two-accumulator model). One instruction per

@@ -202,4 +202,33 @@ void scl_rt_sim_reset(void) {
 
 uint64_t scl_rt_sim_clock_ms(void) { return state().clockMs; }
 
+void scl_rt_sim_dump_areas(void) {
+  auto &s = state();
+  if (s.vtable)
+    return; // a host runtime owns the memory; nothing to dump
+  auto dumpBuf = [](char area, uint32_t db, const std::vector<uint8_t> &buf) {
+    bool any = false;
+    for (size_t i = 0; i < buf.size(); ++i) {
+      if (buf[i] == 0)
+        continue;
+      if (!any) {
+        if (area == SCL_RT_AREA_DB)
+          printf("DB%u:\n", db);
+        else
+          printf("%c:\n", area);
+        any = true;
+      }
+      if (area == SCL_RT_AREA_DB)
+        printf("  DB%u[%zu]=%u\n", db, i, buf[i]);
+      else
+        printf("  %c[%zu]=%u\n", area, i, buf[i]);
+    }
+  };
+  for (char area : {'I', 'Q', 'M', 'T', 'C'})
+    dumpBuf(area, 0, s.areaBytes[(uint8_t)area]);
+  for (auto &kv : s.dbs)
+    dumpBuf(SCL_RT_AREA_DB, kv.first, kv.second);
+  printf("clock=%llums\n", (unsigned long long)s.clockMs);
+}
+
 } // extern "C"
