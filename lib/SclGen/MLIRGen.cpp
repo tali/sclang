@@ -755,6 +755,17 @@ private:
     if (!lhs)
       return mlir::failure();
     auto baseElem = lhs.getType().cast<AddressType>().getElementType();
+    // char := 'A': a string literal assigns its first byte to a char
+    if (auto it8 = baseElem.dyn_cast<IntegerType>()) {
+      if (it8.getWidth() == 8 && !str->getValue().empty()) {
+        auto byteVal = builder.create<ConstantOp>(
+            location, baseElem,
+            builder.getIntegerAttr(builder.getIntegerType(8),
+                                   (uint8_t)str->getValue()[0]));
+        builder.create<StoreOp>(location, lhs, byteVal);
+        return mlir::success();
+      }
+    }
     ArrayType arrTy;
     mlir::TypeAttr arrayTypeAttr;
     if (auto at = baseElem.dyn_cast<ArrayType>()) {

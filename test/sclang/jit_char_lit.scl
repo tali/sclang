@@ -1,0 +1,19 @@
+// RUN: sclang --opt --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// A string literal assigned to a char stores its first byte: c := 'A' -> 65.
+// CHECK: M:
+// CHECK: M[2]=65
+// CHECK: clock=0ms
+function OB1 : int
+var_temp
+  c : char;
+end_var
+begin
+  c := 'A';
+  %MB2 := c;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function
