@@ -167,6 +167,27 @@ static FbLayoutCache computeFbLayouts(ModuleOp module) {
       layouts[fb.getName()] = layout;
     }
   }
+  // Builtin timer FBs TON/TOF/TP (lowered to @scl_rt_timer_fb, not func.call):
+  // fixed aligned layout IN @0 (bool), PT @4 (time/i32 ms), Q @8 (bool),
+  // ET @12 (time/i32 ms), 16 bytes total. Forced even if user-declared, so
+  // the runtime's interpretation matches.
+  for (const char *name : {"TON", "TOF", "TP"}) {
+    if (layouts.find(name) != layouts.end())
+      continue;
+    FbLayout layout;
+    auto mk = [&](const char *n, int64_t off, Type t, int64_t size) {
+      FbMemberLayout m{n, off, t, std::nullopt};
+      layout.members.push_back(m);
+      (void)size;
+    };
+    auto ctx = module.getContext();
+    mk("IN", 0, scl::LogicalType::get(ctx, 1), 1);
+    mk("PT", 4, scl::TimeType::get(ctx), 4);
+    mk("Q", 8, scl::LogicalType::get(ctx, 1), 1);
+    mk("ET", 12, scl::TimeType::get(ctx), 4);
+    layout.size = 16;
+    layouts[name] = layout;
+  }
   return layouts;
 }
 
@@ -1832,6 +1853,31 @@ struct CallFbOpLowering : public OpConversionPattern<scl::CallFbOp> {
   LogicalResult
   matchAndRewrite(scl::CallFbOp op, scl::CallFbOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // Builtin timer FBs TON/TOF/TP lower to a runtime call on the instance
+    // DB buffer, not a func.call (no FunctionBlockOp needed).
+    std::string fbUp = llvm::StringRef(op.getFb()).upper();
+    int mode = -1;
+    if (fbUp == "TON") mode = 0;
+    else if (fbUp == "TOF") mode = 1;
+    else if (fbUp == "TP") mode = 2;
+    if (mode >= 0) {
+      auto loc = op.getLoc();
+      ModuleOp module = op->template getParentOfType<ModuleOp>();
+      auto i8 = rewriter.getI8Type();
+      auto i64 = rewriter.getI64Type();
+      auto fnTy = rewriter.getFunctionType({i8, i64}, {});
+      auto rtFn = getOrInsertRtFunc(rewriter, module, "scl_rt_timer_fb", fnTy);
+      // memref -> data pointer as i64
+      Value idb = adaptor.getIdb();
+      Value ptrIdx = rewriter.create<memref::ExtractAlignedPointerAsIndexOp>(
+          loc, idb);
+      Value ptr = rewriter.create<arith::IndexCastOp>(loc, i64, ptrIdx);
+      Value modeC = rewriter.create<arith::ConstantOp>(
+          loc, i8, rewriter.getI8IntegerAttr((int8_t)mode));
+      rewriter.create<func::CallOp>(loc, rtFn, TypeRange{}, ValueRange{modeC, ptr});
+      rewriter.eraseOp(op);
+      return success();
+    }
     auto call = rewriter.create<func::CallOp>(op.getLoc(), op.getFb(),
                                               TypeRange{},
                                               ValueRange{adaptor.getIdb()});

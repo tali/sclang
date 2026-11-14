@@ -1136,6 +1136,26 @@ private:
       auto fbName = builder.getStringAttr(idbType.getFbSymbol());
       auto fb = mlir::SymbolTable::lookupNearestSymbolFrom<FunctionBlockOp>(
         theModule, fbName);
+      // Builtin timer FBs have no FunctionBlockOp; their member types are
+      // fixed (IN/Q: bool, PT/ET: time).
+      std::string fbUp = std::string(fbName.getValue().upper());
+      if (!fb && (fbUp == "TON" || fbUp == "TOF" || fbUp == "TP")) {
+        mlir::Type t;
+        std::string mUp = std::string(llvm::StringRef(name).upper());
+        if (mUp == "IN" || mUp == "Q")
+          t = getType(tok_bool);
+        else if (mUp == "PT" || mUp == "ET")
+          t = getType(tok_time);
+        if (!t) {
+          emitError(location) << "unknown variable '" << name
+                              << "' in builtin FB '" << fbName << "'";
+          return nullptr;
+        }
+        auto result = builder.create<GetVariableOp>(location, resultType,
+                                                    address, name);
+        byteViewTypes[result] = t;
+        return result;
+      }
       if (!fb) {
         emitError(location) << "unknown FB '" << fbName << "'";
         return nullptr;
@@ -1644,6 +1664,10 @@ private:
     // A reference to a function block type is an instance DB.
     if (fbNames.contains(type->getName()))
       return InstanceDbType::get(builder.getContext(), type->getName());
+    // Builtin timer FBs (lowered to @scl_rt_timer_fb, no source definition)
+    std::string up = llvm::StringRef(type->getName()).upper();
+    if (up == "TON" || up == "TOF" || up == "TP")
+      return InstanceDbType::get(builder.getContext(), up);
     emitError(loc(type->loc())) << "unknown type '" << type->getName() << "'";
     return nullptr;
   }

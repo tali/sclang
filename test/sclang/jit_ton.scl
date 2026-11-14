@@ -1,0 +1,35 @@
+// RUN: sclang --opt --emit=jit --jit-cycles=2 --cycle-ms=600 --dump-areas %s 2>&1 | FileCheck %s
+// RUN: sclang --opt --emit=jit --jit-cycles=3 --cycle-ms=600 --dump-areas %s 2>&1 | FileCheck %s --check-prefix=EXPIRED
+// CHECK-NOT: failed
+// EXPIRED-NOT: failed
+// Builtin TON FB (lowered to @scl_rt_timer_fb, see AGENTS.md): IN=true,
+// PT=T#1S. After one 600ms scan cycle (clock=600ms): Q=0, ET=600
+// (M[2]=2, M[3]=88 = 0x0258). After 1200ms the on-delay has elapsed:
+// Q=1 (M[0]=1), ET clamped to PT=1000 (M[2]=3, M[3]=232 = 0x03E8).
+// CHECK: M:
+// CHECK-NOT: M[0]=1
+// CHECK: M[2]=2
+// CHECK: M[3]=88
+// CHECK: clock=600ms
+// EXPIRED: M:
+// EXPIRED: M[0]=1
+// EXPIRED: M[2]=3
+// EXPIRED: M[3]=232
+// EXPIRED: clock=1200ms
+data_block ton_db
+  TON
+end_data_block
+
+function OB1 : int
+begin
+  "ton_db".IN := true;
+  "ton_db".PT := T#1S;
+  TON."ton_db"();
+  %M0.0 := "ton_db".Q;
+  %MW2 := "ton_db".ET;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

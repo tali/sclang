@@ -18,6 +18,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <map>
 #include <vector>
 
@@ -43,6 +44,13 @@ struct SimState {
   uint64_t clockMs = 0;
   TimerState timers[256];                // indexed by timer number
   uint32_t counters[256] = {};           // counter values (0..999)
+  // builtin timer FB (TON/TOF/TP) state, keyed by instance DB buffer address
+  struct TimerFbState {
+    bool prevIn = false;
+    bool running = false;
+    uint64_t startMs = 0;
+  };
+  std::map<uint64_t, TimerFbState> timerFbs;
 };
 
 /// Decode an S5TIME-encoded 16-bit value to milliseconds.
@@ -290,6 +298,79 @@ void scl_rt_counter_op(uint32_t c, uint8_t op, uint64_t value) {
     fprintf(stderr, "scl_rt_counter_op: invalid op %u\n", op);
     abort();
   }
+}
+
+// MARK: builtin timer FBs (TON/TOF/TP)
+//
+// Builtin instance-DB layout (big-endian, ADR 001): IN @ byte 0 (i8 bool),
+// PT @ bytes 4..7 (i32 preset ms), Q @ byte 8 (i8), ET @ bytes 12..15 (i32 ms).
+static uint8_t fbReadByte(uint8_t *p, uint64_t off) { return p[off]; }
+static void fbWriteByte(uint8_t *p, uint64_t off, uint8_t v) { p[off] = v; }
+static int32_t fbReadI32(uint8_t *p, uint64_t off) {
+  return (int32_t)((uint32_t)p[off] << 24 | (uint32_t)p[off + 1] << 16 |
+                   (uint32_t)p[off + 2] << 8 | (uint32_t)p[off + 3]);
+}
+static void fbWriteI32(uint8_t *p, uint64_t off, int32_t v) {
+  p[off] = (uint8_t)((uint32_t)v >> 24);
+  p[off + 1] = (uint8_t)((uint32_t)v >> 16);
+  p[off + 2] = (uint8_t)((uint32_t)v >> 8);
+  p[off + 3] = (uint8_t)v;
+}
+
+void scl_rt_timer_fb(uint8_t mode, uint64_t idbPtr) {
+  auto &s = state();
+  if (s.vtable && s.vtable->timer_fb) {
+    s.vtable->timer_fb(mode, idbPtr);
+    return;
+  }
+  auto *p = reinterpret_cast<uint8_t *>(idbPtr);
+  auto &st = s.timerFbs[idbPtr];
+  bool in = fbReadByte(p, 0) != 0;
+  int32_t pt = fbReadI32(p, 4);
+  if (pt < 0)
+    pt = 0;
+  uint64_t now = s.clockMs;
+  uint64_t elapsed = st.running ? now - st.startMs : 0;
+  bool q = false;
+  int32_t et = 0;
+  switch (mode) {
+  case 0: // TON: on-delay
+    if (in && !st.prevIn) {
+      st.running = true;
+      st.startMs = now;
+      elapsed = 0;
+    }
+    if (!in)
+      st.running = false;
+    q = st.running && elapsed >= (uint64_t)pt;
+    et = st.running ? (int32_t)std::min<uint64_t>(elapsed, (uint64_t)pt) : 0;
+    break;
+  case 1: // TOF: off-delay
+    if (!in && st.prevIn) {
+      st.running = true;
+      st.startMs = now;
+      elapsed = 0;
+    }
+    if (in)
+      st.running = false;
+    q = st.running && elapsed < (uint64_t)pt;
+    et = st.running ? (int32_t)std::min<uint64_t>(elapsed, (uint64_t)pt) : 0;
+    break;
+  default: // TP: pulse
+    if (in && !st.prevIn) {
+      st.running = true;
+      st.startMs = now;
+      elapsed = 0;
+    }
+    if (st.running && elapsed >= (uint64_t)pt)
+      st.running = false;
+    q = st.running && elapsed < (uint64_t)pt;
+    et = in && st.running ? (int32_t)std::min<uint64_t>(elapsed, (uint64_t)pt) : 0;
+    break;
+  }
+  st.prevIn = in;
+  fbWriteByte(p, 8, q ? 1 : 0);
+  fbWriteI32(p, 12, et);
 }
 
 void scl_rt_register(const SclRtVTable *vtable) { state().vtable = vtable; }

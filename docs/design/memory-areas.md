@@ -50,8 +50,11 @@
 
 ## Pending
 
-- IEC timer semantics beyond the sim model (see above); SCL-side timer FBs
-  (TON/TOF/TP) need CALL FB support.
+- IEC timer semantics beyond the sim model (see above). SCL-side timer FBs
+  are implemented as builtins: `data_block d TON …` + `TON."d"()` lower to
+  `@scl_rt_timer_fb(mode, idbPtr)` (ABI v3) with a fixed builtin IDB layout
+  (IN @0, PT @4, Q @8, ET @12); the sim keeps per-instance state against the
+  virtual clock (see AGENTS.md, test jit_ton.scl).
 - AWL operand mapping (below) and the SCL->AWL backend.
 
 ## Addressing model

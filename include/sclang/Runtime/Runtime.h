@@ -96,6 +96,10 @@ enum SclRtCounterOp {
 };
 /// Apply a counter operation; `value` is only used for SCL_RT_COUNTER_SET.
 void scl_rt_counter_op(uint32_t c, uint8_t op, uint64_t value);
+/// Builtin timer function blocks TON/TOF/TP (mode 0/1/2) operating on an
+/// instance DB buffer with the builtin layout (IN @0, PT @4 i32 BE ms,
+/// Q @8, ET @12 i32 BE ms).
+void scl_rt_timer_fb(uint8_t mode, uint64_t idbPtr);
 
 /// Timer/counter semantics (simulation): reads of the `T`/`C` areas return
 /// the current timer remaining time in ms / the counter value, and bit 0
@@ -120,6 +124,11 @@ typedef struct SclRtVTable {
      the sim then handles timer/counter operations itself. */
   void (*timer_start)(uint32_t t, uint8_t mode, uint64_t durS5);
   void (*counter_op)(uint32_t c, uint8_t op, uint64_t value);
+  /* Appended for builtin timer FBs TON/TOF/TP (v3). May be NULL in older
+     host runtimes; the sim then handles them itself. mode: 0=TON, 1=TOF,
+     2=TP. idbPtr is the instance DB buffer (builtin layout: IN @0, PT @4
+     (i32 ms, big-endian), Q @8, ET @12 (i32 ms)). */
+  void (*timer_fb)(uint8_t mode, uint64_t idbPtr);
 } SclRtVTable;
 
 /// Register a host vtable; all subsequent ABI calls forward through it.

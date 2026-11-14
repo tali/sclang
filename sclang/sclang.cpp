@@ -318,6 +318,7 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_cycle", (void *)&scl_rt_cycle);
     add("scl_rt_timer_start", (void *)&scl_rt_timer_start);
     add("scl_rt_counter_op", (void *)&scl_rt_counter_op);
+    add("scl_rt_timer_fb", (void *)&scl_rt_timer_fb);
     return map;
   });
 }

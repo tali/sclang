@@ -115,7 +115,7 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 98 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 99 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
   (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
   timer/timer_lower/call_fb/cc, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
@@ -127,7 +127,8 @@ has no `\b` — use python3 for regex edits.
   (a[i].x) in sclang; string_compare in SclGen/MLIR; array_of_struct in
   SclTransforms (to_awl_fc), SclGen/MLIR (string_compare); jit_fb_init +
   jit_awl_fc (FC params via SCL->AWL->JIT) + jit_byte_trunc (int->byte
-  truncation, direct and via AWL) + jit_char_lit (char := 'A') in sclang.
+  truncation, direct and via AWL) + jit_char_lit (char := 'A') +
+  jit_ton (builtin TON) in sclang.
 
 ## Key design decisions (do not regress)
 
