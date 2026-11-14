@@ -115,7 +115,7 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 96 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 97 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
   (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
   timer/timer_lower/call_fb/cc, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
@@ -126,7 +126,8 @@ has no `\b` — use python3 for regex edits.
   jit_case_real (CASE on bool/real selectors) + jit_array_of_struct
   (a[i].x) in sclang; string_compare in SclGen/MLIR; array_of_struct in
   SclTransforms (to_awl_fc), SclGen/MLIR (string_compare); jit_fb_init +
-  jit_awl_fc (FC params via SCL->AWL->JIT) in sclang.
+  jit_awl_fc (FC params via SCL->AWL->JIT) + jit_byte_trunc (int->byte
+  truncation, direct and via AWL) in sclang.
 
 ## Key design decisions (do not regress)
 
@@ -191,9 +192,13 @@ has no `\b` — use python3 for regex edits.
   so loop patterns run before the nested ops; rewriting/erasing nested ops inside
   the loop pattern does NOT work — deferred erasure skips them and direct
   `erase()` dangles the worklist).
-- Assignments insert an implicit `scl.int.cast` between integer types (target =
-  declared member type for byte-view lvalues). `call.fc` results are typed from
-  the callee's signature (pre-pass `functionResultTypes`), not hardcoded int.
+- Assignments insert an implicit `scl.int.cast` on WIDTH mismatch; byte/word/
+  dword are LogicalType (not IntegerType), so the cast goes to an IntegerType
+  of the same width — otherwise storing an int into a byte var writes 2 bytes
+  into the 1-byte view and reads back the high byte (bug fixed; see
+  jit_byte_trunc). storeToByteBuffer additionally truncates to the view's
+  static size when known. `call.fc` results are typed from the callee's
+  signature (pre-pass `functionResultTypes`), not hardcoded int.
   Boolean literals are i1 (`true`/`false`), and loop conditions go through
   `mlirGenRValue` so a bool variable condition is loaded, not passed as an address.
 - `string[n]` is an array of n chars; `s := 'lit'` stores the literal bytes
@@ -262,9 +267,9 @@ has no `\b` — use python3 for regex edits.
   compare (AWL `L` shifts ACC1 into ACC2).
   AWL parser pitfall: a label branch in the instruction loop must `continue`,
   not fall through to parseInstruction (two consecutive labels misparse).
-  AWL backend gaps: FB arrays/structs/strings, cross-width assignment, DB
-  initializers. (CALL FB n, DB m, CC, timers and FC params are done — see
-  below.)
+  AWL backend gaps: FB arrays/structs/strings, DB initializers. (CALL FB n,
+  DB m, CC, timers, FC params and cross-width assignment via awl.cast are
+  done — see below.)
 - **FC parameters in the SCL->AWL backend (implemented)**: passed through a
   reserved window at the top of the M area (the AWL analog of the S7 L
   stack): `kParamBaseByte = 65280`, 8 bytes per param; the FC return value

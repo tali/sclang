@@ -6,9 +6,9 @@
   test/SclTransforms/to_awl{,_areas,_fb}.scl, test/AwlGen/roundtrip.awl,
   test/sclang/jit_awl_backend.scl (SCL -> AWL -> JIT gives the same memory
   writes as the SCL original).
-  Deviations/gaps: FB arrays/structs, strings, cross-width assignments and
-  DB initializers are rejected/dropped with an error or warning;
-  `scl.debug.print` is dropped;
+  Deviations/gaps: FB arrays/structs, strings and DB initializers are
+  rejected/dropped with an error or warning; `scl.debug.print` is dropped;
+  cross-width assignments insert an awl.cast;
   awl.cast is implicit in the mnemonic letter (not printed); bool logic is
   emitted as rlo chains (U/UN/O/ON/=) with temp bits for computed operands;
   the CASE selector is re-loaded before each compare (AWL L shifts ACC1).

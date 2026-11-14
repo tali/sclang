@@ -812,6 +812,14 @@ static LogicalResult storeToByteBuffer(OpBuilder &b, Location loc, Value value,
     acc = b.create<arith::BitcastOp>(loc, accTy, value);
   else if (accTy != valTy)
     acc = b.create<arith::ExtSIOp>(loc, accTy, value);
+  // Storing a wider value into a narrower byte view (e.g. int -> byte var)
+  // truncates to the view's width, keeping the low-order bytes.
+  int64_t viewSize = memTy.getShape()[0];
+  if (viewSize != ShapedType::kDynamic && viewSize < nbytes) {
+    accTy = IntegerType::get(b.getContext(), (unsigned)viewSize * 8);
+    acc = b.create<arith::TruncIOp>(loc, accTy, acc);
+    nbytes = viewSize;
+  }
   // addr is a rank-1 i8 view starting at the value (FB/struct member);
   // split the value into bytes and store them directly, big-endian
   // (ADR 001): byte i of the value lives at offset i, most significant

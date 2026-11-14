@@ -1,0 +1,24 @@
+// RUN: sclang --opt --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// RUN: sclang-gen --emit=awl %s | sclang -x awl --emit=jit --dump-areas - 2>&1 | FileCheck %s --check-prefix=AWL
+// CHECK-NOT: failed
+// AWL-NOT: failed
+// Cross-width assignment int -> byte truncates to the low byte: w=300,
+// b := w gives b=44, %MB2 := b -> M[2]=44. Both the direct SCL path and the
+// SCL->AWL->JIT path must agree.
+// CHECK: M[2]=44
+// AWL: M[2]=44
+function OB1 : int
+var_temp
+  b : byte;
+  w : int;
+end_var
+begin
+  w := 300;
+  b := w;
+  %MB2 := b;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

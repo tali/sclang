@@ -848,9 +848,24 @@ private:
     auto lhsElem = lhs.getType().cast<AddressType>().getElementType();
     auto bvIt = byteViewTypes.find(lhs);
     mlir::Type declared = bvIt != byteViewTypes.end() ? bvIt->second : lhsElem;
-    if (declared != rhs.getType() && declared.isa<IntegerType>() &&
-        rhs.getType().isa<IntegerType>())
-      rhs = builder.create<IntegerCastOp>(location, declared, rhs);
+    // Implicit integer conversion on width mismatch. byte/word/dword are
+    // LogicalType (not IntegerType), so cast to an IntegerType of the same
+    // width; storing a wider value into a byte view would otherwise write
+    // past the view and read back the high byte.
+    auto widthOfTy = [](mlir::Type t) -> int {
+      if (auto it = t.dyn_cast<IntegerType>())
+        return it.getWidth();
+      if (auto lt = t.dyn_cast<LogicalType>())
+        return lt.getWidth();
+      return -1;
+    };
+    int dw = widthOfTy(declared), rw = widthOfTy(rhs.getType());
+    if (dw > 0 && rw > 0 && dw != rw && rhs.getType().isa<IntegerType>()) {
+      mlir::Type castTy = declared.isa<IntegerType>()
+                              ? declared
+                              : IntegerType::get(builder.getContext(), dw);
+      rhs = builder.create<IntegerCastOp>(location, castTy, rhs);
+    }
 
     builder.create<StoreOp>(location, lhs, rhs);
 

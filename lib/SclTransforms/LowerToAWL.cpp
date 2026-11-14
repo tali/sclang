@@ -71,8 +71,8 @@ static Type awlDirectValueType(MLIRContext *ctx, scl::DirectType dt) {
 
 // Storage width in bits of an scl type (for M-area allocation).
 static int widthOf(Type t) {
-  if (isa<scl::LogicalType>(t))
-    return 1;
+  if (auto lt = dyn_cast<scl::LogicalType>(t))
+    return lt.getWidth(); // bool = 1, byte = 8
   if (auto it = dyn_cast<scl::IntegerType>(t))
     return it.getWidth();
   if (isa<scl::RealType>(t))
@@ -540,11 +540,8 @@ struct FuncConverter {
       Value raw = materialize(val);
       if (!raw)
         return;
-      if (raw.getType() != vt) {
-        emitError(val.getLoc())
-            << "cross-width assignment is not yet supported by the AWL backend";
-        return;
-      }
+      // cross-width assignment: insert an explicit cast (awl.cast)
+      raw = castTo(raw, vt);
       b.create<awl::StoreOp>(loc, raw, directValue(dt));
     }
   }
