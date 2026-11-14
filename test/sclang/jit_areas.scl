@@ -1,0 +1,31 @@
+// RUN: sclang --opt --emit=jit %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+
+// CHECK: be ok
+// CHECK: q ok
+// Memory areas via the sim runtime (ADR 002), big-endian storage (ADR 001):
+// %MW20 := 258 = 0x0102 stores high byte 1 at %MB20, low byte 2 at %MB21.
+function OB1 : int
+var_temp
+  x : int;
+  y : int;
+end_var
+begin
+  %M10.3 := TRUE;
+  %MW20 := 258;
+  %DB1.DBW0 := 258;
+  x := %MB20;
+  y := %DB1.DBB1;
+  IF %M10.3 AND x = 1 AND y = 2 THEN
+    // DEBUG PRINT be ok
+  END_IF;
+  %Q0.0 := %I0.0;
+  IF %Q0.0 = FALSE THEN
+    // DEBUG PRINT q ok
+  END_IF;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

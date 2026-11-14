@@ -168,6 +168,7 @@ enum Token : int {
   tok_real_number_literal = -103,
   tok_string_literal = -104,
   tok_time_literal = -105,
+  tok_direct_address = -110, // %I0.0, %IB2, %MW10, %DB1.DBW4, ...
 
   // errors
   tok_error_symbol = -901,
@@ -260,6 +261,13 @@ public:
   /// Return the name of a symbol, when the current token is a symbol
   llvm::StringRef getSymbol() {
     assert(curTok == tok_symbol);
+    return stringValue;
+  }
+
+  /// Return the raw text of a direct address token, without the leading '%',
+  /// e.g. "I0.0", "IB2", "MW10" or "DB1.DBW4".
+  llvm::StringRef getDirectAddress() {
+    assert(curTok == tok_direct_address);
     return stringValue;
   }
 
@@ -974,6 +982,13 @@ private:
 
     if (isdigit(lastChar) || lastChar == '-') { // Number: [0-9.]+
       return getNumberLiteralTok();
+    }
+
+    if (lastChar == '%') { // Direct address: %I0.0, %IB2, %DB1.DBW4, ...
+      stringValue = "";
+      while (isalnum((lastChar = Token(getNextChar()))) || lastChar == '.')
+        stringValue += (char)lastChar;
+      return tok_direct_address;
     }
 
     if (lastChar == '.' || lastChar == ':' || lastChar == '*' ||

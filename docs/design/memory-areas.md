@@ -1,7 +1,47 @@
 # Design: memory areas in SCL and AWL
 
-- **Status**: planned
+- **Status**: phase 1 implemented (SCL side); AWL mapping and host binding pending
 - Related: ADR 001 (byte order), ADR 002 (runtime ABI), ADR 003 (awl dialect)
+
+## Implemented (phase 1)
+
+- `!scl.direct<area, db, byte, bit, width>` type in the scl base dialect
+  (area letters `I`/`Q`/`M`/`DB`/`T`/`C`, width in bits 1/8/16/32), parsed and
+  printed by `SclDialect::parseType`/`printType`.
+- `scl.getdirect` op (`scl.getdirect M, 0, 10, 3, 1 : !scl.address<!scl.direct<M, 0, 10, 3, 1>>`),
+  `Pure`, with a verifier tying the attrs to the result type.
+- Lexer: `%…` is a single `tok_direct_address` token (raw text without `%`);
+  `Parser::ParseDirectAddressExpression` parses `%I0.0`, `%IB2`, `%IW4`,
+  `%ID0`, `%DB1.DBX0.0`, `%DB1.DBB2`, `%DB1.DBW4`, `%DB1.DBD8` into a
+  `DirectVariableAST`. Plain `%I0` without a bit is rejected.
+- MLIRGen: `DirectVariableAST` -> `scl.getdirect`; rvalue loads use the
+  access width as value type (bool for bit access, else int of that width).
+  `%T`/`%C` are rejected for now ("timers/counters not yet supported").
+- LowerToStd: `scl.load`/`scl.store` through `address<direct<…>>` lower to
+  `@scl_rt_read/write[_bit](area, db, byteOff, widthBytes[, value])` calls
+  (private `func.func` declarations inserted on demand at module start);
+  `scl.getdirect` lowers to a packed-i64 placeholder (the address type
+  converts to i64; the value is never used by the runtime calls).
+- Scan cycle: OBs (`organization_block`, marked with the
+  `scl.organization_block` unit attr on `scl.function`) emit
+  `@scl_rt_update_inputs()` at entry and `@scl_rt_update_outputs()` before
+  every `scl.return`.
+- Sim runtime: `include/sclang/Runtime/Runtime.h` (fixed C ABI) +
+  `lib/Runtime/SimRuntime.cpp` (fixed-size I/Q/M/T/C areas, default 65536
+  bytes, OOB aborts; DBs grow lazily; big-endian; virtual clock). The
+  `sclang` driver binds the JIT symbols via `ExecutionEngine::registerSymbols`
+  and applies `--area-size AREA=SIZE`. A host can redirect all calls by
+  `scl_rt_register(&vtable)`.
+- Big-endian storage (ADR 001) is implemented in the byte-assembly helpers,
+  the IDB initializer baking, and the sim runtime.
+
+## Pending
+
+- Host-process binding via driver flags (`--runtime=host`, `--runtime-lib`):
+  the `SclRtVTable` mechanism exists, the CLI wiring does not yet.
+- Timers/counters (`%T`/`%C`) and `scl_rt_cycle` semantics.
+- DB area sizing (currently lazy growth in the sim).
+- AWL operand mapping (below) and the SCL->AWL backend.
 
 ## Addressing model
 

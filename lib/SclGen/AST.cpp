@@ -80,6 +80,7 @@ private:
   void dump(const InstructionAST *node);
   void dump(const ValueAssignmentAST *node);
   void dump(const SimpleVariableAST *node);
+  void dump(const DirectVariableAST *node);
   void dump(const IndexedVariableAST *node);
   // Value Assignments
   void dump(const ExpressionAST *node);
@@ -492,6 +493,7 @@ void ASTDumper::dump(const ExpressionAST *expr) {
   dispatch(StringConstantAST);
   dispatch(TimeConstantAST);
   dispatch(SimpleVariableAST);
+  dispatch(DirectVariableAST);
   dispatch(IndexedVariableAST);
   //    dispatch(AbsoluteVariableAST);
   //    dispatch(VariableInDBAST);
@@ -524,6 +526,11 @@ void ASTDumper::dump(const SimpleVariableAST *node) {
   } else {
     outs << "SimpleVariable " << node->getName() << "\n";
   }
+}
+
+void ASTDumper::dump(const DirectVariableAST *node) {
+  INDENT();
+  outs << "DirectVariable %" << node->getText() << "\n";
 }
 
 void ASTDumper::dump(const IndexedVariableAST *node) {

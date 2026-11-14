@@ -342,6 +342,34 @@ def GetVariableOp : SclOp<"getvariable",
   let assemblyFormat = "attr-dict $sym_name `from` $addr `:` type($addr) `->` type($element)";
 }
 
+def GetDirectOp : SclOp<"getdirect", [Pure]> {
+  let summary = "get the address of a directly-represented variable (memory area / DB)";
+  let description = [{
+    Represents a direct address like %I0.0, %MW10 or %DB1.DBW4.
+    The result is an address of !scl.direct<area, db, byte, bit, width>
+    (area, db, byte offset, bit, width in bits). Loads/stores through it
+    lower to runtime C ABI calls (ADR 002), never to inline memref access.
+
+    Example:
+      scl.getdirect M, 0, 10, 3, 1 : !scl.address<!scl.direct<M, 0, 10, 3, 1>>
+  }];
+  let arguments = (ins
+    StrAttr:$area,
+    I32Attr:$db,
+    I32Attr:$byte,
+    I32Attr:$bit,
+    I32Attr:$width
+  );
+  let results = (outs Scl_AddressType:$result);
+  let extraClassDeclaration = [{
+    static void build(OpBuilder &builder, OperationState &state,
+                      DirectArea area, int32_t db, int32_t byte, int32_t bit,
+                      int32_t width);
+  }];
+  let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
+}
+
 def LoadOp : SclOp<"load", [/*SameOperandsAndResultElementType*/]> {
   let summary = "load a value from memory";
   let description = [{

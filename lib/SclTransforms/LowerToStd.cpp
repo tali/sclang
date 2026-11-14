@@ -134,6 +134,11 @@ public:
   explicit SclTypeConverter(FbLayoutCache layouts) : fbLayouts(std::move(layouts)) {
     addConversion([&](scl::AddressType type) {
       auto elem = type.getElementType();
+      // A direct address (memory area / DB operand) converts to a packed i64
+      // placeholder; loads/stores through it lower to runtime C ABI calls
+      // (ADR 002) and never touch this value.
+      if (elem.isa<scl::DirectType>())
+        return (Type)IntegerType::get(type.getContext(), 64);
       // An instance DB address is the instance buffer itself.
       if (auto idbTy = elem.dyn_cast<scl::InstanceDbType>()) {
         auto it = fbLayouts.find(idbTy.getFbSymbol());
@@ -172,6 +177,9 @@ public:
     });
     addConversion([&](scl::RealType type) {
       return FloatType::getF32(type.getContext());
+    });
+    addConversion([&](scl::DirectType type) {
+      return IntegerType::get(type.getContext(), 64);
     });
     addConversion([&](scl::ArrayType type) {
       SmallVector<int64_t, 2> shape;
@@ -238,6 +246,117 @@ public:
     });
   }
 };
+
+// MARK: runtime C ABI (ADR 002)
+
+/// Get or insert a private declaration of a runtime ABI function (ADR 002)
+/// into the module, returning its symbol reference.
+static FlatSymbolRefAttr getOrInsertRtFunc(OpBuilder &b, ModuleOp module,
+                                           StringRef name, FunctionType type) {
+  if (module.lookupSymbol<func::FuncOp>(name))
+    return SymbolRefAttr::get(b.getContext(), name);
+  OpBuilder::InsertionGuard guard(b);
+  b.setInsertionPointToStart(module.getBody());
+  auto fn = b.create<func::FuncOp>(module.getLoc(), name, type);
+  fn.setVisibility(SymbolTable::Visibility::Private);
+  return SymbolRefAttr::get(b.getContext(), name);
+}
+
+/// Lower a load from a direct address (memory area / DB operand) to a call
+/// of the runtime C ABI (ADR 002): `scl_rt_read_bit` for bit access, else
+/// `scl_rt_read` with the width in bytes.
+static Value lowerDirectLoad(OpBuilder &b, Location loc, scl::DirectType dt,
+                             Type resTy, ModuleOp module) {
+  auto i8 = b.getI8Type();
+  auto i32 = b.getI32Type();
+  auto i64 = b.getI64Type();
+  auto areaC = b.create<arith::ConstantOp>(
+      loc, i8, b.getIntegerAttr(i8, (uint8_t)dt.getArea()));
+  auto dbC = b.create<arith::ConstantOp>(loc, i32,
+                                         b.getIntegerAttr(i32, dt.getDb()));
+  auto byteC = b.create<arith::ConstantOp>(loc, i32,
+                                           b.getIntegerAttr(i32, dt.getByte()));
+  if (dt.getWidth() == 1) {
+    auto bitC = b.create<arith::ConstantOp>(
+        loc, i8, b.getIntegerAttr(i8, dt.getBit()));
+    auto fn = getOrInsertRtFunc(b, module, "scl_rt_read_bit",
+                                b.getFunctionType({i8, i32, i32, i8},
+                                                  {b.getI1Type()}));
+    return b.create<func::CallOp>(loc, fn, TypeRange{b.getI1Type()},
+                                  ValueRange{areaC, dbC, byteC, bitC})
+        .getResult(0);
+  }
+  auto widthC = b.create<arith::ConstantOp>(
+      loc, i8, b.getIntegerAttr(i8, dt.getWidth() / 8));
+  auto fn = getOrInsertRtFunc(b, module, "scl_rt_read",
+                              b.getFunctionType({i8, i32, i32, i8}, {i64}));
+  Value v = b.create<func::CallOp>(loc, fn, TypeRange{i64},
+                                   ValueRange{areaC, dbC, byteC, widthC})
+                .getResult(0);
+  if (resTy == i64)
+    return v;
+  if (resTy.isInteger(1))
+    return b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne, v,
+                                   b.create<arith::ConstantOp>(
+                                       loc, i64, b.getIntegerAttr(i64, 0)));
+  return b.create<arith::TruncIOp>(loc, resTy, v);
+}
+
+/// Lower a store to a direct address (memory area / DB operand) to a call of
+/// the runtime C ABI (ADR 002): `scl_rt_write_bit` for bit access, else
+/// `scl_rt_write` with the value zero/sign-extended to i64 and the width in
+/// bytes.
+static LogicalResult lowerDirectStore(OpBuilder &b, Location loc,
+                                      scl::DirectType dt, Value value,
+                                      ModuleOp module) {
+  auto i8 = b.getI8Type();
+  auto i32 = b.getI32Type();
+  auto i64 = b.getI64Type();
+  auto areaC = b.create<arith::ConstantOp>(
+      loc, i8, b.getIntegerAttr(i8, (uint8_t)dt.getArea()));
+  auto dbC = b.create<arith::ConstantOp>(loc, i32,
+                                         b.getIntegerAttr(i32, dt.getDb()));
+  auto byteC = b.create<arith::ConstantOp>(loc, i32,
+                                           b.getIntegerAttr(i32, dt.getByte()));
+  if (dt.getWidth() == 1) {
+    Value bitVal = value;
+    if (!bitVal.getType().isInteger(1)) {
+      if (!bitVal.getType().isIntOrIndex())
+        return failure();
+      bitVal = b.create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::ne, bitVal,
+          b.create<arith::ConstantOp>(
+              loc, bitVal.getType(),
+              b.getIntegerAttr(bitVal.getType(), 0)));
+    }
+    auto bitC = b.create<arith::ConstantOp>(
+        loc, i8, b.getIntegerAttr(i8, dt.getBit()));
+    auto fn = getOrInsertRtFunc(b, module, "scl_rt_write_bit",
+                                b.getFunctionType({i8, i32, i32, i8, b.getI1Type()},
+                                                  {}));
+    b.create<func::CallOp>(loc, fn, TypeRange{},
+                           ValueRange{areaC, dbC, byteC, bitC, bitVal});
+    return success();
+  }
+  Value v = value;
+  if (v.getType().isa<FloatType>()) {
+    auto intTy = b.getIntegerType(v.getType().getIntOrFloatBitWidth());
+    v = b.create<arith::BitcastOp>(loc, intTy, v);
+  }
+  if (!v.getType().isIntOrIndex())
+    return failure();
+  if (v.getType() != i64)
+    v = v.getType().getIntOrFloatBitWidth() < 64
+            ? (Value)b.create<arith::ExtUIOp>(loc, i64, v)
+            : (Value)b.create<arith::TruncIOp>(loc, i64, v);
+  auto widthC = b.create<arith::ConstantOp>(
+      loc, i8, b.getIntegerAttr(i8, dt.getWidth() / 8));
+  auto fn = getOrInsertRtFunc(b, module, "scl_rt_write",
+                              b.getFunctionType({i8, i32, i32, i8, i64}, {}));
+  b.create<func::CallOp>(loc, fn, TypeRange{},
+                         ValueRange{areaC, dbC, byteC, widthC, v});
+  return success();
+}
 
 // MARK: CallFcOpLowering
 
@@ -376,6 +495,23 @@ struct FunctionOpLowering : public OpConversionPattern<scl::FunctionOp> {
     if (failed(rewriter.convertRegionTypes(&newFuncOp.getBody(), *typeConverter,
                                            &signatureConverter)))
       return failure();
+    // An organization block models one scan cycle: read the process image
+    // of the inputs on entry, write the outputs on exit (ADR 002).
+    if (op->hasAttr("scl.organization_block")) {
+      auto module = op->getParentOfType<ModuleOp>();
+      auto voidFn = rewriter.getFunctionType({}, {});
+      auto updIn = getOrInsertRtFunc(rewriter, module, "scl_rt_update_inputs",
+                                     voidFn);
+      auto updOut = getOrInsertRtFunc(rewriter, module, "scl_rt_update_outputs",
+                                      voidFn);
+      rewriter.setInsertionPointToStart(&newFuncOp.getBody().front());
+      rewriter.create<func::CallOp>(loc, updIn, TypeRange{}, ValueRange{});
+      newFuncOp.getBody().walk([&](scl::ReturnOp ret) {
+        rewriter.setInsertionPoint(ret);
+        rewriter.create<func::CallOp>(ret.getLoc(), updOut, TypeRange{},
+                                      ValueRange{});
+      });
+    }
     rewriter.eraseOp(op);
     return success();
   }
@@ -413,17 +549,19 @@ static Value loadFromByteBuffer(OpBuilder &b, Location loc, Value addr,
                    ? IntegerType::get(b.getContext(), nbytes <= 4 ? 32 : 64)
                    : resTy;
   // addr is a rank-1 i8 view starting at the value (FB/struct member);
-  // assemble the value byte by byte. Do not chain another reinterpret_cast:
-  // its fold would drop the member offset.
+  // assemble the value byte by byte, big-endian (ADR 001): byte i of the
+  // value lives at offset i from the start, most significant byte first.
+  // Do not chain another reinterpret_cast: its fold would drop the member
+  // offset.
   Value acc = b.create<arith::ConstantOp>(loc, accTy,
                                           b.getIntegerAttr(accTy, 0));
   for (int64_t i = 0; i < nbytes; ++i) {
     auto idx = b.create<arith::ConstantIndexOp>(loc, i);
     Value byte = b.create<memref::LoadOp>(loc, addr, ValueRange{idx});
     Value ext = b.create<arith::ExtUIOp>(loc, accTy, byte);
-    if (i > 0) {
-      auto sh = b.create<arith::ConstantOp>(loc, accTy,
-                                            b.getIntegerAttr(accTy, 8 * i));
+    if (i < nbytes - 1) {
+      auto sh = b.create<arith::ConstantOp>(
+          loc, accTy, b.getIntegerAttr(accTy, 8 * (nbytes - 1 - i)));
       ext = b.create<arith::ShLIOp>(loc, ext, sh);
     }
     acc = b.create<arith::OrIOp>(loc, acc, ext);
@@ -444,6 +582,14 @@ struct LoadOpLowering : public OpConversionPattern<scl::LoadOp> {
     auto resTy = typeConverter->convertType(op.getType());
     if (!resTy)
       return failure();
+    // Direct address (memory area / DB): runtime C ABI call (ADR 002).
+    if (auto dt = op.getAddress().getType().cast<scl::AddressType>()
+                      .getElementType().dyn_cast<scl::DirectType>()) {
+      Value loaded = lowerDirectLoad(rewriter, op.getLoc(), dt, resTy,
+                                     op->getParentOfType<ModuleOp>());
+      rewriter.replaceOp(op, loaded);
+      return success();
+    }
     Value loaded = loadFromByteBuffer(rewriter, op.getLoc(),
                                        adaptor.getAddress(), resTy);
     if (!loaded)
@@ -577,12 +723,14 @@ static LogicalResult storeToByteBuffer(OpBuilder &b, Location loc, Value value,
   else if (accTy != valTy)
     acc = b.create<arith::ExtSIOp>(loc, accTy, value);
   // addr is a rank-1 i8 view starting at the value (FB/struct member);
-  // split the value into bytes and store them directly.
+  // split the value into bytes and store them directly, big-endian
+  // (ADR 001): byte i of the value lives at offset i, most significant
+  // byte first.
   for (int64_t i = 0; i < nbytes; ++i) {
     Value byte = acc;
-    if (i > 0) {
-      auto sh = b.create<arith::ConstantOp>(loc, accTy,
-                                            b.getIntegerAttr(accTy, 8 * i));
+    if (i < nbytes - 1) {
+      auto sh = b.create<arith::ConstantOp>(
+          loc, accTy, b.getIntegerAttr(accTy, 8 * (nbytes - 1 - i)));
       byte = b.create<arith::ShRUIOp>(loc, acc, sh);
     }
     byte = b.create<arith::TruncIOp>(loc, i8, byte);
@@ -598,6 +746,15 @@ struct StoreOpLowering : public OpConversionPattern<scl::StoreOp> {
   LogicalResult
   matchAndRewrite(scl::StoreOp op, scl::StoreOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // Direct address (memory area / DB): runtime C ABI call (ADR 002).
+    if (auto dt = op.getLhs().getType().cast<scl::AddressType>()
+                      .getElementType().dyn_cast<scl::DirectType>()) {
+      if (failed(lowerDirectStore(rewriter, op.getLoc(), dt, adaptor.getRhs(),
+                                  op->getParentOfType<ModuleOp>())))
+        return failure();
+      rewriter.eraseOp(op);
+      return success();
+    }
     if (failed(storeToByteBuffer(rewriter, op.getLoc(), adaptor.getRhs(),
                                  adaptor.getLhs())))
       return failure();
@@ -746,9 +903,11 @@ struct DataBlockOpLowering : public OpConversionPattern<scl::DataBlockOp> {
           if (!m.initBits)
             continue;
           int64_t msize = byteSize(m.type, layouts);
+          // big-endian (ADR 001): byte i of the member window holds bits
+          // 8*(msize-1-i).. of the value.
           for (int64_t i = 0; i < msize; ++i)
-            buf[m.offset + i] =
-                (uint8_t)(m.initBits->getZExtValue() >> (8 * i));
+            buf[m.offset + i] = (uint8_t)(m.initBits->getZExtValue() >>
+                                          (8 * (msize - 1 - i)));
         }
         auto i8 = memref.getElementType();
         for (uint8_t byte : buf)
@@ -1415,6 +1574,32 @@ struct VariableOpLowering : public OpConversionPattern<scl::VariableOp> {
   }
 };
 
+// MARK: GetDirectOpLowering
+
+/// Lower `scl.getdirect` to a packed i64 placeholder. Loads/stores through a
+/// direct address lower to runtime C ABI calls (ADR 002) and never use this
+/// value; it only exists so the type conversion has a concrete type.
+struct GetDirectOpLowering : public OpConversionPattern<scl::GetDirectOp> {
+  using OpConversionPattern<scl::GetDirectOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scl::GetDirectOp op, scl::GetDirectOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto resTy = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resTy)
+      return failure();
+    auto dt = op.getResult().getType().cast<scl::AddressType>()
+                  .getElementType().cast<scl::DirectType>();
+    int64_t packed = ((int64_t)(uint8_t)dt.getArea() << 56) |
+                     ((int64_t)(uint32_t)dt.getDb() << 40) |
+                     ((int64_t)(uint32_t)dt.getByte() << 16) |
+                     ((int64_t)(uint32_t)dt.getBit() << 8) | (uint32_t)dt.getWidth();
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(
+        op, resTy, rewriter.getIntegerAttr(resTy, packed));
+    return success();
+  }
+};
+
 // MARK: GetVariableOpLowering
 
 /// Lower `scl.getvariable @name from %idb` to a 0-d i8 view of the instance
@@ -1675,7 +1860,8 @@ void SclToStdLoweringPass::runOnOperation() {
       ConstantTimeOpLowering, DataBlockOpLowering, DialectCastOpLowering,
       DivOpLowering, EndOpLowering, EqualLowering, ExpOpLowering,
       FunctionBlockOpLowering, FunctionOpLowering,
-      GetElementOpLowering, GetGlobalOpLowering, GetIndexOpLowering,
+      GetDirectOpLowering, GetElementOpLowering, GetGlobalOpLowering,
+      GetIndexOpLowering,
       GetVariableOpLowering, GreaterEqualLowering, GreaterThanLowering,
       IfThenElseOpLowering, IntegerCastOpLowering, LessEqualLowering,
       LessThanLowering, LoadOpLowering, ModOpLowering, MulOpLowering,

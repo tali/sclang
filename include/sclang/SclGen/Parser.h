@@ -1072,6 +1072,8 @@ private:
       return ParseIdentifierExpression();
     case tok_symbol:
       return ParseSymbolExpression();
+    case tok_direct_address:
+      return ParseDirectAddressExpression();
     case tok_false:
     case tok_true:
       return ParseBooleanLiteralExpression();
@@ -1137,6 +1139,116 @@ private:
 
     return std::make_unique<SimpleVariableAST>(std::move(loc), std::move(name),
                                                true);
+  }
+
+  /// Parse a directly-represented variable (memory area / DB operand):
+  ///   %I0.0, %Q0.0, %M10.3        bit access (width 1)
+  ///   %IB2, %QW4, %MB10           byte access (width 8)
+  ///   %IW0, %QW4, %MW10           word access (width 16)
+  ///   %ID0, %QD8, %MD4            double word access (width 32)
+  ///   %DB1.DBX0.0, %DB1.DBB2, %DB1.DBW4, %DB1.DBD8   DB access (db = number)
+  /// The lexer has already consumed the '%' and read the raw text (without
+  /// '%') into `getDirectAddress()`.
+  std::unique_ptr<ExpressionAST> ParseDirectAddressExpression() {
+    auto loc = lexer.getLastLocation();
+
+    std::string text(lexer.getDirectAddress());
+    lexer.consume(tok_direct_address);
+
+    std::string upperStr = llvm::StringRef(text).upper();
+    llvm::StringRef upper(upperStr);
+    size_t pos = 0;
+    auto fail = [&]() -> std::unique_ptr<ExpressionAST> {
+      std::string ctx = "like %I0.0 or %DB1.DBW4, got '%" + text + "'";
+      return parseError<ExpressionAST>("valid direct address", ctx);
+    };
+    auto parseNum = [&](int32_t &v) -> bool {
+      if (pos >= upper.size() || !isdigit(upper[pos]))
+        return false;
+      int64_t n = 0;
+      while (pos < upper.size() && isdigit(upper[pos])) {
+        n = n * 10 + (upper[pos] - '0');
+        if (n > INT32_MAX)
+          return false;
+        ++pos;
+      }
+      v = (int32_t)n;
+      return true;
+    };
+
+    std::string area;
+    int32_t db = 0, byte = 0, bit = 0, width = 1;
+    if (upper.startswith("DB")) {
+      // %DBn.DB{X,B,W,D}byte[.bit]
+      area = "DB";
+      pos = 2;
+      if (!parseNum(db))
+        return fail();
+      if (pos >= upper.size() || upper[pos] != '.')
+        return fail();
+      ++pos;
+      if (!upper.consume_front("DB"))
+        return fail();
+      if (pos >= upper.size())
+        return fail();
+      switch (upper[pos++]) {
+      case 'X': width = 1; break;
+      case 'B': width = 8; break;
+      case 'W': width = 16; break;
+      case 'D': width = 32; break;
+      default: return fail();
+      }
+      if (!parseNum(byte))
+        return fail();
+      if (pos < upper.size()) {
+        // only bit access (DBX) takes a bit number
+        if (width != 1 || upper[pos] != '.')
+          return fail();
+        ++pos;
+        if (!parseNum(bit))
+          return fail();
+      } else if (width == 1) {
+        return fail(); // %DBn.DBXbyte requires a bit number
+      }
+      if (pos != upper.size())
+        return fail();
+    } else {
+      // %<I|Q|M|T|C>[B|W|D]byte[.bit]
+      if (upper.empty())
+        return fail();
+      char a = upper[0];
+      pos = 1;
+      if (a == 'I' || a == 'Q' || a == 'M' || a == 'T' || a == 'C')
+        area = std::string(1, a);
+      else
+        return fail();
+      if (pos < upper.size() &&
+          (upper[pos] == 'B' || upper[pos] == 'W' || upper[pos] == 'D')) {
+        switch (upper[pos++]) {
+        case 'B': width = 8; break;
+        case 'W': width = 16; break;
+        case 'D': width = 32; break;
+        }
+        if (!parseNum(byte) || pos != upper.size())
+          return fail();
+      } else {
+        width = 1;
+        if (!parseNum(byte))
+          return fail();
+        if (pos >= upper.size() || upper[pos] != '.')
+          return fail(); // plain %I0 without a bit is not valid
+        ++pos;
+        if (!parseNum(bit) || pos != upper.size())
+          return fail();
+      }
+    }
+    if (bit > 7)
+      return parseError<ExpressionAST>("bit number in 0..7",
+                                        "in direct address");
+
+    return std::make_unique<DirectVariableAST>(std::move(loc), std::move(text),
+                                               std::move(area), db, byte, bit,
+                                               width);
   }
 
   std::unique_ptr<ExpressionAST> ParseBooleanLiteralExpression() {

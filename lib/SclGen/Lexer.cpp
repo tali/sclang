@@ -275,6 +275,8 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &s, Token token) {
     return s << "<string literal>";
   case tok_time_literal:
     return s << "<time literal>";
+  case tok_direct_address:
+    return s << "<direct address>";
 
     // errors
   case tok_error_symbol:

@@ -23,6 +23,7 @@
 #include "sclang/SclDialect/Dialect.h"
 #include "sclang/SclGen/MLIRGen.h"
 #include "sclang/SclGen/Parser.h"
+#include "sclang/Runtime/Runtime.h"
 #include "sclang/SclTransforms/Passes.h"
 #include <memory>
 
@@ -48,6 +49,10 @@
 #include "mlir/Transforms/Passes.h"
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ExecutionEngine/Orc/Core.h"
+#include "llvm/ExecutionEngine/Orc/Mangling.h"
+#include "llvm/ExecutionEngine/Orc/Shared/ExecutorAddress.h"
+#include "llvm/ExecutionEngine/Orc/Shared/ExecutorSymbolDef.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorOr.h"
@@ -97,6 +102,14 @@ static cl::opt<enum Action> emitAction(
     cl::values(clEnumValN(RunJIT, "jit", "run the code")));
 
 static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
+
+/// Size of a simulated memory area in bytes, e.g. `--area-size M=1024`
+/// (areas I/Q/M/T/C; DB areas grow on demand).
+static cl::list<std::string> areaSizes(
+    "area-size",
+    cl::desc("Set the size in bytes of a simulated memory area, e.g. "
+             "--area-size M=1024"),
+    cl::value_desc("AREA=SIZE"));
 
 /// Returns a SCL AST resulting from parsing the file or a nullptr on error.
 std::unique_ptr<sclang::ModuleAST> parseInputFile(llvm::StringRef filename) {
@@ -232,6 +245,48 @@ int dumpLLVMIR(mlir::ModuleOp module) {
   return 0;
 }
 
+/// Bind the runtime C ABI (ADR 002) to the JIT: by default the simulation
+/// runtime linked into this binary; a host process can redirect the calls by
+/// registering an SclRtVTable via scl_rt_register().
+static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
+  engine.registerSymbols([](llvm::orc::MangleAndInterner mangle) {
+    llvm::orc::SymbolMap map;
+    auto add = [&](const char *name, void *addr) {
+      map[mangle(name)] = llvm::orc::ExecutorSymbolDef(
+          llvm::orc::ExecutorAddr::fromPtr(addr),
+          llvm::JITSymbolFlags::Exported);
+    };
+    add("scl_rt_read", (void *)&scl_rt_read);
+    add("scl_rt_write", (void *)&scl_rt_write);
+    add("scl_rt_read_bit", (void *)&scl_rt_read_bit);
+    add("scl_rt_write_bit", (void *)&scl_rt_write_bit);
+    add("scl_rt_update_inputs", (void *)&scl_rt_update_inputs);
+    add("scl_rt_update_outputs", (void *)&scl_rt_update_outputs);
+    add("scl_rt_cycle", (void *)&scl_rt_cycle);
+    return map;
+  });
+}
+
+/// Apply the `--area-size AREA=SIZE` options to the simulation runtime.
+static void configureSimRuntime() {
+  scl_rt_sim_reset();
+  for (const auto &spec : areaSizes) {
+    auto eq = spec.find('=');
+    if (eq == std::string::npos || eq == 0) {
+      llvm::errs() << "invalid --area-size '" << spec << "', expected AREA=SIZE\n";
+      continue;
+    }
+    llvm::StringRef area(spec.data(), eq);
+    auto areaCode = mlir::scl::DirectType::areaFromName(area.upper());
+    if (!areaCode) {
+      llvm::errs() << "invalid --area-size area '" << spec << "'\n";
+      continue;
+    }
+    uint64_t size = std::strtoull(spec.c_str() + eq + 1, nullptr, 0);
+    scl_rt_sim_set_area_size((uint8_t)*areaCode, size);
+  }
+}
+
 int runJit(mlir::ModuleOp module) {
   // Initialize LLVM targets.
   llvm::InitializeNativeTarget();
@@ -260,6 +315,10 @@ int runJit(mlir::ModuleOp module) {
   auto maybeEngine = mlir::ExecutionEngine::create(module, engineOptions);
   assert(maybeEngine && "failed to construct an execution engine");
   auto &engine = maybeEngine.get();
+
+  // Bind the runtime C ABI (ADR 002) and apply --area-size options.
+  configureSimRuntime();
+  bindRuntimeSymbols(*engine);
 
   // Invoke the JIT-compiled function.
   auto invocationResult = engine->invoke("OB1");

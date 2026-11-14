@@ -24,12 +24,17 @@
 
 #include "mlir/IR/Dialect.h"
 
+#include "llvm/ADT/StringRef.h"
+
+#include <optional>
+
 namespace mlir {
 namespace scl {
 namespace detail {
 struct AddressTypeStorage;
 struct ArrayTypeStorage;
 struct BitWidthStorage;
+struct DirectTypeStorage;
 struct InstanceDbTypeStorage;
 struct StructTypeStorage;
 } // end namespace detail
@@ -167,6 +172,50 @@ class TimeOfDayType
     : public mlir::Type::TypeBase<TimeOfDayType, mlir::Type, mlir::TypeStorage> {
 public:
   using Base::Base;
+};
+
+/// Area of a directly-represented variable (S7 process image / data block).
+/// The enum values are the ASCII letters used in SCL (`%I`, `%Q`, ...) and
+/// in the runtime C ABI (ADR 002).
+enum class DirectArea : uint8_t {
+  Input = 'I',     // %I / AWL E
+  Output = 'Q',    // %Q / AWL A
+  Marker = 'M',    // %M / AWL M
+  DataBlock = 'D', // %DBn / AWL DBn (db = DB number)
+  Timer = 'T',     // %T / AWL T
+  Counter = 'C',   // %C / AWL Z
+};
+
+/// This class defines the SCL type of a directly-represented variable, e.g.
+/// `%I0.0`, `%MW10` or `%DB1.DBW4`. Printed as
+/// `!scl.direct<M, 0, 10, 3, 1>` = area, db, byte, bit, width-in-bits.
+/// Loads/stores through `address<direct<...>>` lower to runtime calls
+/// (ADR 002), never to inline memref access.
+class DirectType : public mlir::Type::TypeBase<DirectType, mlir::Type,
+                                               detail::DirectTypeStorage> {
+public:
+  using Base::Base;
+
+  /// Create a direct type. `width` is the access width in bits
+  /// (1 = bit, 8 = byte, 16 = word, 32 = dword).
+  static DirectType get(mlir::MLIRContext *ctx, DirectArea area, int32_t db,
+                        int32_t byte, int32_t bit, int32_t width);
+
+  DirectArea getArea() const;
+  int32_t getDb() const;
+  int32_t getByte() const;
+  int32_t getBit() const;
+  int32_t getWidth() const;
+
+  /// The SCL value type of a load from this address: bool for bit access,
+  /// otherwise an integer of the access width.
+  mlir::Type getValueType() const;
+
+  /// The area name used in SCL/AWL source and in the MLIR type syntax
+  /// ("I", "Q", "M", "DB", "T", "C").
+  static llvm::StringRef areaName(DirectArea area);
+  /// Parse an area name; nullopt if not a valid area.
+  static std::optional<DirectArea> areaFromName(llvm::StringRef name);
 };
 
 } // end namespace scl

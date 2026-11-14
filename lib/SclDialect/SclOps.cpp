@@ -775,6 +775,66 @@ void GetVariableOp::getAsmResultNames(
   setNameFn(getResult(), getSymName());
 }
 
+// MARK: GetDirectOp
+
+void GetDirectOp::build(OpBuilder &builder, OperationState &state,
+                        DirectArea area, int32_t db, int32_t byte, int32_t bit,
+                        int32_t width) {
+  auto directTy = DirectType::get(builder.getContext(), area, db, byte, bit,
+                                  width);
+  build(builder, state, AddressType::get(directTy),
+        builder.getStringAttr(DirectType::areaName(area)),
+        builder.getI32IntegerAttr(db), builder.getI32IntegerAttr(byte),
+        builder.getI32IntegerAttr(bit), builder.getI32IntegerAttr(width));
+}
+
+LogicalResult GetDirectOp::verify() {
+  auto directTy = getResult().getType()
+                      .dyn_cast<AddressType>()
+                      .getElementType()
+                      .dyn_cast<DirectType>();
+  if (!directTy)
+    return emitOpError("result must be an address of !scl.direct");
+  auto area = DirectType::areaFromName(getArea());
+  if (!area || *area != directTy.getArea() || getDb() != directTy.getDb() ||
+      getByte() != directTy.getByte() || getBit() != directTy.getBit() ||
+      getWidth() != directTy.getWidth())
+    return emitOpError("attributes do not match the result !scl.direct type");
+  if (directTy.getWidth() != 1 && directTy.getWidth() != 8 &&
+      directTy.getWidth() != 16 && directTy.getWidth() != 32)
+    return emitOpError("width must be 1, 8, 16 or 32 bits");
+  if (directTy.getBit() < 0 || directTy.getBit() > 7)
+    return emitOpError("bit must be in 0..7");
+  return success();
+}
+
+ParseResult GetDirectOp::parse(OpAsmParser &parser, OperationState &state) {
+  // getdirect ::= `getdirect` area `,` int `,` int `,` int `,` int `:` type
+  StringRef area;
+  int32_t db, byte, bit, width;
+  Type type;
+  if (parser.parseKeyword(&area) || parser.parseComma() ||
+      parser.parseInteger(db) || parser.parseComma() ||
+      parser.parseInteger(byte) || parser.parseComma() ||
+      parser.parseInteger(bit) || parser.parseComma() ||
+      parser.parseInteger(width) || parser.parseColon() ||
+      parser.parseType(type))
+    return failure();
+  auto &builder = parser.getBuilder();
+  state.addAttribute("area", builder.getStringAttr(area));
+  state.addAttribute("db", builder.getI32IntegerAttr(db));
+  state.addAttribute("byte", builder.getI32IntegerAttr(byte));
+  state.addAttribute("bit", builder.getI32IntegerAttr(bit));
+  state.addAttribute("width", builder.getI32IntegerAttr(width));
+  state.addTypes(type);
+  return success();
+}
+
+void GetDirectOp::print(OpAsmPrinter &printer) {
+  printer << ' ' << getArea() << ", " << getDb() << ", " << getByte() << ", "
+          << getBit() << ", " << getWidth() << " : " << getResult().getType();
+}
+
 // MARK: IntegerCastOp
 
 /// Returns true if the given set of input and result types are compatible with

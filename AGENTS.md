@@ -17,11 +17,12 @@ one-line pointer here.
 ## Documentation
 
 - `docs/decisions/` — ADRs (Context/Decision/Consequences + Status/Date) for
-  hard-to-reverse decisions: 001 big-endian storage, 002 runtime C ABI
-  (sim vs host), 003 AWL as a parallel dialect converging at std IR.
-- `docs/design/` — evolving design plans: memory-areas, awl-frontend,
-  scl-to-awl. Update these when the plan changes; add new ADRs when a decision
-  becomes fixed.
+  hard-to-reverse decisions: 001 big-endian storage (implemented), 002 runtime
+  C ABI (sim vs host; sim implemented), 003 AWL as a parallel dialect
+  converging at std IR.
+- `docs/design/` — evolving design plans: memory-areas (phase 1 implemented),
+  awl-frontend, scl-to-awl. Update these when the plan changes; add new ADRs
+  when a decision becomes fixed.
 - README.md is user-facing (status + build); do not put design detail there.
 - In-code rationale lives next to the code: `.td` description fields, and the
   runtime ABI contract in the header comments of `include/sclang/Runtime/Runtime.h`.
@@ -31,15 +32,22 @@ one-line pointer here.
 ```
 .scl ──> sclang-gen (SclGen: Lexer → Parser → AST → MLIRGen) ──> scl dialect ops
       ──> LowerToStd pass (lib/SclTransforms/LowerToStd.cpp, partial conversion)
-      ──> func/arith/memref/scf/cf
+      ──> func/arith/memref/scf/cf (+ calls to the runtime C ABI for % areas)
       ──> sclang (sclang/LowerToLLVM.cpp: scf→cf, memref→llvm, arith/func/cf→llvm)
-      ──> LLVM IR / ExecutionEngine JIT
+      ──> LLVM IR / ExecutionEngine JIT (sim runtime bound via registerSymbols)
 ```
 
 - `sclang-gen --emit=mlir` prints unlowered scl-dialect IR; `--emit=mlir-std` runs LowerToStd.
 - `sclang --emit=jit` runs the full pipeline and JIT-executes. The JIT entry point is
-  the `_mlir_ciface_OB1` wrapper, which calls `function OB1` (see test/sclang/jit.scl).
+  the `_mlir_ciface_OB1` wrapper (`engine->invoke("OB1")` resolves
+  `_mlir_ciface_OB1`), which calls `function OB1` (see test/sclang/jit.scl) —
+  JIT tests must define that wrapper.
 - `--opt` enables canonicalizer/CSE between stages.
+- Memory areas: the JIT binds `@scl_rt_*` to the sim runtime
+  (`lib/Runtime/SimRuntime.cpp`) via `ExecutionEngine::registerSymbols`;
+  `--area-size M=1024` configures simulated area sizes (default 65536 bytes,
+  OOB aborts; DBs grow lazily). A host redirects calls with
+  `scl_rt_register(&vtable)` (ADR 002).
 
 ## LLVM version
 
@@ -80,8 +88,13 @@ has no `\b` — use python3 for regex edits.
 - RUN conventions: `sclang-gen --emit=mlir-std %s | FileCheck %s` for lowering tests,
   `sclang --opt --emit=jit %s 2>&1 | FileCheck %s` for JIT tests.
 - SSA names print as `%alloca`, `%reinterpret_cast`, `%0`… — match with
-  `%[a-z_0-9]+` / `%[0-9]+`, not literal names.
-- 62 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, sclang JIT).
+  `%[a-z_0-9]+` / `%[0-9]+`, not literal names. FileCheck does NOT strip `//`
+  comments from CHECK lines — never put `// ...` inside a CHECK pattern.
+  Constants are hoisted to the top of the block by canonicalizer/CSE, so check
+  `arith.constant` lines with CHECK-DAG, not ordered CHECK.
+- 67 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, sclang JIT),
+  incl. direct_address (Parse), direct (MLIR), direct + big_endian
+  (SclTransforms), jit_areas (JIT).
 
 ## Key design decisions (do not regress)
 
@@ -151,12 +164,52 @@ has no `\b` — use python3 for regex edits.
 - `--emit=mlir-std` always runs canonicalizer+CSE after LowerToStd, so
   single-predecessor blocks (e.g. a forward goto) are folded away; test irreducible
   CFGs (backward gotos) if you want `cf.br` to survive in CHECK lines.
+- **Big-endian storage (ADR 001, implemented)**: byte `i` of an N-byte value in a
+  byte buffer holds bits `8*(N-1-i)..` (most significant byte first, S7 layout).
+  Applied in `loadFromByteBuffer`/`storeToByteBuffer`, in the IDB cold-start
+  initializer baking (`DataBlockOpLowering`), and in the sim runtime's
+  `scl_rt_read`/`scl_rt_write`. Verified by `test/SclTransforms/big_endian.scl`
+  and `test/sclang/jit_areas.scl`.
+- **Direct addresses / memory areas (phase 1 of docs/design/memory-areas.md)**:
+  - `!scl.direct<area, db, byte, bit, width>` type (area letters `I`/`Q`/`M`/`DB`/
+    `T`/`C` as ASCII codes in `DirectArea`; width in bits 1/8/16/32) and the
+    `scl.getdirect` op, printed `scl.getdirect M, 0, 10, 3, 1 :
+    !scl.address<!scl.direct<M, 0, 10, 3, 1>>` (custom parser/printer in
+    SclOps.cpp; verifier ties attrs to the result type). Load value type =
+    bool for width 1, else integer of the width (`DirectType::getValueType`).
+  - Lexer: `%…` is one `tok_direct_address` token (raw text without `%`);
+    `Parser::ParseDirectAddressExpression` parses `%I0.0`, `%IB2`, `%IW4`,
+    `%ID0`, `%DB1.DBX0.0`…`%DB1.DBD8` into a `DirectVariableAST`. Plain `%I0`
+    without a bit number is a parse error; `%T`/`%C` parse but MLIRGen rejects
+    them ("timers/counters not yet supported").
+  - LowerToStd: `address<direct<…>>` converts to a packed-i64 placeholder
+    (never used); `scl.load`/`scl.store` through a direct address lower to
+    `@scl_rt_read/write[_bit](area: i8, db: i32, byteOff: i32, widthBytes|bit:
+    i8[, value: i64])` — private `func.func` declarations are inserted at
+    module start on demand (`getOrInsertRtFunc`). `scl.getdirect` lowers to an
+    `arith.constant` i64 packing the fields.
+  - OB scan cycle: `organization_block` sets the `scl.organization_block` unit
+    attr on its `scl.function` (prints as `attributes {scl.organization_block}`);
+    FunctionOpLowering emits `@scl_rt_update_inputs()` at entry and
+    `@scl_rt_update_outputs()` before every `scl.return`.
+  - Sim runtime: `include/sclang/Runtime/Runtime.h` (fixed C ABI, ADR 002) +
+    `lib/Runtime/SimRuntime.cpp` (CMake target `SclRuntime`). The driver binds
+    the JIT symbols with `ExecutionEngine::registerSymbols` — in LLVM 17 that
+    is `llvm::JITSymbolFlags` (NOT `llvm::orc::JITSymbolFlags`) and
+    `llvm::orc::ExecutorAddr::fromPtr`. Host integration: `scl_rt_register()`
+    installs an `SclRtVTable` that the sim forwards to.
 
 ## Known gaps (parsed but not lowered / not code-generated)
 
 Planned next features (designs in `docs/design/`, ADRs in `docs/decisions/`):
-memory areas (`%I`/`%Q`/`%M`/`%DB…`) with runtime support (sim + host), the AWL
-frontend, and the SCL→AWL text backend.
+the AWL frontend and the SCL→AWL text backend, host-process runtime binding
+via driver flags (`--runtime=host` / `--runtime-lib`; the `SclRtVTable`
+mechanism in Runtime.h already works), timers/counters (`%T`/`%C`) with
+`scl_rt_cycle`.
+
+Memory areas `%I`/`%Q`/`%M`/`%DB…` are implemented (phase 1, see above):
+`!scl.direct` type, `scl.getdirect`, `%`-address parsing, lowering to the
+`scl_rt_*` C ABI, sim runtime + JIT binding, OB scan-cycle hooks, big-endian.
 
 Remaining technical gaps:
 

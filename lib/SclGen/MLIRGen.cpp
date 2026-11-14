@@ -340,10 +340,14 @@ private:
 
   mlir::Operation *mlirGen(const OrganizationBlockAST *ob) {
     // An organization block is an entry point without parameters or return
-    // value: model it as a void function.
-    return mlirGenFunctionLike(ob->getIdentifier(), builder.getNoneType(),
-                               ob->getDeclarations(), ob->getCode(),
-                               loc(ob->loc()));
+    // value: model it as a void function. Mark it so the lowering can emit
+    // the scan-cycle hooks (scl_rt_update_inputs/outputs, ADR 002).
+    auto fn = mlirGenFunctionLike(ob->getIdentifier(), builder.getNoneType(),
+                                  ob->getDeclarations(), ob->getCode(),
+                                  loc(ob->loc()));
+    if (fn)
+      fn->setAttr("scl.organization_block", builder.getUnitAttr());
+    return fn;
   }
 
   FunctionOp mlirGen(const FunctionAST *func) {
@@ -724,6 +728,7 @@ private:
         .Case<StringConstantAST>([&](auto expr) { return mlirGen(expr); })
         .Case<TimeConstantAST>([&](auto expr) { return mlirGen(expr); })
         .Case<SimpleVariableAST>([&](auto expr) { return mlirGen(expr); })
+        .Case<DirectVariableAST>([&](auto expr) { return mlirGen(expr); })
         .Case<IndexedVariableAST>([&](auto expr) { return mlirGen(expr); })
         .Case<BinaryExpressionAST>([&](auto expr) { return mlirGen(expr); })
         .Case<UnaryExpressionAST>([&](auto expr) { return mlirGen(expr); })
@@ -735,6 +740,17 @@ private:
   }
 
   mlir::Value mlirGenRValue(const ExpressionAST *expr) {
+    // A direct address (memory area / DB) loads with the value type of the
+    // access width (bool for bit access, else an integer of that width).
+    if (auto *dir = llvm::dyn_cast<DirectVariableAST>(expr)) {
+      auto addr = mlirGen(dir);
+      if (!addr)
+        return nullptr;
+      auto directTy = addr.getType().cast<AddressType>()
+                          .getElementType().cast<DirectType>();
+      return builder.create<LoadOp>(loc(expr->loc()), directTy.getValueType(),
+                                    addr);
+    }
     // FB/struct members are addressed as i8 views; load with the declared
     // member type so the value has the right type.
     if (auto *var = llvm::dyn_cast<SimpleVariableAST>(expr)) {
@@ -1003,6 +1019,26 @@ private:
     } else {
       return mlirGenVariable(location, name);
     }
+  }
+
+  /// Codegen a directly-represented variable (memory area / DB operand,
+  /// e.g. `%I0.0`, `%MW10`, `%DB1.DBW4`) to a `scl.getdirect` address.
+  mlir::Value mlirGen(const DirectVariableAST *expr) {
+    auto location = loc(expr->loc());
+    auto area = DirectType::areaFromName(expr->getArea());
+    if (!area) {
+      emitError(location) << "unknown direct address area '" << expr->getArea()
+                          << "'";
+      return nullptr;
+    }
+    if (*area == DirectArea::Timer || *area == DirectArea::Counter) {
+      emitError(location) << "timers/counters (%" << expr->getText()
+                          << ") are not yet supported";
+      return nullptr;
+    }
+    return builder.create<GetDirectOp>(location, *area, expr->getDb(),
+                                       expr->getByte(), expr->getBit(),
+                                       expr->getWidth());
   }
 
   mlir::Value mlirGen(const IndexedVariableAST *expr) {

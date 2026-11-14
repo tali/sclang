@@ -1,0 +1,20 @@
+// RUN: sclang-gen --emit=ast %s | FileCheck %s
+
+// Directly-represented variables (memory areas / DB operands).
+function OB1 : int
+begin
+  // CHECK: ValueAssignment
+  // CHECK: BinaryExpression :=
+  // CHECK: DirectVariable %Q0.0
+  %Q0.0 := TRUE;
+  // CHECK: DirectVariable %MB10
+  %MB10 := 16#FF;
+  // CHECK: DirectVariable %IW4
+  %IW4 := %ID0;
+  // CHECK: DirectVariable %DB1.DBX0.0
+  %DB1.DBX0.0 := FALSE;
+  // CHECK: DirectVariable %DB2.DBW4
+  x := %DB2.DBW4;
+  // CHECK: DirectVariable %DB3.DBD8
+  y := %DB3.DBD8;
+end_function

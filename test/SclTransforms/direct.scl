@@ -1,0 +1,52 @@
+// RUN: sclang-gen --emit=mlir-std %s | FileCheck %s
+
+// Directly-represented variables lower to runtime C ABI calls (ADR 002);
+// the OB gets the scan-cycle hooks at entry/exit.
+organization_block OB1
+var_temp
+  x : int;
+end_var
+begin
+  // CHECK-DAG: func.func private @scl_rt_update_inputs()
+  // CHECK-DAG: func.func private @scl_rt_update_outputs()
+  // CHECK-DAG: func.func private @scl_rt_read(i8, i32, i32, i8) -> i64
+  // CHECK-DAG: func.func private @scl_rt_write(i8, i32, i32, i8, i64)
+  // CHECK-DAG: func.func private @scl_rt_read_bit(i8, i32, i32, i8) -> i1
+  // CHECK-DAG: func.func private @scl_rt_write_bit(i8, i32, i32, i8, i1)
+  %Q0.0 := TRUE;
+  %MW20 := 258;
+  x := %DB1.DBW4;
+  %DB2.DBB1 := %IB3;
+  IF %I0.0 THEN
+    x := 1;
+  END_IF;
+end_organization_block
+
+// CHECK: func.func @OB1() {
+// area/offset constants (hoisted to the top of the block)
+// CHECK-DAG: arith.constant 81 : i8
+// CHECK-DAG: arith.constant 77 : i8
+// CHECK-DAG: arith.constant 73 : i8
+// CHECK-DAG: arith.constant 68 : i8
+// CHECK-DAG: arith.constant 20 : i32
+// CHECK-DAG: arith.constant 4 : i32
+// CHECK-DAG: arith.constant 3 : i32
+// CHECK-DAG: arith.constant 1 : i32
+// CHECK-DAG: arith.constant 2 : i32
+
+// scan-cycle begin
+// CHECK: call @scl_rt_update_inputs() : () -> ()
+// bit store to %Q0.0
+// CHECK: call @scl_rt_write_bit(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) : (i8, i32, i32, i8, i1) -> ()
+// word store to %MW20
+// CHECK: call @scl_rt_write(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) : (i8, i32, i32, i8, i64) -> ()
+// word load from %DB1.DBW4
+// CHECK: %{{.*}} = call @scl_rt_read(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) : (i8, i32, i32, i8) -> i64
+// byte load from %IB3
+// CHECK: %{{.*}} = call @scl_rt_read(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) : (i8, i32, i32, i8) -> i64
+// byte store to %DB2.DBB1
+// CHECK: call @scl_rt_write(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) : (i8, i32, i32, i8, i64) -> ()
+// bit load from %I0.0
+// CHECK: %{{.*}} = call @scl_rt_read_bit(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) : (i8, i32, i32, i8) -> i1
+// scan-cycle end
+// CHECK: call @scl_rt_update_outputs() : () -> ()

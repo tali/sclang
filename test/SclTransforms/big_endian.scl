@@ -1,0 +1,29 @@
+// RUN: sclang-gen --emit=mlir-std %s | FileCheck %s
+
+// Multi-byte values in byte buffers are stored big-endian (ADR 001): byte 0
+// of the value is the most significant byte.
+function_block fb1
+var_input
+  v : int;
+end_var
+var
+  w : int;
+end_var
+begin
+  w := v;
+end_function_block
+
+// load of v: byte[0] is shifted left by 8 (it is the high byte) ...
+// CHECK: %[[B0:.*]] = memref.load %{{.*}}[%{{.*}}] : memref<?xi8, strided<[1], offset: ?>>
+// CHECK: %[[E0:.*]] = arith.extui %[[B0]] : i8 to i16
+// CHECK: %[[S:.*]] = arith.shli %[[E0]], %{{.*}} : i16
+// CHECK: %[[B1:.*]] = memref.load %{{.*}}[%{{.*}}] : memref<?xi8, strided<[1], offset: ?>>
+// CHECK: %[[E1:.*]] = arith.extui %[[B1]] : i8 to i16
+// CHECK: %[[V:.*]] = arith.ori %[[S]], %[[E1]] : i16
+// store of w: byte[0] gets value >> 8 (high byte first) ...
+// CHECK: %[[H:.*]] = arith.shrui %[[V]], %{{.*}} : i16
+// CHECK: %[[HB:.*]] = arith.trunci %[[H]] : i16 to i8
+// CHECK: memref.store %[[HB]], %{{.*}}[%{{.*}}] : memref<?xi8, strided<[1], offset: ?>>
+// ... then the low byte.
+// CHECK: %[[LB:.*]] = arith.trunci %[[V]] : i16 to i8
+// CHECK: memref.store %[[LB]], %{{.*}}[%{{.*}}] : memref<?xi8, strided<[1], offset: ?>>

@@ -522,6 +522,137 @@ int LogicalType::getWidth() { return getImpl()->width; }
 } // end namespace scl
 } // end namespace mlir
 
+// MARK: DirectType
+
+namespace mlir {
+namespace scl {
+namespace detail {
+
+/// This class represents the internal storage of the SCL `DirectType`.
+struct DirectTypeStorage : public mlir::TypeStorage {
+  /// The `KeyTy` is a required type that provides an interface for the storage
+  /// instance, used to unique the type structurally.
+  struct KeyTy {
+    DirectArea area;
+    int32_t db, byte, bit, width;
+    bool operator==(const KeyTy &key) const {
+      return area == key.area && db == key.db && byte == key.byte &&
+             bit == key.bit && width == key.width;
+    }
+  };
+
+  DirectTypeStorage(DirectArea area, int32_t db, int32_t byte, int32_t bit,
+                    int32_t width)
+      : key{area, db, byte, bit, width} {}
+
+  bool operator==(const KeyTy &key) const { return this->key == key; }
+
+  static llvm::hash_code hashKey(const KeyTy &key) {
+    return llvm::hash_combine((uint8_t)key.area, key.db, key.byte, key.bit,
+                              key.width);
+  }
+
+  static DirectTypeStorage *construct(mlir::TypeStorageAllocator &allocator,
+                                      const KeyTy &key) {
+    return new (allocator.allocate<DirectTypeStorage>())
+        DirectTypeStorage(key.area, key.db, key.byte, key.bit, key.width);
+  }
+
+  KeyTy key;
+};
+} // end namespace detail
+} // end namespace scl
+} // end namespace mlir
+
+DirectType DirectType::get(mlir::MLIRContext *ctx, DirectArea area, int32_t db,
+                           int32_t byte, int32_t bit, int32_t width) {
+  return Base::get(ctx, detail::DirectTypeStorage::KeyTy{area, db, byte, bit,
+                                                          width});
+}
+
+DirectArea DirectType::getArea() const { return getImpl()->key.area; }
+int32_t DirectType::getDb() const { return getImpl()->key.db; }
+int32_t DirectType::getByte() const { return getImpl()->key.byte; }
+int32_t DirectType::getBit() const { return getImpl()->key.bit; }
+int32_t DirectType::getWidth() const { return getImpl()->key.width; }
+
+mlir::Type DirectType::getValueType() const {
+  auto *ctx = getContext();
+  if (getWidth() == 1)
+    return LogicalType::get(ctx, 1);
+  return IntegerType::get(ctx, getWidth());
+}
+
+llvm::StringRef DirectType::areaName(DirectArea area) {
+  switch (area) {
+  case DirectArea::Input:
+    return "I";
+  case DirectArea::Output:
+    return "Q";
+  case DirectArea::Marker:
+    return "M";
+  case DirectArea::DataBlock:
+    return "DB";
+  case DirectArea::Timer:
+    return "T";
+  case DirectArea::Counter:
+    return "C";
+  }
+  llvm_unreachable("unknown DirectArea");
+}
+
+std::optional<DirectArea> DirectType::areaFromName(llvm::StringRef name) {
+  if (name == "I")
+    return DirectArea::Input;
+  if (name == "Q")
+    return DirectArea::Output;
+  if (name == "M")
+    return DirectArea::Marker;
+  if (name == "DB")
+    return DirectArea::DataBlock;
+  if (name == "T")
+    return DirectArea::Timer;
+  if (name == "C")
+    return DirectArea::Counter;
+  return std::nullopt;
+}
+
+namespace {
+
+void print(DirectType type, mlir::DialectAsmPrinter &printer) {
+  printer << "direct<" << DirectType::areaName(type.getArea()) << ", "
+          << type.getDb() << ", " << type.getByte() << ", " << type.getBit()
+          << ", " << type.getWidth() << '>';
+}
+
+/// Parse a direct type instance:
+///   direct-type ::= `direct` `<` area `,` int `,` int `,` int `,` int `>`
+mlir::Type parseDirectType(mlir::DialectAsmParser &parser) {
+  StringRef areaKw;
+  if (parser.parseLess() || parser.parseKeyword(&areaKw))
+    return Type();
+  auto area = DirectType::areaFromName(areaKw);
+  if (!area) {
+    parser.emitError(parser.getNameLoc(), "unknown direct area: ") << areaKw;
+    return Type();
+  }
+  int32_t db, byte, bit, width;
+  if (parser.parseComma() || parser.parseInteger(db) || parser.parseComma() ||
+      parser.parseInteger(byte) || parser.parseComma() ||
+      parser.parseInteger(bit) || parser.parseComma() ||
+      parser.parseInteger(width) || parser.parseGreater())
+    return Type();
+  if (width != 1 && width != 8 && width != 16 && width != 32) {
+    parser.emitError(parser.getNameLoc(),
+                     "direct width must be 1, 8, 16 or 32 bits");
+    return Type();
+  }
+  return DirectType::get(parser.getBuilder().getContext(), *area, db, byte, bit,
+                         width);
+}
+
+} // namespace
+
 // MARK: parse and print
 
 /// Parse an instance of a type registered to the SCL dialect.
@@ -538,6 +669,8 @@ mlir::Type SclDialect::parseType(mlir::DialectAsmParser &parser) const {
     return parseStructType(parser);
   if (keyword == "idb")
     return parseInstanceDbType(parser);
+  if (keyword == "direct")
+    return parseDirectType(parser);
 
   if (keyword == "char")
     return IntegerType::get(getContext(), 8);
@@ -581,6 +714,7 @@ void SclDialect::printType(mlir::Type type,
       .Case<ArrayType>([&](ArrayType type) { print(type, printer); })
       .Case<DateType>([&](DateType) { printer << "date"; })
       .Case<DateAndTimeType>([&](DateAndTimeType) { printer << "date_and_time"; })
+      .Case<DirectType>([&](DirectType type) { print(type, printer); })
       .Case<InstanceDbType>([&](InstanceDbType type) { print(type, printer); })
       .Case<IntegerType>([&](IntegerType type) {
         switch (type.getWidth()) {
@@ -629,6 +763,7 @@ void SclDialect::registerTypes() {
   addTypes<ArrayType>();
   addTypes<DateType>();
   addTypes<DateAndTimeType>();
+  addTypes<DirectType>();
   addTypes<InstanceDbType>();
   addTypes<IntegerType>();
   addTypes<LogicalType>();

@@ -1,7 +1,7 @@
 # ADR 001: Big-endian storage for multi-byte values
 
-- **Status**: accepted (planned; not yet implemented)
-- **Date**: 2025 (review session)
+- **Status**: accepted and implemented
+- **Date**: 2025 (review session; implemented in the memory-areas change)
 
 ## Context
 
@@ -25,8 +25,14 @@ the byte-assembly helpers (byte `i` of an N-byte value lives at offset
 
 ## Consequences
 
-- `loadFromByteBuffer`/`storeToByteBuffer` and the runtime's read/write of
-  word/dword areas all use big-endian.
-- Existing lit tests that check byte-assembly CHECK lines must be updated.
+- `loadFromByteBuffer`/`storeToByteBuffer` in `lib/SclTransforms/LowerToStd.cpp`
+  assemble byte `i` of an N-byte value at offset `i` as bits `8*(N-1-i)..`
+  (most significant byte first); the FB cold-start initializer baked into the
+  IDB global (`DataBlockOpLowering`) is byte-swapped the same way, and the
+  runtime's `scl_rt_read`/`scl_rt_write` (`lib/Runtime/SimRuntime.cpp`) use
+  big-endian as well.
+- Verified by `test/SclTransforms/big_endian.scl` (IR-level) and
+  `test/sclang/jit_areas.scl` (JIT: `%MW20 := 258` makes `%MB20 = 1`,
+  `%MB21 = 2`).
 - Host-endian is only used where values never cross into S7-visible memory
   (pure SSA integers are unaffected).

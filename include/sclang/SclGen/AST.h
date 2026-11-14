@@ -62,6 +62,7 @@ public:
     Expr_StringConstant,
     Expr_TimeConstant,
     Expr_SimpleVariable,
+    Expr_DirectVariable,
     Expr_IndexedVariable,
     Expr_FunctionCall,
     Expr_Binary,
@@ -113,6 +114,37 @@ public:
   /// LLVM style RTTI
   static bool classof(const ExpressionAST *e) {
     return e->getKind() == Expr_SimpleVariable;
+  }
+};
+
+/// A directly-represented variable (memory area / DB operand), e.g. `%I0.0`,
+/// `%MW10` or `%DB1.DBW4`. Parsed into its components; the `text` is the raw
+/// source text without the leading '%'.
+class DirectVariableAST : public ExpressionAST {
+  std::string text;
+  std::string area; // "I" | "Q" | "M" | "DB" | "T" | "C"
+  int32_t db = 0;   // DB number (area "DB" only)
+  int32_t byte = 0; // byte offset within the area
+  int32_t bit = 0;  // bit within the byte (bit access, width 1)
+  int32_t width = 1; // access width in bits: 1, 8, 16, 32
+
+public:
+  DirectVariableAST(Location loc, std::string text, std::string area,
+                    int32_t db, int32_t byte, int32_t bit, int32_t width)
+      : ExpressionAST(std::move(loc), Expr_DirectVariable),
+        text(std::move(text)), area(std::move(area)), db(db), byte(byte),
+        bit(bit), width(width) {}
+
+  llvm::StringRef getText() const { return text; }
+  llvm::StringRef getArea() const { return area; }
+  int32_t getDb() const { return db; }
+  int32_t getByte() const { return byte; }
+  int32_t getBit() const { return bit; }
+  int32_t getWidth() const { return width; }
+
+  /// LLVM style RTTI
+  static bool classof(const ExpressionAST *e) {
+    return e->getKind() == Expr_DirectVariable;
   }
 };
 

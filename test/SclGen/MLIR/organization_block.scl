@@ -1,6 +1,6 @@
 // RUN: sclang-gen --emit=mlir %s | FileCheck %s
 
-// CHECK: scl.function @ob1() {
+// CHECK: scl.function @ob1() attributes {scl.organization_block} {
 organization_block ob1
 var
   x : int;

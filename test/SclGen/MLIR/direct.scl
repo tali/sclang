@@ -1,0 +1,25 @@
+// RUN: sclang-gen --emit=mlir %s | FileCheck %s
+
+function OB1 : int
+var_temp
+  x : int;
+end_var
+begin
+  // CHECK: scl.getdirect Q, 0, 0, 0, 1 : !scl.address<!scl.direct<Q, 0, 0, 0, 1>>
+  %Q0.0 := TRUE;
+  // CHECK: scl.store %{{.*}} : !scl.address<!scl.direct<Q, 0, 0, 0, 1>> = %{{.*}} : !scl.bool
+  // CHECK: scl.getdirect M, 0, 20, 0, 16 : !scl.address<!scl.direct<M, 0, 20, 0, 16>>
+  %MW20 := 258;
+  // CHECK: scl.getdirect DB, 1, 4, 0, 16 : !scl.address<!scl.direct<DB, 1, 4, 0, 16>>
+  %DB1.DBW4 := x;
+  // CHECK: scl.getdirect M, 0, 20, 0, 8 : !scl.address<!scl.direct<M, 0, 20, 0, 8>>
+  // CHECK: scl.load %{{.*}} : !scl.address<!scl.direct<M, 0, 20, 0, 8>> : !scl.char
+  x := %MB20;
+  // CHECK: scl.getdirect I, 0, 0, 0, 1 : !scl.address<!scl.direct<I, 0, 0, 0, 1>>
+  // CHECK: scl.load %{{.*}} : !scl.address<!scl.direct<I, 0, 0, 0, 1>> : !scl.bool
+  IF %I0.0 THEN
+    // CHECK: scl.getdirect DB, 1, 4, 0, 16 : !scl.address<!scl.direct<DB, 1, 4, 0, 16>>
+    // CHECK: scl.load %{{.*}} : !scl.address<!scl.direct<DB, 1, 4, 0, 16>> : !scl.int
+    x := %DB1.DBW4;
+  END_IF;
+end_function
