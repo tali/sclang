@@ -1,0 +1,31 @@
+// RUN: sclang-gen --emit=awl %s | sclang -x awl --emit=jit --dump-areas - 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// SCL -> AWL -> JIT with FC parameters: FC1(x=20, y=22) returns 42 via the
+// result slot; the same as the direct SCL -> JIT run (M[1]=42). Locals are
+// allocated after the direct %M bytes (r lives at MW2, M[3]=42).
+// CHECK: M:
+// CHECK: M[1]=42
+// CHECK: M[3]=42
+// CHECK: clock=0ms
+function FC1 : int
+var_input
+  x : int;
+  y : int;
+end_var
+begin
+  FC1 := x + y;
+end_function
+
+function OB1 : int
+var_temp
+  r : int;
+end_var
+begin
+  r := FC1(x := 20, y := 22);
+  %MW0 := r;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

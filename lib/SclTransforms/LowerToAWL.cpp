@@ -89,10 +89,21 @@ struct FuncConverter {
   Block *flat;
 
   DenseMap<Value, scl::DirectType> varDirect; // scl address -> direct type
+  // FC parameters are passed through a reserved window at the top of the M
+  // area (the AWL analog of the S7 L stack): the caller stores each argument
+  // to its slot before `UC FC n`, the FC reads its inputs from there.
+  static constexpr int32_t kParamBaseByte = 65280; // 8 bytes per param
+  static int32_t paramSlot(int i) { return kParamBaseByte + i * 8; }
+  // the FC return value is passed through this slot (just below the window)
+  static constexpr int32_t kResultByte = kParamBaseByte - 8;
+  DenseMap<Value, scl::DirectType> paramDirects; // FC input tempvar -> slot
   DenseMap<llvm::StringRef, int32_t> dbNumbers; // IDB symbol name -> DB number
   const llvm::StringMap<AwlFbLayout> *fbLayouts = nullptr;
   Value currentFbArg; // block arg holding the instance DB of the current FB
   DenseMap<Value, Value> materialized;        // scl value -> awl value
+  // FC name (uppercased) -> input parameter names in declaration order,
+  // collected before any function is erased
+  llvm::StringMap<SmallVector<std::string, 4>> fcSignatures;
   int32_t nextBit = 0;                         // M-area allocation cursor
   int labelCounter = 0;
   struct LoopCtx {
@@ -197,6 +208,60 @@ struct FuncConverter {
 
   // Materialize an scl value as an awl value, emitting producer ops at the
   // current insertion point (operands recursively first).
+  /// Emit `UC FC n`: store the arguments into the callee's parameter window
+  /// slots, then the call. If `wantResult`, load the FC's return value from
+  /// the result slot afterwards and return it.
+  Value emitCallFc(scl::CallFcOp call, bool wantResult) {
+    std::string calleeStr = llvm::StringRef(call.getCallee()).upper();
+    llvm::StringRef callee = calleeStr;
+    if (!callee.startswith("FC")) {
+      emitError(call.getLoc()) << "AWL backend only supports CALL FC n, got @"
+                               << callee;
+      return nullptr;
+    }
+    std::string calleeUp = llvm::StringRef(call.getCallee()).upper();
+    auto sigIt = fcSignatures.find(calleeUp);
+    if (sigIt != fcSignatures.end() && !call.getArguments().empty()) {
+      llvm::StringMap<unsigned> paramIndex;
+      for (auto [i, pname] : llvm::enumerate(sigIt->second))
+        paramIndex[pname] = (unsigned)i;
+      auto argNames = call.getArgNames();
+      for (auto [argVal, nameAttr] : llvm::zip(call.getArguments(), argNames)) {
+        unsigned idx = 0;
+        if (auto sa = dyn_cast<StringAttr>(nameAttr)) {
+          auto it = paramIndex.find(sa.getValue());
+          if (it != paramIndex.end())
+            idx = it->second;
+        }
+        Type vt = awlValueType(ctx, argVal.getType());
+        if (!vt) {
+          emitError(call.getLoc()) << "argument type not representable in AWL";
+          return nullptr;
+        }
+        Value v = castTo(materialize(argVal), vt);
+        if (!v)
+          return nullptr;
+        scl::DirectType dt =
+            scl::DirectType::get(ctx, scl::DirectArea::Marker, 0,
+                                 paramSlot((int)idx), 0,
+                                 vt.getIntOrFloatBitWidth());
+        b.create<awl::StoreOp>(loc, v, directValue(dt));
+      }
+    }
+    SmallVector<NamedAttribute, 1> attrs;
+    attrs.push_back(
+        NamedAttribute(strAttr("callee"), FlatSymbolRefAttr::get(ctx, callee)));
+    b.create<awl::CallOp>(loc, TypeRange{}, ValueRange{}, attrs);
+    if (wantResult) {
+      Type rt = awlValueType(ctx, call.getResult().getType());
+      scl::DirectType dt = scl::DirectType::get(
+          ctx, scl::DirectArea::Marker, 0, kResultByte, 0,
+          rt.getIntOrFloatBitWidth());
+      return b.create<awl::LoadOp>(loc, rt, directValue(dt));
+    }
+    return nullptr;
+  }
+
   Value materialize(Value v) {
     auto it = materialized.find(v);
     if (it != materialized.end())
@@ -214,7 +279,9 @@ struct FuncConverter {
                                << v.getType();
       return nullptr;
     }
-    if (auto c = dyn_cast<scl::ConstantOp>(def)) {
+    if (auto call = dyn_cast<scl::CallFcOp>(def)) {
+      r = emitCallFc(call, true);
+    } else if (auto c = dyn_cast<scl::ConstantOp>(def)) {
       Attribute attr = c.getValue();
       if (isa<StringAttr>(attr)) {
         emitError(def->getLoc()) << "string constants are not supported by "
@@ -532,7 +599,9 @@ struct FuncConverter {
     if (auto tv = dyn_cast<scl::TempVariableOp>(op)) {
       Type elem = tv.getResult().getType().cast<scl::AddressType>()
                       .getElementType();
-      scl::DirectType dt = allocDirect(elem);
+      auto pit = paramDirects.find(tv.getResult());
+      scl::DirectType dt =
+          pit != paramDirects.end() ? pit->second : allocDirect(elem);
       if (!dt)
         return failure();
       varDirect[tv.getResult()] = dt;
@@ -542,6 +611,10 @@ struct FuncConverter {
       return success(); // declaration only; the layout is precomputed
     if (isa<scl::StoreOp>(op)) {
       auto st = cast<scl::StoreOp>(op);
+      // the entry-block copy of an FC input argument: the caller already
+      // stored the value into the parameter window slot
+      if (!st.getRhs().getDefiningOp())
+        return success();
       emitStore(st.getLhs(), st.getRhs());
       return success();
     }
@@ -594,17 +667,10 @@ struct FuncConverter {
       return emitCase(c, blockLabels);
     }
     if (auto call = dyn_cast<scl::CallFcOp>(op)) {
-      std::string calleeStr = llvm::StringRef(call.getCallee()).upper();
-      llvm::StringRef callee = calleeStr;
-      if (!callee.startswith("FC")) {
-        emitError(op->getLoc()) << "AWL backend only supports CALL FC n, got @"
-                                << callee;
-        return failure();
-      }
-      SmallVector<NamedAttribute, 1> attrs;
-      attrs.push_back(NamedAttribute(
-          strAttr("callee"), FlatSymbolRefAttr::get(ctx, callee)));
-      b.create<awl::CallOp>(loc, TypeRange{}, ValueRange{}, attrs);
+      // a call whose result is used is emitted by materialize() at the use
+      // site; only emit a statement-level call when the result is unused
+      if (call->getResult(0).use_empty())
+        emitCallFc(call, false);
       return success();
     }
     if (auto call = dyn_cast<scl::CallFbOp>(op)) {
@@ -837,6 +903,18 @@ struct FuncConverter {
   }
 
   LogicalResult run(Operation *funcOp, llvm::StringRef name) {
+    // Start M-area local allocation after the bytes used by direct %M
+    // addresses in this function, so locals and directs don't collide.
+    {
+      int32_t maxBit = 0;
+      funcOp->walk([&](scl::GetDirectOp gd) {
+        if (gd.getArea() == "M") {
+          int32_t end = gd.getByte() * 8 + gd.getBit() + gd.getWidth();
+          maxBit = std::max(maxBit, end);
+        }
+      });
+      nextBit = maxBit;
+    }
     b.setInsertionPointToEnd(module.getBody());
     blockOp = b.create<awl::BlockOp>(loc, strAttr(name));
     flat = b.createBlock(&blockOp.getBody());
@@ -855,13 +933,61 @@ struct FuncConverter {
       }
       currentFbArg = body.front().getArgument(0);
     } else if (!body.front().getArguments().empty()) {
-      emitError(funcOp->getLoc())
-          << "block parameters (FC inputs) are not yet supported by the AWL "
-             "backend";
-      return failure();
+      // FC inputs: the entry block stores each block argument into its input
+      // tempvar; map the i-th such tempvar to parameter window slot i.
+      unsigned i = 0;
+      for (Operation &o : body.front()) {
+        auto st = dyn_cast<scl::StoreOp>(&o);
+        if (!st || st.getRhs().getDefiningOp() != nullptr)
+          continue;
+        auto tv = st.getLhs().getDefiningOp<scl::TempVariableOp>();
+        if (!tv)
+          continue;
+        Type elem = tv.getResult().getType().cast<scl::AddressType>()
+                        .getElementType();
+        int w = widthOf(elem);
+        if (w <= 0) {
+          emitError(funcOp->getLoc())
+              << "FC input type not representable in AWL output: " << elem;
+          return failure();
+        }
+        paramDirects[tv.getResult()] = scl::DirectType::get(
+            ctx, scl::DirectArea::Marker, 0, paramSlot((int)i), 0, w);
+        ++i;
+      }
+      if (i != body.front().getArguments().size()) {
+        emitError(funcOp->getLoc())
+            << "FC input count mismatch with block arguments";
+        return failure();
+      }
     }
     if (failed(emitRegion(body, blockLabels)))
       return failure();
+    // An FC with a return value stores it into the result slot before BE.
+    if (auto fn = dyn_cast<scl::FunctionOp>(funcOp)) {
+      auto results = fn.getFunctionType().getResults();
+      std::string fnName = llvm::StringRef(fn.getSymName()).upper();
+      bool isFc = llvm::StringRef(fnName).startswith("FC");
+      if (isFc && !results.empty() && !flat->empty() &&
+          isa<awl::BeOp>(flat->back())) {
+        Type rt = awlValueType(ctx, results[0]);
+        for (Operation &o : body.front()) {
+          auto tv = dyn_cast<scl::TempVariableOp>(&o);
+          if (tv && tv.getName() == fn.getSymName() && rt) {
+            auto dit = varDirect.find(tv.getResult());
+            if (dit != varDirect.end()) {
+              b.setInsertionPoint(&flat->back()); // before the BE
+              Value v =
+                  b.create<awl::LoadOp>(loc, rt, directValue(dit->second));
+              scl::DirectType rdt = scl::DirectType::get(
+                  ctx, scl::DirectArea::Marker, 0, kResultByte, 0,
+                  rt.getIntOrFloatBitWidth());
+              b.create<awl::StoreOp>(loc, v, directValue(rdt));
+            }
+          }
+        }
+      }
+    }
     if (flat->empty() || !isa<awl::BeOp>(flat->back()))
       b.create<awl::BeOp>(loc);
     funcOp->erase();
@@ -903,6 +1029,19 @@ struct LowerToAWLPass
           dbNumbers[n] = next++;
       }
     }
+    // FC signatures (input parameter names in declaration order), collected
+    // before any function is erased
+    llvm::StringMap<SmallVector<std::string, 4>> fcSignatures;
+    for (auto fn : module.getOps<scl::FunctionOp>()) {
+      SmallVector<std::string, 4> params;
+      for (unsigned i = 0; i < fn.getNumArguments(); ++i) {
+        if (auto na = fn.getArgAttr(i, "scl.name"))
+          params.push_back(cast<StringAttr>(na).getValue().str());
+      }
+      if (!params.empty())
+        fcSignatures[std::string(llvm::StringRef(fn.getSymName()).upper())] =
+            std::move(params);
+    }
     // FB member layouts (sequential byte offsets, as in computeFbLayouts)
     llvm::StringMap<AwlFbLayout> fbLayouts;
     for (auto fb : module.getOps<scl::FunctionBlockOp>()) {
@@ -939,6 +1078,7 @@ struct LowerToAWLPass
       FuncConverter c(&getContext(), module, op->getLoc());
       c.dbNumbers = dbNumbers;
       c.fbLayouts = &fbLayouts;
+      c.fcSignatures = fcSignatures;
       if (failed(c.run(op, upper))) {
         signalPassFailure();
         return;

@@ -6,9 +6,9 @@
   test/SclTransforms/to_awl{,_areas,_fb}.scl, test/AwlGen/roundtrip.awl,
   test/sclang/jit_awl_backend.scl (SCL -> AWL -> JIT gives the same memory
   writes as the SCL original).
-  Deviations/gaps: FC parameters, FB arrays/structs, strings, cross-width
-  assignments and DB initializers are rejected/dropped with an error or
-  warning; `scl.debug.print` is dropped;
+  Deviations/gaps: FB arrays/structs, strings, cross-width assignments and
+  DB initializers are rejected/dropped with an error or warning;
+  `scl.debug.print` is dropped;
   awl.cast is implicit in the mnemonic letter (not printed); bool logic is
   emitted as rlo chains (U/UN/O/ON/=) with temp bits for computed operands;
   the CASE selector is re-loaded before each compare (AWL L shifts ACC1).
@@ -42,6 +42,13 @@ round-trips validate the printer.
    - `scl.call.fb` → `CALL FB n, DB m` (db number resolved from the IDB's
      data block; FB members → `DB.DBW<byteOff>` directs on the instance DB
      inside the FB block); FCs → `UC FC n`; OB → `OB 1` wrapper.
+   - FC parameters: passed through a reserved window at the top of the M
+     area (byte 65280 + 8*i per param, return value at byte 65272) — the AWL
+     analog of the S7 L stack. The caller stores each argument to the
+     callee's param slot before `UC FC n`; the FC reads its inputs from
+     there and stores its return value to the result slot before `BE`.
+     Known limitation: all blocks share the M area (no per-block L stack),
+     so locals of different blocks alias.
    - `scl.debug.print` → no AWL equivalent; emit a comment or drop (decision).
 3. **Printer**: custom assembly per awl op emitting S7 mnemonics; canonical
    label naming (`NEXT1:`, …); operand format `E 0.0` / `MW 10` / `DB1.DBX 0.0`.

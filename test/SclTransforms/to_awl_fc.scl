@@ -1,0 +1,39 @@
+// RUN: sclang-gen --emit=awl %s | FileCheck %s
+// SCL -> AWL for FC parameters (docs/design/scl-to-awl.md): arguments are
+// passed through a reserved window at the top of the M area (the AWL analog
+// of the S7 L stack): the caller stores each argument to the callee's i-th
+// param slot (MW65280 + 8*i), the FC reads its inputs from there, and the
+// FC's return value goes through the result slot MW65272.
+// CHECK-LABEL: {{^}}FC 1
+// CHECK: L MW65280
+// CHECK: L MW65288
+// CHECK: +I
+// CHECK: T MW0
+// CHECK: L MW0
+// CHECK: T MW65272
+// CHECK: BE
+// CHECK-LABEL: {{^}}OB 1
+// CHECK: L 20
+// CHECK: T MW65280
+// CHECK: L 22
+// CHECK: T MW65288
+// CHECK: UC FC 1
+// CHECK: L MW65272
+// CHECK: T MW2
+function FC1 : int
+var_input
+  x : int;
+  y : int;
+end_var
+begin
+  FC1 := x + y;
+end_function
+
+function OB1 : int
+var_temp
+  r : int;
+end_var
+begin
+  r := FC1(x := 20, y := 22);
+  %MW0 := r;
+end_function

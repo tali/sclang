@@ -115,7 +115,7 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 94 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 96 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
   (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
   timer/timer_lower/call_fb/cc, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
@@ -125,7 +125,8 @@ has no `\b` — use python3 for regex edits.
   --dump-areas) + jit_string (string compare/copy) + jit_case_bool +
   jit_case_real (CASE on bool/real selectors) + jit_array_of_struct
   (a[i].x) in sclang; string_compare in SclGen/MLIR; array_of_struct in
-  SclTransforms; jit_fb_init (non-literal constant FB initializers) in sclang.
+  SclTransforms (to_awl_fc), SclGen/MLIR (string_compare); jit_fb_init +
+  jit_awl_fc (FC params via SCL->AWL->JIT) in sclang.
 
 ## Key design decisions (do not regress)
 
@@ -261,9 +262,29 @@ has no `\b` — use python3 for regex edits.
   compare (AWL `L` shifts ACC1 into ACC2).
   AWL parser pitfall: a label branch in the instruction loop must `continue`,
   not fall through to parseInstruction (two consecutive labels misparse).
-  AWL backend gaps: FC params, FB arrays/structs/strings, cross-width
-  assignment, DB initializers. (CALL FB n, DB m, CC and timers are done —
-  see below.)
+  AWL backend gaps: FB arrays/structs/strings, cross-width assignment, DB
+  initializers. (CALL FB n, DB m, CC, timers and FC params are done — see
+  below.)
+- **FC parameters in the SCL->AWL backend (implemented)**: passed through a
+  reserved window at the top of the M area (the AWL analog of the S7 L
+  stack): `kParamBaseByte = 65280`, 8 bytes per param; the FC return value
+  uses `kResultByte = 65272`. The caller emits `L arg; T MW<slot>` per
+  argument (mapped by name via `argNames` to the callee's `scl.name` arg
+  order, collected in `fcSignatures` BEFORE any function is erased — the
+  symbol lookup fails afterwards), then `UC FC n`, then loads the result
+  slot. The FC's input tempvars map to the param slots (`paramDirects`),
+  and the entry-block `store tempvar = blockarg` copies are skipped (the
+  caller already stored them). An FC with a result stores its output var
+  (tempvar named like the function) to the result slot before BE (insertion
+  point must be reset before the trailing `awl.be`). A `call.fc` whose
+  result is used is emitted by `materialize()` at the use site, not by
+  emitOp (which only emits statement-level calls with unused results) —
+  otherwise the call is emitted twice. AWL locals are allocated in M
+  starting AFTER the bytes used by direct %M addresses in that function
+  (nextBit initialized from a walk over GetDirectOp), so locals and %M
+  directs don't collide. Known limitation: all blocks share the M area, so
+  locals of different blocks alias each other (S7 uses a per-block L stack;
+  our param window is the only reserved region).
 - **CALL FB n, DB m + FB instance DBs (implemented)**: AWL `CALL FB n, DB m`
   / `UC FB n, DB m` -> `awl.call @FBn, db m`; an FB block lowers to
   `func.func @FBn(i32 %arg0)` where arg0 = the instance DB number, and the
@@ -339,10 +360,10 @@ has no `\b` — use python3 for regex edits.
 
 ## Known gaps (parsed but not lowered / not code-generated)
 
-AWL known gaps (both directions): CALL DB m, FC parameter passing. (IEC
-timer instructions SP/SE/SS/SV/SI, counters ZV/ZR, CALL FB n / DB m with FB
-instance DBs, and CC conditional calls are implemented — see the bullets
-above.)
+AWL known gaps (both directions): CALL DB m. (IEC timer instructions
+SP/SE/SS/SV/SI, counters ZV/ZR, CALL FB n / DB m with FB instance DBs, CC
+conditional calls, and FC params via the M param window are implemented —
+see the bullets above.)
 
 Memory areas `%I`/`%Q`/`%M`/`%DB…`/`%T`/`%C` are implemented (see above):
 `!scl.direct` type, `scl.getdirect`, `%`-address parsing, lowering to the
