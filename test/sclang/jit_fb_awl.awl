@@ -1,0 +1,22 @@
+// RUN: sclang -x awl --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// CALL FB 1, DB 2 twice: the FB increments its instance DB word 0 each
+// call, so DB2 word 0 ends at 2 (big-endian low byte at offset 1) and
+// MW0 mirrors it. Bare `DB.DBW0` inside the FB refers to the instance DB.
+// CHECK: M:
+// CHECK: M[1]=2
+// CHECK: DB2:
+// CHECK: DB2[1]=2
+// CHECK: clock=0ms
+OB 1
+  CALL FB 1, DB 2
+  CALL FB 1, DB 2
+  L DB2.DBW0
+  T MW0
+  BE
+FB 1
+  L DB.DBW0
+  L 1
+  +I
+  T DB.DBW0
+  BE

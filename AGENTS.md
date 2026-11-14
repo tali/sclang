@@ -115,12 +115,13 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 82 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 85 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
   (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
-  timer/timer_lower, to_awl + to_awl_areas (SclTransforms), jit_areas + jit_tc
-  + jit_awl (.scl/.awl cross-check) + jit_awl_backend (SCL->AWL->JIT) +
-  jit_timer (AWL timers/counters via --jit-cycles/--cycle-ms) in sclang.
+  timer/timer_lower/call_fb, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
+  jit_areas + jit_tc + jit_awl (.scl/.awl cross-check) + jit_awl_backend
+  (SCL->AWL->JIT) + jit_timer (AWL timers/counters via --jit-cycles/--cycle-ms)
+  + jit_fb_awl (CALL FB n, DB m via --dump-areas) in sclang.
 
 ## Key design decisions (do not regress)
 
@@ -232,8 +233,33 @@ has no `\b` — use python3 for regex edits.
   compare (AWL `L` shifts ACC1 into ACC2).
   AWL parser pitfall: a label branch in the instruction loop must `continue`,
   not fall through to parseInstruction (two consecutive labels misparse).
-  AWL backend gaps: FC params, CALL FB n/DB m, FB members/arrays/structs/
-  strings, cross-width assignment, DB initializers, CC, timers.
+  AWL backend gaps: FC params, FB arrays/structs/strings, cross-width
+  assignment, DB initializers, CC. (CALL FB n, DB m and timers are done —
+  see below.)
+- **CALL FB n, DB m + FB instance DBs (implemented)**: AWL `CALL FB n, DB m`
+  / `UC FB n, DB m` -> `awl.call @FBn, db m`; an FB block lowers to
+  `func.func @FBn(i32 %arg0)` where arg0 = the instance DB number, and the
+  call site passes the db attr as `%c_m_i32`. Inside an FB, a DB operand
+  **without a number** (`DB.DBW0`, db=0) means the instance DB and lowers to
+  `scl_rt_read/write('D', %arg0, …)` via the `directDbValue` helper in
+  LowerToStd.cpp (reads the func arg when the direct has area DB, db 0, and
+  the enclosing func name starts with "FB" and takes 1 arg; null-guarded).
+  In the SCL->AWL backend, `scl.call.fb @fb(%idb)` becomes `awl.call` with the
+  callee uppercased (`FB1`) and the db number resolved from the IDB symbol's
+  data block (names like `DB m` keep m, others get sequential numbers from 1);
+  FB member accesses (`scl.getvariable` on an IDB) become `DB.DBW<byteOff>`
+  directs at the byte offsets of the precomputed per-FB layout
+  (`AwlFbLayout`, keyed by UPPERCASED fb name). SCL symbol names are lowercase
+  but the AWL printer expects `FB`/`FC` prefixes uppercase — uppercase when
+  creating the callee attr. The sim runtime owns DB storage, so
+  `--dump-areas` shows instance DBs (`DB2:[1]=2`) and host integration stays
+  uniform. Tests: `test/AwlGen/call_fb.awl` (parse/lower/round-trip),
+  `test/sclang/jit_fb_awl.awl` (JIT), `test/SclTransforms/to_awl_fb.scl`.
+  FileCheck pitfall: `CHECK-LABEL: FB 1` also matches inside the line
+  `CALL FB 1, DB 2` — anchor block labels with `{{^}}FB 1`.
+  C++ pitfall hit: `llvm::StringRef::upper()` returns a temporary
+  `std::string` — never bind `StringRef x = s.upper()` (dangling); go through
+  a `std::string` local.
 - **Big-endian storage (ADR 001, implemented)**: byte `i` of an N-byte value in a
   byte buffer holds bits `8*(N-1-i)..` (most significant byte first, S7 layout).
   Applied in `loadFromByteBuffer`/`storeToByteBuffer`, in the IDB cold-start
@@ -271,9 +297,10 @@ has no `\b` — use python3 for regex edits.
 
 ## Known gaps (parsed but not lowered / not code-generated)
 
-AWL known gaps (both directions): CC (conditional call), CALL FB n / CALL DB
-m, FC parameter passing. (IEC timer instructions SP/SE/SS/SV/SI and counters
-ZV/ZR are implemented — see the memory-areas bullet.)
+AWL known gaps (both directions): CC (conditional call), CALL DB m, FC
+parameter passing. (IEC timer instructions SP/SE/SS/SV/SI, counters ZV/ZR,
+and CALL FB n / DB m with FB instance DBs are implemented — see the bullets
+above.)
 
 Memory areas `%I`/`%Q`/`%M`/`%DB…`/`%T`/`%C` are implemented (see above):
 `!scl.direct` type, `scl.getdirect`, `%`-address parsing, lowering to the
@@ -281,8 +308,9 @@ Memory areas `%I`/`%Q`/`%M`/`%DB…`/`%T`/`%C` are implemented (see above):
 `--runtime=host --runtime-lib=…`, OB scan-cycle hooks, big-endian.
 
 Remaining technical gaps:
-- SCL-side timer FBs (TON/TOF/TP) need CALL FB support; the sim models raw
-  %T/%C areas + AWL timer instructions (see above).
+- SCL-side timer FBs (TON/TOF/TP): CALL FB now works (see above), but the
+  TON/TOF/TP semantics themselves are still only modeled via raw %T/%C areas
+  + AWL timer instructions.
 - Array-of-struct members (`a[i].x`): the byte-view chain has a dynamic offset
   at the inner cast, which `resolveByteViewRoot` cannot fold statically.
 - String comparison, string var-to-var assignment, and string literals outside

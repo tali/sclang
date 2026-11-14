@@ -69,7 +69,7 @@ struct TextPrinter {
     char sizeLetter = w == 1 ? 'X' : w == 8 ? 'B' : w == 16 ? 'W' : 'D';
     std::string s;
     if (dt.getArea() == scl::DirectArea::DataBlock) {
-      s = "DB" + std::to_string(dt.getDb()) + ".DB" + sizeLetter;
+      s = std::string("DB") + (dt.getDb() == 0 ? "" : std::to_string(dt.getDb())) + ".DB" + sizeLetter;
       s += std::to_string(dt.getByte());
       if (w == 1)
         s += "." + std::to_string(dt.getBit());
@@ -378,7 +378,12 @@ struct TextPrinter {
         llvm::StringRef callee = c.getCallee();
         if (callee.startswith("FC"))
           os << "  UC FC " << callee.drop_front(2) << '\n';
-        else
+        else if (callee.startswith("FB")) {
+          os << "  CALL FB " << callee.drop_front(2);
+          if (auto db = c.getDb())
+            os << ", DB " << db.value();
+          os << '\n';
+        } else
           os << "  // unsupported call @" << callee << '\n';
         continue;
       }

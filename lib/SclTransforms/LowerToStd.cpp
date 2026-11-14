@@ -263,18 +263,34 @@ static FlatSymbolRefAttr getOrInsertRtFunc(OpBuilder &b, ModuleOp module,
   return SymbolRefAttr::get(b.getContext(), name);
 }
 
+/// The db operand for a direct access: inside an FB (awl.block "FBn" lowered
+/// to func @FBn(i32)), DB operands without a number (db = 0) address the
+/// instance DB, passed as the function's i32 argument.
+static Value directDbValue(OpBuilder &b, Location loc, scl::DirectType dt,
+                           Operation *op) {
+  auto i32 = b.getI32Type();
+  if (op && dt.getArea() == scl::DirectArea::DataBlock && dt.getDb() == 0) {
+    if (auto func = op->template getParentOfType<func::FuncOp>()) {
+      if (func.getSymName().startswith("FB") && func.getNumArguments() == 1 &&
+          func.getBody().front().getNumArguments() == 1)
+        return func.getBody().front().getArgument(0);
+    }
+  }
+  return b.create<arith::ConstantOp>(loc, i32,
+                                     b.getIntegerAttr(i32, dt.getDb()));
+}
+
 /// Lower a load from a direct address (memory area / DB operand) to a call
 /// of the runtime C ABI (ADR 002): `scl_rt_read_bit` for bit access, else
 /// `scl_rt_read` with the width in bytes.
 static Value lowerDirectLoad(OpBuilder &b, Location loc, scl::DirectType dt,
-                             Type resTy, ModuleOp module) {
+                             Type resTy, ModuleOp module, Operation *op = nullptr) {
   auto i8 = b.getI8Type();
   auto i32 = b.getI32Type();
   auto i64 = b.getI64Type();
   auto areaC = b.create<arith::ConstantOp>(
       loc, i8, b.getIntegerAttr(i8, (uint8_t)dt.getArea()));
-  auto dbC = b.create<arith::ConstantOp>(loc, i32,
-                                         b.getIntegerAttr(i32, dt.getDb()));
+  auto dbC = directDbValue(b, loc, dt, op);
   auto byteC = b.create<arith::ConstantOp>(loc, i32,
                                            b.getIntegerAttr(i32, dt.getByte()));
   if (dt.getWidth() == 1) {
@@ -309,14 +325,13 @@ static Value lowerDirectLoad(OpBuilder &b, Location loc, scl::DirectType dt,
 /// bytes.
 static LogicalResult lowerDirectStore(OpBuilder &b, Location loc,
                                       scl::DirectType dt, Value value,
-                                      ModuleOp module) {
+                                      ModuleOp module, Operation *op = nullptr) {
   auto i8 = b.getI8Type();
   auto i32 = b.getI32Type();
   auto i64 = b.getI64Type();
   auto areaC = b.create<arith::ConstantOp>(
       loc, i8, b.getIntegerAttr(i8, (uint8_t)dt.getArea()));
-  auto dbC = b.create<arith::ConstantOp>(loc, i32,
-                                         b.getIntegerAttr(i32, dt.getDb()));
+  auto dbC = directDbValue(b, loc, dt, op);
   auto byteC = b.create<arith::ConstantOp>(loc, i32,
                                            b.getIntegerAttr(i32, dt.getByte()));
   if (dt.getWidth() == 1) {
@@ -751,7 +766,7 @@ struct StoreOpLowering : public OpConversionPattern<scl::StoreOp> {
     if (auto dt = op.getLhs().getType().cast<scl::AddressType>()
                       .getElementType().dyn_cast<scl::DirectType>()) {
       if (failed(lowerDirectStore(rewriter, op.getLoc(), dt, adaptor.getRhs(),
-                                  op->template getParentOfType<ModuleOp>())))
+                                  op->template getParentOfType<ModuleOp>(), op)))
         return failure();
       rewriter.eraseOp(op);
       return success();
@@ -1876,7 +1891,7 @@ struct AwlLoadOpLowering : public OpConversionPattern<awl::LoadOp> {
     if (!resTy)
       return failure();
     Value v = lowerDirectLoad(rewriter, op.getLoc(), dt, resTy,
-                              op->template getParentOfType<ModuleOp>());
+                              op->template getParentOfType<ModuleOp>(), op);
     rewriter.replaceOp(op, v);
     return success();
   }
@@ -1889,7 +1904,7 @@ struct AwlStoreOpLowering : public OpConversionPattern<awl::StoreOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto dt = op.getAddr().getType().template cast<scl::DirectType>();
     if (failed(lowerDirectStore(rewriter, op.getLoc(), dt, adaptor.getValue(),
-                                op->template getParentOfType<ModuleOp>())))
+                                op->template getParentOfType<ModuleOp>(), op)))
       return failure();
     rewriter.eraseOp(op);
     return success();
@@ -1940,7 +1955,7 @@ struct AwlAssignOpLowering : public OpConversionPattern<awl::AssignOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto dt = op.getAddr().getType().template cast<scl::DirectType>();
     if (failed(lowerDirectStore(rewriter, op.getLoc(), dt, adaptor.getRlo(),
-                                op->template getParentOfType<ModuleOp>())))
+                                op->template getParentOfType<ModuleOp>(), op)))
       return failure();
     rewriter.eraseOp(op);
     return success();
@@ -1958,7 +1973,7 @@ struct AwlSetResetLowering : public OpConversionPattern<SetResetOp> {
     auto v = rewriter.create<arith::ConstantOp>(
         op.getLoc(), i1, rewriter.getIntegerAttr(i1, set ? 1 : 0));
     if (failed(lowerDirectStore(rewriter, op.getLoc(), dt, v,
-                                op->template getParentOfType<ModuleOp>())))
+                                op->template getParentOfType<ModuleOp>(), op)))
       return failure();
     rewriter.replaceOp(op, v);
     return success();
@@ -2069,9 +2084,16 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
   LogicalResult
   matchAndRewrite(awl::CallOp op, awl::CallOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    SmallVector<Value, 4> args(adaptor.getArguments().begin(),
+                               adaptor.getArguments().end());
+    // CALL FB n, DB m: pass the instance DB number as the FB's i32 argument
+    if (auto dbAttr = op.getDb()) {
+      auto i32 = rewriter.getI32Type();
+      args.push_back(rewriter.create<arith::ConstantOp>(
+          op.getLoc(), i32, rewriter.getI32IntegerAttr(dbAttr.value())));
+    }
     auto call = rewriter.create<func::CallOp>(op.getLoc(), op.getCallee(),
-                                              TypeRange{},
-                                              adaptor.getArguments());
+                                              TypeRange{}, args);
     rewriter.replaceOp(op, call.getResults());
     return success();
   }
@@ -2152,11 +2174,19 @@ struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
   matchAndRewrite(awl::BlockOp op, awl::BlockOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto func = rewriter.create<func::FuncOp>(
-        loc, op.getSymName(), rewriter.getFunctionType({}, {}));
+    // FB blocks take the instance DB number (from `CALL FB n, DB m`) as an
+    // i32 argument; DB operands without a number inside the FB use it.
+    bool isFb = op.getSymName().startswith("FB");
+    auto funcType = isFb ? rewriter.getFunctionType({rewriter.getI32Type()}, {})
+                         : rewriter.getFunctionType({}, {});
+    auto func = rewriter.create<func::FuncOp>(loc, op.getSymName(), funcType);
     rewriter.inlineRegionBefore(op.getBody(), func.getBody(),
                                 func.getBody().end());
     Block *flat = &func.getBody().front();
+    // func::FuncOp::create does not add an entry block here; the inlined awl
+    // block is the entry, so give it the instance-DB argument of the FB type
+    if (isFb)
+      flat->addArgument(rewriter.getI32Type(), loc);
 
     // Collect cut ops (labels, jumps, be) and split the flat block before
     // each of them, so every cut starts a new block.

@@ -5,9 +5,12 @@
   Deviations from the plan below: ACC is a codegen-time SSA stack (no phis —
   labels reset the statement state instead, see AGENTS.md); `awl.block` is
   lowered by splitting the flat block at labels/jumps in AwlBlockOpLowering
-  rather than emitting cf blocks during codegen; CC and CALL FB/DB are
+  rather than emitting cf blocks during codegen; CC and CALL DB m are
   rejected for now; `_mlir_ciface_OB1` is synthesized when OB 1 exists.
-  Remaining: SCL->AWL text backend (scl-to-awl.md), timers.
+  Implemented since: IEC timers (SP/SE/SS/SV/SI, S5T#… literals) and counters
+  (S/R/ZV/ZR), and `CALL FB n, DB m` / `UC FB n, DB m` with instance DBs
+  (bare `DB.…` operands inside an FB lower to the instance DB func argument,
+  see AGENTS.md). Remaining: CC, CALL DB m, FC parameters.
 - Related: ADR 003 (parallel dialect), ADR 002 (runtime ABI), `memory-areas.md`
 
 Target: classic S7-300/400 AWL (two-accumulator model). One instruction per

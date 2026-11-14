@@ -210,10 +210,11 @@ def JumpIfNotOp : AwlOp<"jump_if_not"> {
 }
 
 def CallOp : AwlOp<"call", [DeclareOpInterfaceMethods<CallOpInterface>]> {
-  let summary = "CALL/UC: call a block (FC/OB)";
-  let arguments = (ins FlatSymbolRefAttr:$callee, Variadic<AnyType>:$arguments);
+  let summary = "CALL/UC: call a block (FC/OB n, or FB n with instance DB m)";
+  let arguments = (ins FlatSymbolRefAttr:$callee, Variadic<AnyType>:$arguments,
+                       OptionalAttr<I32Attr>:$db);
   let results = (outs);
-  let assemblyFormat = "attr-dict $callee `(` $arguments `)` `:` functional-type($arguments, results)";
+  let assemblyFormat = "attr-dict $callee `(` $arguments `)` (`,` `db` $db^)? `:` functional-type($arguments, results)";
 }
 
 // MARK: timers (SP/SE/SS/SV/SI T n) and counters (ZV/ZR/S/R C n)

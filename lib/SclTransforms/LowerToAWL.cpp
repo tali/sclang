@@ -46,6 +46,13 @@ namespace mlir {
 namespace sclang {
 namespace {
 
+// FB member layout for the AWL backend: member name -> byte offset, width.
+struct AwlFbMember {
+  int64_t offset;
+  int width;
+};
+using AwlFbLayout = llvm::StringMap<AwlFbMember>;
+
 // Maps an scl type to the value type used in the awl dialect.
 static Type awlValueType(MLIRContext *ctx, Type t) {
   if (isa<scl::LogicalType>(t))
@@ -82,6 +89,9 @@ struct FuncConverter {
   Block *flat;
 
   DenseMap<Value, scl::DirectType> varDirect; // scl address -> direct type
+  DenseMap<llvm::StringRef, int32_t> dbNumbers; // IDB symbol name -> DB number
+  const llvm::StringMap<AwlFbLayout> *fbLayouts = nullptr;
+  Value currentFbArg; // block arg holding the instance DB of the current FB
   DenseMap<Value, Value> materialized;        // scl value -> awl value
   int32_t nextBit = 0;                         // M-area allocation cursor
   int labelCounter = 0;
@@ -132,6 +142,37 @@ struct FuncConverter {
       return addr.getType().cast<scl::AddressType>()
           .getElementType()
           .cast<scl::DirectType>();
+    }
+    // getvariable from an IDB: FB member at its byte offset in the instance
+    // DB (db 0 = instance DB of the enclosing FB, else the called DB number)
+    if (auto gv = addr.getDefiningOp<scl::GetVariableOp>()) {
+      Value base = gv.getAddr();
+      auto baseTy = base.getType().dyn_cast<scl::AddressType>();
+      if (baseTy &&
+          baseTy.getElementType().isa<scl::InstanceDbType>() && fbLayouts) {
+        auto idbTy = baseTy.getElementType().cast<scl::InstanceDbType>();
+        std::string fbSymStr = llvm::StringRef(idbTy.getFbSymbol()).upper();
+        auto lit = fbLayouts->find(fbSymStr);
+        if (lit != fbLayouts->end()) {
+          int32_t db = 0;
+          if (base == currentFbArg) {
+            db = 0; // instance DB of the enclosing FB
+          } else if (auto gg = base.getDefiningOp<scl::GetGlobalOp>()) {
+            auto dit = dbNumbers.find(gg.getName());
+            if (dit != dbNumbers.end())
+              db = dit->second;
+          }
+          std::string member = gv.getSymName().str();
+          auto mit = lit->second.find(member);
+          if (mit != lit->second.end())
+            return scl::DirectType::get(ctx, scl::DirectArea::DataBlock, db,
+                                         (int32_t)mit->second.offset, 0,
+                                         mit->second.width);
+        }
+      }
+      emitError(addr.getLoc()) << "unknown FB member '"
+                                << gv.getSymName().str() << "'";
+      return nullptr;
     }
     emitError(addr.getLoc())
         << "address not representable as an AWL operand (FB members, arrays, "
@@ -497,6 +538,8 @@ struct FuncConverter {
       varDirect[tv.getResult()] = dt;
       return success();
     }
+    if (isa<scl::VariableOp>(op))
+      return success(); // declaration only; the layout is precomputed
     if (isa<scl::StoreOp>(op)) {
       auto st = cast<scl::StoreOp>(op);
       emitStore(st.getLhs(), st.getRhs());
@@ -551,7 +594,8 @@ struct FuncConverter {
       return emitCase(c, blockLabels);
     }
     if (auto call = dyn_cast<scl::CallFcOp>(op)) {
-      llvm::StringRef callee = call.getCallee();
+      std::string calleeStr = llvm::StringRef(call.getCallee()).upper();
+      llvm::StringRef callee = calleeStr;
       if (!callee.startswith("FC")) {
         emitError(op->getLoc()) << "AWL backend only supports CALL FC n, got @"
                                 << callee;
@@ -563,10 +607,24 @@ struct FuncConverter {
       b.create<awl::CallOp>(loc, TypeRange{}, ValueRange{}, attrs);
       return success();
     }
-    if (isa<scl::CallFbOp>(op)) {
-      emitError(op->getLoc())
-          << "CALL FB n, DB m is not yet supported by the AWL backend";
-      return failure();
+    if (auto call = dyn_cast<scl::CallFbOp>(op)) {
+      // `CALL FB n, DB m`: the instance DB number comes from the IDB symbol
+      // (a data block named DB m).
+      std::string fbStr = llvm::StringRef(call.getFb()).upper();
+      llvm::StringRef fb = fbStr;
+      int32_t db = 0;
+      if (auto gg = call.getIdb().getDefiningOp<scl::GetGlobalOp>()) {
+        auto it = dbNumbers.find(gg.getName());
+        if (it != dbNumbers.end())
+          db = it->second;
+      }
+      SmallVector<NamedAttribute, 2> attrs;
+      attrs.push_back(NamedAttribute(strAttr("callee"),
+                                     FlatSymbolRefAttr::get(ctx, fb)));
+      attrs.push_back(
+          NamedAttribute(strAttr("db"), b.getI32IntegerAttr(db)));
+      b.create<awl::CallOp>(loc, TypeRange{}, ValueRange{}, attrs);
+      return success();
     }
     if (isa<scl::DebugPrintOp>(op))
       return success(); // no AWL equivalent; dropped (docs/design)
@@ -627,7 +685,8 @@ struct FuncConverter {
             scl::XOrOp, scl::EqualOp, scl::NotEqualOp, scl::LessThanOp,
             scl::LessEqualOp, scl::GreaterThanOp, scl::GreaterEqualOp,
             scl::UnaryNotOp, scl::UnaryMinusOp, scl::IntegerCastOp,
-            scl::BitCastOp, scl::DialectCastOp, scl::GetDirectOp>(op))
+            scl::BitCastOp, scl::DialectCastOp, scl::GetDirectOp,
+            scl::GetVariableOp, scl::GetGlobalOp>(op))
       return success();
     emitError(op->getLoc()) << "operation not supported by the AWL backend: "
                             << op->getName();
@@ -788,7 +847,14 @@ struct FuncConverter {
     for (Block &blk : body)
       if (&blk != &body.front())
         blockLabels[&blk] = "BB" + std::to_string(n++);
-    if (!body.front().getArguments().empty()) {
+    if (auto fb = dyn_cast<scl::FunctionBlockOp>(funcOp)) {
+      // the FB's instance DB address arrives as the single block argument
+      if (body.front().getArguments().size() != 1) {
+        emitError(funcOp->getLoc()) << "FB needs exactly one IDB argument";
+        return failure();
+      }
+      currentFbArg = body.front().getArgument(0);
+    } else if (!body.front().getArguments().empty()) {
       emitError(funcOp->getLoc())
           << "block parameters (FC inputs) are not yet supported by the AWL "
              "backend";
@@ -820,16 +886,49 @@ struct LowerToAWLPass
       if (isa<scl::FunctionOp, scl::FunctionBlockOp>(op))
         funcs.push_back(op);
     });
+    // Map data-block (IDB) symbol names to AWL DB numbers: names like DB m
+    // keep their number, others get sequential numbers.
+    DenseMap<llvm::StringRef, int32_t> dbNumbers;
+    {
+      int32_t next = 1;
+      SmallVector<llvm::StringRef, 8> names;
+      module.walk([&](scl::DataBlockOp op) { names.push_back(op.getSymName()); });
+      for (auto n : names) {
+        std::string upStr = llvm::StringRef(n).upper();
+        llvm::StringRef up = upStr;
+        if (up.size() > 2 && up.startswith("DB") &&
+            llvm::all_of(up.drop_front(2), [](char c) { return isdigit(c); }))
+          dbNumbers[n] = atoi(up.drop_front(2).str().c_str());
+        else
+          dbNumbers[n] = next++;
+      }
+    }
+    // FB member layouts (sequential byte offsets, as in computeFbLayouts)
+    llvm::StringMap<AwlFbLayout> fbLayouts;
+    for (auto fb : module.getOps<scl::FunctionBlockOp>()) {
+      AwlFbLayout layout;
+      int64_t off = 0;
+      for (auto var : fb.getBody().getOps<scl::VariableOp>()) {
+        int w = widthOf(var.getType());
+        if (w <= 0)
+          continue;
+        layout[var.getSymName().str()] = {off, w};
+        off += (w + 7) / 8;
+      }
+      fbLayouts[std::string(llvm::StringRef(fb.getName()).upper())] = layout;
+    }
     for (Operation *op : funcs) {
       llvm::StringRef name = cast<SymbolOpInterface>(op).getName();
       if (name.startswith("_mlir_ciface_")) {
         op->erase(); // JIT wrapper; the AWL frontend re-synthesizes it
         continue;
       }
-      bool ok = name.size() > 2 &&
-                (name.startswith("OB") || name.startswith("FB") ||
-                 name.startswith("FC")) &&
-                llvm::all_of(name.drop_front(2),
+      std::string upperStr = llvm::StringRef(name).upper();
+      llvm::StringRef upper = upperStr;
+      bool ok = upper.size() > 2 &&
+                (upper.startswith("OB") || upper.startswith("FB") ||
+                 upper.startswith("FC")) &&
+                llvm::all_of(upper.drop_front(2),
                              [](char c) { return isdigit(c); });
       if (!ok) {
         op->emitError("only OB/FB/FC blocks can be lowered to AWL, got @"
@@ -838,7 +937,9 @@ struct LowerToAWLPass
         return;
       }
       FuncConverter c(&getContext(), module, op->getLoc());
-      if (failed(c.run(op, name))) {
+      c.dbNumbers = dbNumbers;
+      c.fbLayouts = &fbLayouts;
+      if (failed(c.run(op, upper))) {
         signalPassFailure();
         return;
       }

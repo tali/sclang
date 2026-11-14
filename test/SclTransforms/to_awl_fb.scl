@@ -1,0 +1,47 @@
+// RUN: sclang-gen --emit=awl %s | FileCheck %s
+// SCL -> AWL for CALL FB (docs/design/scl-to-awl.md): `fb."idb"()` becomes
+// `CALL FB n, DB m` where m is the number of the data block holding the
+// instance. Inside the FB block, member accesses become DB directs at the
+// precomputed byte offsets of the FB layout and bare DB operands (db=0)
+// mean the instance DB.
+// CHECK-LABEL: FB 1
+// CHECK: L DB.DBW4
+// CHECK: L DB.DBW0
+// CHECK: +I
+// CHECK: T DB.DBW2
+// CHECK: L DB.DBW0
+// CHECK: T DB.DBW4
+// CHECK: BE
+// CHECK-LABEL: OB 1
+// CHECK: L 40
+// CHECK: T DB1.DBW0
+// CHECK: CALL FB 1, DB 1
+// CHECK: L 2
+// CHECK: T DB1.DBW0
+// CHECK: CALL FB 1, DB 1
+function_block fb1
+var_input
+  in : int;
+end_var
+var_output
+  out : int;
+end_var
+var
+  state : int := 0;
+end_var
+begin
+  out := state + in;
+  state := in;
+end_function_block
+
+data_block db1
+  fb1
+end_data_block
+
+function OB1 : int
+begin
+  "db1".in := 40;
+  fb1."db1"();
+  "db1".in := 2;
+  fb1."db1"();
+end_function

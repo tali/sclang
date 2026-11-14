@@ -21,6 +21,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Verifier.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -572,69 +573,67 @@ private:
     std::string w = upperIdent();
     lexer.next();
 
-    // DBn . DB[XBWD] byte [.bit]
-    if (w.size() > 2 && w.rfind("DB", 0) == 0) {
-      bool allDigits = true;
-      for (size_t i = 2; i < w.size(); ++i)
-        if (!isdigit(w[i]))
-          allDigits = false;
-      if (allDigits) {
-        int32_t db = atoi(w.c_str() + 2);
-        if (lexer.getCurToken() != Tok::dot)
-          return (error("expected '.' after DB number"), nullptr);
-        lexer.next();
-        if (lexer.getCurToken() != Tok::ident)
-          return (error("expected DBX/DBB/DBW/DBD"), nullptr);
-        std::string dw = upperIdent();
-        lexer.next();
-        if (dw.size() < 3 || dw.rfind("DB", 0) != 0)
-          return (error("expected DBX/DBB/DBW/DBD, got '" + dw + "'"), nullptr);
-        int32_t width;
-        switch (dw[2]) {
-        case 'X': width = 1; break;
-        case 'B': width = 8; break;
-        case 'W': width = 16; break;
-        case 'D': width = 32; break;
-        default: return (error("expected DBX/DBB/DBW/DBD, got '" + dw + "'"), nullptr);
-        }
-        int32_t byte = -1;
-        if (dw.size() > 3)
-          byte = atoi(dw.c_str() + 3);
-        double realBit = -1;
-        if (byte < 0) {
-          if (lexer.getCurToken() == Tok::integer) {
-            byte = (int32_t)lexer.getInteger();
-            lexer.next();
-          } else if (lexer.getCurToken() == Tok::real) {
-            // e.g. DB1.DBX 0.0 lexes as a real: split into byte and bit
-            double r = lexer.getReal();
-            byte = (int32_t)r;
-            realBit = r - byte;
-            lexer.next();
-          } else {
-            return (error("expected byte address"), nullptr);
-          }
-        }
-        int32_t bit = 0;
-        bool hasBit = false;
-        if (realBit >= 0) {
-          bit = (int32_t)(realBit * 10 + 0.5);
-          hasBit = true;
-        } else if (lexer.getCurToken() == Tok::dot) {
-          lexer.next();
-          if (lexer.getCurToken() != Tok::integer)
-            return (error("expected bit number"), nullptr);
-          bit = (int32_t)lexer.getInteger();
-          lexer.next();
-          hasBit = true;
-        }
-        if (width == 1 && !hasBit)
-          return (error("DBX bit access requires a bit number"), nullptr);
-        if (width != 1 && hasBit)
-          return (error("only DBX takes a bit number"), nullptr);
-        return builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::DataBlock,
-                                              db, byte, bit, width);
+    // DBn . DB[XBWD] byte [.bit]   (DB without a number = the instance DB
+    // of the enclosing FB, i.e. db = 0)
+    if (w.rfind("DB", 0) == 0 &&
+        (w.size() == 2 ||
+         llvm::all_of(llvm::drop_begin(w, 2),
+                      [](char c) { return isdigit(c); }))) {
+      int32_t db = w.size() > 2 ? atoi(w.c_str() + 2) : 0;
+      if (lexer.getCurToken() != Tok::dot)
+        return (error("expected '.' after DB number"), nullptr);
+      lexer.next();
+      if (lexer.getCurToken() != Tok::ident)
+        return (error("expected DBX/DBB/DBW/DBD"), nullptr);
+      std::string dw = upperIdent();
+      lexer.next();
+      if (dw.size() < 3 || dw.rfind("DB", 0) != 0)
+        return (error("expected DBX/DBB/DBW/DBD, got '" + dw + "'"), nullptr);
+      int32_t width;
+      switch (dw[2]) {
+      case 'X': width = 1; break;
+      case 'B': width = 8; break;
+      case 'W': width = 16; break;
+      case 'D': width = 32; break;
+      default: return (error("expected DBX/DBB/DBW/DBD, got '" + dw + "'"), nullptr);
       }
+      int32_t byte = -1;
+      if (dw.size() > 3)
+        byte = atoi(dw.c_str() + 3);
+      double realBit = -1;
+      if (byte < 0) {
+        if (lexer.getCurToken() == Tok::integer) {
+          byte = (int32_t)lexer.getInteger();
+          lexer.next();
+        } else if (lexer.getCurToken() == Tok::real) {
+          // e.g. DB1.DBX 0.0 lexes as a real: split into byte and bit
+          double r = lexer.getReal();
+          byte = (int32_t)r;
+          realBit = r - byte;
+          lexer.next();
+        } else {
+          return (error("expected byte address"), nullptr);
+        }
+      }
+      int32_t bit = 0;
+      bool hasBit = false;
+      if (realBit >= 0) {
+        bit = (int32_t)(realBit * 10 + 0.5);
+        hasBit = true;
+      } else if (lexer.getCurToken() == Tok::dot) {
+        lexer.next();
+        if (lexer.getCurToken() != Tok::integer)
+          return (error("expected bit number"), nullptr);
+        bit = (int32_t)lexer.getInteger();
+        lexer.next();
+        hasBit = true;
+      }
+      if (width == 1 && !hasBit)
+        return (error("DBX bit access requires a bit number"), nullptr);
+      if (width != 1 && hasBit)
+        return (error("only DBX takes a bit number"), nullptr);
+      return builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::DataBlock,
+                                            db, byte, bit, width);
     }
 
     // E/A/M/T/Z [B|W|D] [byte] [.bit]
@@ -1011,23 +1010,36 @@ private:
   }
 
   bool parseCall() {
-    // CALL FC n | UC FC n | CALL FB n, DB m (FB form not yet supported)
+    // CALL/UC FC n | CALL/UC FB n, DB m
     if (lexer.getCurToken() != Tok::ident)
       return error("expected FC/FB after CALL");
     std::string kind = upperIdent();
     lexer.next();
-    if (kind == "FB")
-      return error("CALL FB n, DB m is not yet supported");
-    if (kind != "FC")
-      return error("expected FC after CALL, got '" + kind + "'");
+    if (kind != "FC" && kind != "FB")
+      return error("expected FC/FB after CALL, got '" + kind + "'");
     if (lexer.getCurToken() != Tok::integer)
-      return error("expected FC number");
+      return error("expected block number after " + kind);
     int64_t num = lexer.getInteger();
     lexer.next();
-    std::string callee = "FC" + std::to_string(num);
-    llvm::SmallVector<mlir::NamedAttribute, 1> attrs;
+    std::string callee = kind + std::to_string(num);
+    llvm::SmallVector<mlir::NamedAttribute, 2> attrs;
     attrs.push_back(builder.getNamedAttr(
         "callee", mlir::FlatSymbolRefAttr::get(builder.getContext(), callee)));
+    if (kind == "FB") {
+      // CALL FB n, DB m: the instance data block number
+      if (lexer.getCurToken() != Tok::comma)
+        return error("expected ',' after FB number (CALL FB n, DB m)");
+      lexer.next();
+      if (lexer.getCurToken() != Tok::ident || upperIdent() != "DB")
+        return error("expected DB after ','");
+      lexer.next();
+      if (lexer.getCurToken() != Tok::integer)
+        return error("expected DB number");
+      int64_t db = lexer.getInteger();
+      lexer.next();
+      attrs.push_back(
+          builder.getNamedAttr("db", builder.getI32IntegerAttr((int32_t)db)));
+    }
     builder.create<awl::CallOp>(loc(), mlir::TypeRange{}, mlir::ValueRange{},
                                 attrs);
     rloActive = false;

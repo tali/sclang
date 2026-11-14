@@ -3,12 +3,12 @@
 - **Status**: implemented. `sclang-gen --emit=awl` runs the LowerToAWL pass
   (`lib/SclTransforms/LowerToAWL.cpp`) and prints S7 text via
   `awl::printAwlText` (`lib/AwlDialect/Printer.cpp`). Tests:
-  test/SclTransforms/to_awl{,_areas}.scl, test/AwlGen/roundtrip.awl,
+  test/SclTransforms/to_awl{,_areas,_fb}.scl, test/AwlGen/roundtrip.awl,
   test/sclang/jit_awl_backend.scl (SCL -> AWL -> JIT gives the same memory
   writes as the SCL original).
-  Deviations/gaps: FC parameters, CALL FB n/DB m, FB members (getvariable),
-  arrays/structs, strings, cross-width assignments and DB initializers are
-  rejected/dropped with an error or warning; `scl.debug.print` is dropped;
+  Deviations/gaps: FC parameters, FB arrays/structs, strings, cross-width
+  assignments and DB initializers are rejected/dropped with an error or
+  warning; `scl.debug.print` is dropped;
   awl.cast is implicit in the mnemonic letter (not printed); bool logic is
   emitted as rlo chains (U/UN/O/ON/=) with temp bits for computed operands;
   the CASE selector is re-loaded before each compare (AWL L shifts ACC1).
@@ -39,7 +39,9 @@ round-trips validate the printer.
    - `scl.if` → condition into RLO + `JC`/`JCN` + labels:
      `…; JC else; <then>; SPA end; else: …; end:`.
    - loops → labels + jumps; `scl.case` → compare chain or S7 `SPL` jump list.
-   - `scl.call.fb` → `CALL FB n, DB m`; FCs → `CALL FC n`; OB → `OB 1` wrapper.
+   - `scl.call.fb` → `CALL FB n, DB m` (db number resolved from the IDB's
+     data block; FB members → `DB.DBW<byteOff>` directs on the instance DB
+     inside the FB block); FCs → `UC FC n`; OB → `OB 1` wrapper.
    - `scl.debug.print` → no AWL equivalent; emit a comment or drop (decision).
 3. **Printer**: custom assembly per awl op emitting S7 mnemonics; canonical
    label naming (`NEXT1:`, …); operand format `E 0.0` / `MW 10` / `DB1.DBX 0.0`.
