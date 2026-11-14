@@ -115,7 +115,7 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 93 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 94 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
   (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
   timer/timer_lower/call_fb/cc, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
@@ -125,7 +125,7 @@ has no `\b` — use python3 for regex edits.
   --dump-areas) + jit_string (string compare/copy) + jit_case_bool +
   jit_case_real (CASE on bool/real selectors) + jit_array_of_struct
   (a[i].x) in sclang; string_compare in SclGen/MLIR; array_of_struct in
-  SclTransforms.
+  SclTransforms; jit_fb_init (non-literal constant FB initializers) in sclang.
 
 ## Key design decisions (do not regress)
 
@@ -356,7 +356,9 @@ Remaining technical gaps:
 - Array-of-struct members (`a[i].x`) work (see above).
 - String literals outside assignments/comparisons are not implemented.
   Strings are zero-padded (SCL pads with spaces — documented deviation).
-- Non-constant FB member initializers are ignored (the IDB global is zeroed).
+- FB member initializers that are constant EXPRESSIONS (e.g. `40 + 2`) are
+  folded by `foldConstBits` and baked into the IDB global's cold start;
+  genuinely non-constant initializers are still ignored (zeroed).
 - CASE on real/bool selectors works (see above).
 - `goto` following another terminator is a compile error by design.
 - Whole-array var-to-var assignment now works for 1-d arrays with scalar

@@ -93,6 +93,49 @@ static int64_t byteSize(Type type, const FbLayoutCache &layouts) {
   return 0;
 }
 
+/// Fold a constant expression (literals + integer arithmetic) to a bit
+/// pattern, used for FB member initializers (cold-start values baked into
+/// the instance DB global).
+static std::optional<llvm::APInt> foldConstBits(Value v, unsigned width) {
+  Operation *def = v.getDefiningOp();
+  if (!def)
+    return std::nullopt;
+  if (auto c = llvm::dyn_cast<scl::ConstantOp>(def)) {
+    if (auto ia = c.getValue().dyn_cast<IntegerAttr>())
+      return ia.getValue().sextOrTrunc(width);
+    if (auto fa = c.getValue().dyn_cast<FloatAttr>())
+      return fa.getValue().bitcastToAPInt().sextOrTrunc(width);
+    return std::nullopt;
+  }
+  if (llvm::isa<scl::AddOp, scl::SubOp, scl::MulOp, scl::DivOp, scl::ModOp>(
+          def)) {
+    if (def->getNumOperands() != 2)
+      return std::nullopt;
+    auto lv = foldConstBits(def->getOperand(0), width);
+    auto rv = foldConstBits(def->getOperand(1), width);
+    if (!lv || !rv)
+      return std::nullopt;
+    if (llvm::isa<scl::AddOp>(def))
+      return *lv + *rv;
+    if (llvm::isa<scl::SubOp>(def))
+      return *lv - *rv;
+    if (llvm::isa<scl::MulOp>(def))
+      return *lv * *rv;
+    if (rv->isZero())
+      return std::nullopt;
+    if (llvm::isa<scl::DivOp>(def))
+      return lv->sdiv(*rv);
+    return lv->srem(*rv);
+  }
+  if (auto neg = llvm::dyn_cast<scl::UnaryMinusOp>(def)) {
+    auto ov = foldConstBits(neg.getRhs(), width);
+    if (!ov)
+      return std::nullopt;
+    return llvm::APInt(width, 0) - *ov;
+  }
+  return std::nullopt;
+}
+
 /// Compute the layouts of all function blocks in the module.
 static FbLayoutCache computeFbLayouts(ModuleOp module) {
   FbLayoutCache layouts;
@@ -108,13 +151,15 @@ static FbLayoutCache computeFbLayouts(ModuleOp module) {
         // the instance DB global's initializer (cold start), NOT emitted in
         // the FB body (which would re-initialize on every call).
         if (Value init = var.getInit()) {
-          if (auto c = init.getDefiningOp<scl::ConstantOp>()) {
-            Attribute attr = c.getValue();
-            if (auto intAttr = attr.dyn_cast<IntegerAttr>())
-              member.initBits = intAttr.getValue();
-            else if (auto floatAttr = attr.dyn_cast<FloatAttr>())
-              member.initBits = floatAttr.getValue().bitcastToAPInt();
-          }
+          unsigned width = 64;
+          if (auto it = var.getType().dyn_cast<scl::IntegerType>())
+            width = it.getWidth();
+          else if (auto lt = var.getType().dyn_cast<scl::LogicalType>())
+            width = lt.getWidth();
+          else if (var.getType().isa<scl::RealType>())
+            width = 32;
+          if (auto bits = foldConstBits(init, width))
+            member.initBits = *bits;
         }
         layout.members.push_back(std::move(member));
         layout.size += size;

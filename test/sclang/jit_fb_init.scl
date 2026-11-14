@@ -1,0 +1,31 @@
+// RUN: sclang --opt --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// Non-literal constant FB initializers are folded (cold start): a = 40+2
+// -> 42 (big-endian low byte of %MW0 at M[1]), b = true -> M[2]=1.
+// CHECK: M:
+// CHECK: M[1]=42
+// CHECK: M[2]=1
+// CHECK: clock=0ms
+function_block fb1
+var
+  a : int := 40 + 2;
+  b : bool := true;
+end_var
+begin
+end_function_block
+
+data_block db1
+  fb1
+end_data_block
+
+function OB1 : int
+begin
+  fb1."db1"();
+  %MW0 := "db1".a;
+  %M2.0 := "db1".b;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function
