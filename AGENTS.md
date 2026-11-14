@@ -3,6 +3,29 @@
 MLIR-based SCL (Siemens Structured Control Language) compiler. Repo root is the
 project root; branch `main`.
 
+## Maintenance rule for this file
+
+**Keep this file up to date at all times.** Whenever you learn something
+important in a session — a design decision that must not regress, a build or
+host quirk, a new pitfall, a change in test count or pipeline behavior, a new
+known gap — add it to the appropriate section below *in the same session*,
+automatically, without being asked. AGENTS.md is the memory between sessions:
+if it is not written here, it is forgotten. Design rationale that is expensive
+to reverse goes into an ADR under `docs/decisions/` (see below) and gets a
+one-line pointer here.
+
+## Documentation
+
+- `docs/decisions/` — ADRs (Context/Decision/Consequences + Status/Date) for
+  hard-to-reverse decisions: 001 big-endian storage, 002 runtime C ABI
+  (sim vs host), 003 AWL as a parallel dialect converging at std IR.
+- `docs/design/` — evolving design plans: memory-areas, awl-frontend,
+  scl-to-awl. Update these when the plan changes; add new ADRs when a decision
+  becomes fixed.
+- README.md is user-facing (status + build); do not put design detail there.
+- In-code rationale lives next to the code: `.td` description fields, and the
+  runtime ABI contract in the header comments of `include/sclang/Runtime/Runtime.h`.
+
 ## Architecture / pipeline
 
 ```
@@ -130,6 +153,12 @@ has no `\b` — use python3 for regex edits.
   CFGs (backward gotos) if you want `cf.br` to survive in CHECK lines.
 
 ## Known gaps (parsed but not lowered / not code-generated)
+
+Planned next features (designs in `docs/design/`, ADRs in `docs/decisions/`):
+memory areas (`%I`/`%Q`/`%M`/`%DB…`) with runtime support (sim + host), the AWL
+frontend, and the SCL→AWL text backend.
+
+Remaining technical gaps:
 
 - Array-of-struct members (`a[i].x`): the byte-view chain has a dynamic offset
   at the inner cast, which `resolveByteViewRoot` cannot fold statically.
