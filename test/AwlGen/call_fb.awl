@@ -5,7 +5,7 @@
 // instance DB number; inside the FB, bare DB operands (db=0) mean the
 // instance DB and lower to scl_rt_read/write on the func argument.
 // CHECK-LABEL: awl.block "OB1"
-// CHECK: awl.call @FB1(), db 2 : () -> ()
+// CHECK: awl.call @FB1, db 2
 // CHECK: awl.direct DB, 2, 0, 0, 16 : !scl.direct<DB, 2, 0, 0, 16>
 // CHECK-LABEL: awl.block "FB1"
 // CHECK: awl.direct DB, 0, 0, 0, 16 : !scl.direct<DB, 0, 0, 0, 16>
