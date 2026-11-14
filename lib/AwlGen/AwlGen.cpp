@@ -504,10 +504,8 @@ private:
       return parseCounterZW(m == "ZV");
     if (m == "SPA" || m == "SPB" || m == "SPN")
       return parseJump(m);
-    if (m == "CALL" || m == "UC")
-      return parseCall();
-    if (m == "CC")
-      return error("CC (conditional call) is not yet supported");
+    if (m == "CALL" || m == "UC" || m == "CC")
+      return parseCall(m == "CC");
     return error("unknown instruction '" + m + "' in block " + blockName);
   }
 
@@ -1009,8 +1007,14 @@ private:
     return true;
   }
 
-  bool parseCall() {
-    // CALL/UC FC n | CALL/UC FB n, DB m
+  bool parseCall(bool cond) {
+    // CALL/UC/CC FC n | CALL/UC/CC FB n, DB m ; CC calls only if RLO = 1
+    mlir::Value rloVal;
+    if (cond) {
+      if (!ensureRlo())
+        return false;
+      rloVal = rlo;
+    }
     if (lexer.getCurToken() != Tok::ident)
       return error("expected FC/FB after CALL");
     std::string kind = upperIdent();
@@ -1040,9 +1044,13 @@ private:
       attrs.push_back(
           builder.getNamedAttr("db", builder.getI32IntegerAttr((int32_t)db)));
     }
-    builder.create<awl::CallOp>(loc(), mlir::TypeRange{}, mlir::ValueRange{},
+    builder.create<awl::CallOp>(loc(), mlir::TypeRange{},
+                                cond ? mlir::ValueRange{rloVal}
+                                     : mlir::ValueRange{},
                                 attrs);
-    rloActive = false;
+    if (!cond)
+      rloActive = false;
+    // CC leaves RLO unchanged (S7 semantics), so the chain stays active
     return true;
   }
 };

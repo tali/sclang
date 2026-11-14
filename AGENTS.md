@@ -115,13 +115,14 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 85 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 87 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
   (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
-  timer/timer_lower/call_fb, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
+  timer/timer_lower/call_fb/cc, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
   jit_areas + jit_tc + jit_awl (.scl/.awl cross-check) + jit_awl_backend
   (SCL->AWL->JIT) + jit_timer (AWL timers/counters via --jit-cycles/--cycle-ms)
-  + jit_fb_awl (CALL FB n, DB m via --dump-areas) in sclang.
+  + jit_fb_awl (CALL FB n, DB m via --dump-areas) + jit_cc (CC via
+  --dump-areas) in sclang.
 
 ## Key design decisions (do not regress)
 
@@ -234,7 +235,7 @@ has no `\b` — use python3 for regex edits.
   AWL parser pitfall: a label branch in the instruction loop must `continue`,
   not fall through to parseInstruction (two consecutive labels misparse).
   AWL backend gaps: FC params, FB arrays/structs/strings, cross-width
-  assignment, DB initializers, CC. (CALL FB n, DB m and timers are done —
+  assignment, DB initializers. (CALL FB n, DB m, CC and timers are done —
   see below.)
 - **CALL FB n, DB m + FB instance DBs (implemented)**: AWL `CALL FB n, DB m`
   / `UC FB n, DB m` -> `awl.call @FBn, db m`; an FB block lowers to
@@ -257,6 +258,20 @@ has no `\b` — use python3 for regex edits.
   `test/sclang/jit_fb_awl.awl` (JIT), `test/SclTransforms/to_awl_fb.scl`.
   FileCheck pitfall: `CHECK-LABEL: FB 1` also matches inside the line
   `CALL FB 1, DB 2` — anchor block labels with `{{^}}FB 1`.
+- **CC (conditional call, implemented)**: `CC FB n, DB m` / `CC FC n` parses
+  to `awl.call` with an optional `rlo` operand (the current RLO SSA value;
+  CC leaves RLO unchanged, CALL/UC reset the chain). In AwlBlockOpLowering a
+  call with an rlo is a cut op like a jump: an empty head block is split in
+  front of the call block and gets `cf.cond_br(rlo, callBlock, fall)`; the
+  call itself stays in callBlock for AwlCallOpLowering. The printer emits
+  `CC FB n, DB m` (and counts a CallOp rlo use as an rlo-chain use so the
+  neutral const-true is still not printed). `awl.call` has NO variadic
+  argument operand anymore (FC params unsupported): ODS rejects
+  Variadic+Optional in one op without segment sizes, so the only operand is
+  the optional rlo; printed form is `awl.call @FB1, db 2` (no `()` suffix).
+  Tests: `test/AwlGen/cc.awl` (parse/lower/round-trip), `test/sclang/jit_cc.awl`.
+  Canonicalizer note: `L 1; L 1; ==I; CC …` folds the cmpeq to a constant and
+  the dead call disappears — use M-area loads in tests to keep cond_br.
   C++ pitfall hit: `llvm::StringRef::upper()` returns a temporary
   `std::string` — never bind `StringRef x = s.upper()` (dangling); go through
   a `std::string` local.
@@ -297,9 +312,9 @@ has no `\b` — use python3 for regex edits.
 
 ## Known gaps (parsed but not lowered / not code-generated)
 
-AWL known gaps (both directions): CC (conditional call), CALL DB m, FC
-parameter passing. (IEC timer instructions SP/SE/SS/SV/SI, counters ZV/ZR,
-and CALL FB n / DB m with FB instance DBs are implemented — see the bullets
+AWL known gaps (both directions): CALL DB m, FC parameter passing. (IEC
+timer instructions SP/SE/SS/SV/SI, counters ZV/ZR, CALL FB n / DB m with FB
+instance DBs, and CC conditional calls are implemented — see the bullets
 above.)
 
 Memory areas `%I`/`%Q`/`%M`/`%DB…`/`%T`/`%C` are implemented (see above):

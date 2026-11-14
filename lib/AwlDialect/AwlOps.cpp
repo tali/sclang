@@ -103,7 +103,12 @@ CallInterfaceCallable CallOp::getCallableForCallee() {
   return getOperation()->getAttrOfType<SymbolRefAttr>(getCalleeAttrName());
 }
 
-Operation::operand_range CallOp::getArgOperands() { return getArguments(); }
+Operation::operand_range CallOp::getArgOperands() {
+  // no variadic call arguments yet (FC parameters unsupported); the optional
+  // rlo operand of CC is not a call argument
+  return Operation::operand_range(getOperation()->operand_begin(),
+                                  getOperation()->operand_begin());
+}
 
 // MARK: TableGen'd op method definitions
 

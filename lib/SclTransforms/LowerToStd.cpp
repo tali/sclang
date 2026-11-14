@@ -2084,8 +2084,7 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
   LogicalResult
   matchAndRewrite(awl::CallOp op, awl::CallOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    SmallVector<Value, 4> args(adaptor.getArguments().begin(),
-                               adaptor.getArguments().end());
+    SmallVector<Value, 4> args;
     // CALL FB n, DB m: pass the instance DB number as the FB's i32 argument
     if (auto dbAttr = op.getDb()) {
       auto i32 = rewriter.getI32Type();
@@ -2188,12 +2187,13 @@ struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
     if (isFb)
       flat->addArgument(rewriter.getI32Type(), loc);
 
-    // Collect cut ops (labels, jumps, be) and split the flat block before
-    // each of them, so every cut starts a new block.
+    // Collect cut ops (labels, jumps, conditional calls, be) and split the
+    // flat block before each of them, so every cut starts a new block.
     SmallVector<Operation *, 16> cuts;
     for (auto &o : flat->getOperations())
       if (isa<awl::LabelOp, awl::JumpOp, awl::JumpIfOp, awl::JumpIfNotOp,
-              awl::BeOp>(&o))
+              awl::BeOp>(&o) ||
+          (isa<awl::CallOp>(&o) && cast<awl::CallOp>(&o).getRlo()))
         cuts.push_back(&o);
     DenseMap<Operation *, Block *> cutBlock;
     for (auto *cut : cuts)
@@ -2261,6 +2261,22 @@ struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
         rewriter.create<cf::CondBranchOp>(loc, j.getRlo(), fall, ValueRange{},
                                           it->second, ValueRange{});
         rewriter.eraseOp(j);
+      } else if (auto cc = dyn_cast<awl::CallOp>(cut)) {
+        // CC: call only if RLO = 1. Split an empty head block in front of
+        // the call block; the head gets cond_br(rlo, callBlock, fall) and
+        // the call itself stays in callBlock for AwlCallOpLowering.
+        Block *callB = rewriter.splitBlock(b, b->begin());
+        auto nextIt = std::next(cc->getIterator());
+        Block *fall =
+            nextIt != callB->end() ? rewriter.splitBlock(callB, nextIt)
+                                   : callB->getNextNode();
+        if (!fall) {
+          emitError(cc.getLoc()) << "conditional call without fallthrough block";
+          return failure();
+        }
+        rewriter.setInsertionPointToEnd(b);
+        rewriter.create<cf::CondBranchOp>(loc, cc.getRlo(), callB,
+                                          ValueRange{}, fall, ValueRange{});
       } else if (auto be = dyn_cast<awl::BeOp>(cut)) {
         rewriter.setInsertionPointToEnd(b);
         rewriter.create<func::ReturnOp>(loc);

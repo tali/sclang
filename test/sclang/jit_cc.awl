@@ -1,0 +1,29 @@
+// RUN: sclang -x awl --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// CC FB 1, DB 2 executes only when RLO = 1: M0.0 is set (MB0 == 1) so the
+// first CC calls the FB, MB1 == 0 so the second does not — the instance DB
+// word 0 ends at 1, not 2.
+// CHECK: M:
+// CHECK: M[1]=1
+// CHECK: DB2:
+// CHECK: DB2[1]=1
+// CHECK: clock=0ms
+OB 1
+  S M0.0
+  L MB0
+  L 1
+  ==I
+  CC FB 1, DB 2
+  L MB1
+  L 1
+  ==I
+  CC FB 1, DB 2
+  L DB2.DBW0
+  T MW0
+  BE
+FB 1
+  L DB.DBW0
+  L 1
+  +I
+  T DB.DBW0
+  BE

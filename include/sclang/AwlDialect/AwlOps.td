@@ -210,11 +210,13 @@ def JumpIfNotOp : AwlOp<"jump_if_not"> {
 }
 
 def CallOp : AwlOp<"call", [DeclareOpInterfaceMethods<CallOpInterface>]> {
-  let summary = "CALL/UC: call a block (FC/OB n, or FB n with instance DB m)";
-  let arguments = (ins FlatSymbolRefAttr:$callee, Variadic<AnyType>:$arguments,
+  let summary = "CALL/UC/CC: call a block (FC/OB n, or FB n with instance DB m); CC calls only if RLO = 1";
+  // FC parameters (a variadic argument list) are not supported yet; the
+  // only operand is the optional RLO of CC.
+  let arguments = (ins FlatSymbolRefAttr:$callee, Optional<Awl_Bool>:$rlo,
                        OptionalAttr<I32Attr>:$db);
   let results = (outs);
-  let assemblyFormat = "attr-dict $callee `(` $arguments `)` (`,` `db` $db^)? `:` functional-type($arguments, results)";
+  let assemblyFormat = "attr-dict $callee (`,` `rlo` $rlo^ `:` type($rlo))? (`,` `db` $db^)?";
 }
 
 // MARK: timers (SP/SE/SS/SV/SI T n) and counters (ZV/ZR/S/R C n)

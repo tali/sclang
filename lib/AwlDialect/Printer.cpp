@@ -177,7 +177,8 @@ struct TextPrinter {
             res.use_empty() ||
             llvm::all_of(res.getUsers(), [&](Operation *u) {
               return (isa<RloAndOp, RloOrOp>(u) && u->getOperand(0) == res) ||
-                     (isa<AssignOp>(u) && u->getOperand(0) == res);
+                     (isa<AssignOp>(u) && u->getOperand(0) == res) ||
+                     (isa<CallOp>(u) && cast<CallOp>(u).getRlo() == res);
             });
         if (onlyRloInit)
           skipConsts.insert(res);
@@ -376,10 +377,11 @@ struct TextPrinter {
       }
       if (auto c = dyn_cast<CallOp>(&o)) {
         llvm::StringRef callee = c.getCallee();
+        bool cc = (bool)c.getRlo();
         if (callee.startswith("FC"))
-          os << "  UC FC " << callee.drop_front(2) << '\n';
+          os << (cc ? "  CC FC " : "  UC FC ") << callee.drop_front(2) << '\n';
         else if (callee.startswith("FB")) {
-          os << "  CALL FB " << callee.drop_front(2);
+          os << (cc ? "  CC FB " : "  CALL FB ") << callee.drop_front(2);
           if (auto db = c.getDb())
             os << ", DB " << db.value();
           os << '\n';

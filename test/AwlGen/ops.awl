@@ -20,7 +20,7 @@
 // CHECK: awl.assign %{{.*}}, %{{.*}} : i1, !scl.direct<Q, 0, 2, 0, 1>
 // CHECK: awl.be
 // CHECK-LABEL: awl.block "_mlir_ciface_OB1"
-// CHECK: awl.call @OB1() : () -> ()
+// CHECK: awl.call @OB1
 // CHECK: awl.be
 OB 1
   L MW 10
