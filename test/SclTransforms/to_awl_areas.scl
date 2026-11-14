@@ -1,0 +1,22 @@
+// RUN: sclang-gen --emit=awl %s | FileCheck %s
+// SCL -> AWL: %-direct addresses stay direct (E/A/M/DB operand syntax),
+// bool vars become bit operands with U/= rlo ops.
+// CHECK-LABEL: OB 1
+// CHECK: L 258
+// CHECK: T MW20
+// CHECK: U E0.0
+// CHECK: = A1.0
+// CHECK: U DB1.DBX0.0
+// CHECK: = A0.0
+// CHECK: L DB1.DBW2
+// CHECK: L 1
+// CHECK: +I
+// CHECK: T DB1.DBW4
+// CHECK: BE
+function OB1 : int
+begin
+  %MW20 := 258;
+  %Q1.0 := %I0.0;
+  %Q0.0 := %DB1.DBX0.0;
+  %DB1.DBW4 := %DB1.DBW2 + 1;
+end_function

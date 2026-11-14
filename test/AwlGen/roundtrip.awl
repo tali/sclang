@@ -1,0 +1,44 @@
+// RUN: sclang-gen -x awl --emit=awl %s | FileCheck %s
+// RUN: sclang-gen -x awl --emit=awl %s | sclang-gen -x awl --emit=awl - | FileCheck %s
+// awl -> awl round trip (docs/design/scl-to-awl.md): the text printer's
+// output must re-parse and re-emit identically (second RUN line).
+// CHECK-LABEL: OB 1
+// CHECK: L MW10
+// CHECK: L MW12
+// CHECK: +I
+// CHECK: T MW14
+// CHECK: L 5
+// CHECK: L 3
+// CHECK: ==I
+// CHECK: SPB SKIP
+// CHECK: S A1.0
+// CHECK: SKIP:
+// CHECK: L MW14
+// CHECK: L 8
+// CHECK: >I
+// CHECK: SPB BIG
+// CHECK: R A1.0
+// CHECK: BIG:
+// CHECK: U E0.0
+// CHECK: = A2.0
+// CHECK: BE
+OB 1
+  L MW 10
+  L MW 12
+  +I
+  T MW 14
+  L 5
+  L 3
+  ==I
+  SPB skip
+  S A 1.0
+skip:
+  L MW 14
+  L 8
+  >I
+  SPB big
+  R A 1.0
+big:
+  U E 0.0
+  = A 2.0
+  BE

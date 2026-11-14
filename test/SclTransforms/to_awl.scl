@@ -1,0 +1,42 @@
+// RUN: sclang-gen --emit=awl %s | FileCheck %s
+// SCL -> AWL text backend (docs/design/scl-to-awl.md): locals go to the M
+// area, if/while become labels + jumps.
+// CHECK-LABEL: OB 1
+// CHECK: L 1
+// CHECK: T MW0
+// CHECK: L MW0
+// CHECK: L 0
+// CHECK: >I
+// CHECK: SPN ELSE{{[0-9]+}}
+// CHECK: L MW0
+// CHECK: L 2
+// CHECK: +I
+// CHECK: T MW0
+// CHECK: SPA END{{[0-9]+}}
+// CHECK: L 3
+// CHECK: T MW0
+// CHECK: L MW2
+// CHECK: L 10
+// CHECK: <I
+// CHECK: SPB BODY{{[0-9]+}}
+// CHECK: L MW2
+// CHECK: L 1
+// CHECK: +I
+// CHECK: T MW2
+// CHECK: BE
+function OB1 : int
+var_temp
+  x : int;
+  i : int;
+end_var
+begin
+  x := 1;
+  IF x > 0 THEN
+    x := x + 2;
+  ELSE
+    x := 3;
+  END_IF;
+  WHILE i < 10 DO
+    i := i + 1;
+  END_WHILE;
+end_function

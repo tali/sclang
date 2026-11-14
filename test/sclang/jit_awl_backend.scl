@@ -1,0 +1,19 @@
+// RUN: sclang-gen --emit=awl %s | sclang -x awl --emit=jit --dump-areas - 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// SCL -> AWL text -> AWL frontend -> JIT (docs/design/scl-to-awl.md): the
+// lowered AWL must behave identically to the SCL original (same memory
+// writes as jit_awl.scl / jit_awl.awl).
+// CHECK: Q:
+// CHECK: Q[0]=1
+// CHECK: M:
+// CHECK: M[20]=1
+// CHECK: M[21]=2
+// CHECK: clock=0ms
+function OB1 : int
+begin
+  %MW20 := 258;
+  IF %MW20 > 0 THEN
+    %Q0.0 := TRUE;
+  END_IF;
+  %Q1.0 := %I0.0;
+end_function

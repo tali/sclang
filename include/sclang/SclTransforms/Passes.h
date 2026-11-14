@@ -27,6 +27,11 @@ std::unique_ptr<mlir::Pass> createLowerToStdPass();
 /// Create a pass for lowering `Std` to the LLVM dialect for codegen.
 std::unique_ptr<mlir::Pass> createLowerToLLVMPass();
 
+/// Create a pass for lowering the SCL dialect to the AWL dialect
+/// (SCL->AWL text backend, docs/design/scl-to-awl.md); the result is printed
+/// as S7 AWL text by `awl::printAwlText` (`sclang-gen --emit=awl`).
+std::unique_ptr<mlir::Pass> createLowerToAWLPass();
+
 } // namespace sclang
 } // end namespace mlir
 

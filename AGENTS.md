@@ -105,10 +105,11 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 74 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 78 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
-  (SclTransforms), AwlGen ops/lower/areas/err_label, jit_areas + jit_tc +
-  jit_awl (.scl/.awl cross-check, identical JIT output) in sclang.
+  (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip, to_awl +
+  to_awl_areas (SclTransforms), jit_areas + jit_tc + jit_awl (.scl/.awl
+  cross-check) + jit_awl_backend (SCL->AWL->JIT) in sclang.
 
 ## Key design decisions (do not regress)
 
@@ -202,6 +203,26 @@ has no `\b` — use python3 for regex edits.
   non-zero area/DB bytes (`M[20]=1`, `DB1[3]=7`, `clock=…ms`) — makes memory
   writes observable in JIT tests (used by the SCL-vs-AWL cross-check
   `test/sclang/jit_awl.{scl,awl}`, which must produce identical output).
+- **SCL→AWL text backend (docs/design/scl-to-awl.md, implemented)**:
+  `sclang-gen --emit=awl` runs `createLowerToAWLPass()`
+  (`lib/SclTransforms/LowerToAWL.cpp`): each OB/FB/FC-n `scl.function` becomes
+  an `awl.block`; locals are allocated in the M area (bit-packed bools),
+  `%`-directs stay direct, expressions are emitted in accumulator order
+  (operands materialized recursively), if/while/repeat/for/case/goto become
+  labels+jumps, bool logic becomes rlo chains (temps for computed operands).
+  `_mlir_ciface_*` JIT wrappers and data blocks are dropped. The result is
+  printed as S7 text by `awl::printAwlText` (`lib/AwlDialect/Printer.cpp`),
+  which simulates the ACC stack/RLO and reconstructs `A(`/`O(` brackets.
+  Verified by awl→awl round-trip stability and by
+  `test/sclang/jit_awl_backend.scl` (SCL→AWL→JIT == SCL→JIT memory writes).
+  Printer pitfalls: i1 consts must print unsigned (`L 1`, not `L -1`);
+  rlo-init `const true` (incl. before `=`) is not printed; `awl.cast` is
+  implicit in the mnemonic letter; the CASE selector is re-loaded per
+  compare (AWL `L` shifts ACC1 into ACC2).
+  AWL parser pitfall: a label branch in the instruction loop must `continue`,
+  not fall through to parseInstruction (two consecutive labels misparse).
+  AWL backend gaps: FC params, CALL FB n/DB m, FB members/arrays/structs/
+  strings, cross-width assignment, DB initializers, CC, timers.
 - **Big-endian storage (ADR 001, implemented)**: byte `i` of an N-byte value in a
   byte buffer holds bits `8*(N-1-i)..` (most significant byte first, S7 layout).
   Applied in `loadFromByteBuffer`/`storeToByteBuffer`, in the IDB cold-start
@@ -239,12 +260,8 @@ has no `\b` — use python3 for regex edits.
 
 ## Known gaps (parsed but not lowered / not code-generated)
 
-Planned next features (designs in `docs/design/`, ADRs in `docs/decisions/`):
-the SCL→AWL text backend (`docs/design/scl-to-awl.md`). The AWL frontend is
-implemented (see above).
-
-AWL frontend known gaps: CC (conditional call), CALL FB n / CALL DB m,
-IEC timer instructions (SD/SI/…), FC parameter passing.
+AWL known gaps (both directions): CC (conditional call), CALL FB n / CALL DB
+m, IEC timer instructions (SD/SI/…), FC parameter passing.
 
 Memory areas `%I`/`%Q`/`%M`/`%DB…`/`%T`/`%C` are implemented (see above):
 `!scl.direct` type, `scl.getdirect`, `%`-address parsing, lowering to the

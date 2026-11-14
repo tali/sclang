@@ -1,6 +1,17 @@
 # Design: lowering SCL to AWL (text backend)
 
-- **Status**: planned
+- **Status**: implemented. `sclang-gen --emit=awl` runs the LowerToAWL pass
+  (`lib/SclTransforms/LowerToAWL.cpp`) and prints S7 text via
+  `awl::printAwlText` (`lib/AwlDialect/Printer.cpp`). Tests:
+  test/SclTransforms/to_awl{,_areas}.scl, test/AwlGen/roundtrip.awl,
+  test/sclang/jit_awl_backend.scl (SCL -> AWL -> JIT gives the same memory
+  writes as the SCL original).
+  Deviations/gaps: FC parameters, CALL FB n/DB m, FB members (getvariable),
+  arrays/structs, strings, cross-width assignments and DB initializers are
+  rejected/dropped with an error or warning; `scl.debug.print` is dropped;
+  awl.cast is implicit in the mnemonic letter (not printed); bool logic is
+  emitted as rlo chains (U/UN/O/ON/=) with temp bits for computed operands;
+  the CASE selector is re-loaded before each compare (AWL L shifts ACC1).
 - Related: ADR 003, `awl-frontend.md`
 
 Goal: emit canonical AWL (S7 mnemonic) listings from SCL sources, to compare

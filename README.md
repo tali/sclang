@@ -13,10 +13,10 @@ user-defined struct types, strings and date/time types, memory areas
 (`%I`/`%Q`/`%M`/`%DB…`/`%T`/`%C` direct addressing via the runtime C ABI, with a
 simulation runtime for the JIT, host runtime binding via `--runtime-lib`,
 and big-endian storage matching S7), and the compiler can JIT-execute the
-result on the host (74 lit tests pass). AWL (STL) source files (`.awl`) are
-accepted as a parallel input language converging at the same std IR —
+result on the host (78 lit tests pass). AWL (STL) source files (`.awl`) are
+accepted as a parallel input language converging at the same std IR, and SCL
+can be lowered back to AWL text (`sclang-gen --emit=awl`) —
 see `docs/` for the design.
-Not yet implemented: lowering SCL back to AWL text — see `docs/` for the design.
 
 Design documentation lives in [`docs/`](docs/): ADRs for hard-to-reverse
 decisions (`docs/decisions/`) and design plans (`docs/design/`).

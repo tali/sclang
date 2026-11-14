@@ -347,6 +347,7 @@ private:
         rlo = nullptr;
         rloActive = false;
         brackets.clear();
+        continue;
       }
       if (lexer.getCurToken() == Tok::eof)
         return error("missing BE in block " + name);
@@ -446,7 +447,8 @@ private:
       return parseSetReset(true);
     if (m == "R")
       return parseSetReset(false);
-    if (m == "AW" || m == "OW" || m == "XOW")
+    if (m == "AW" || m == "OW" || m == "XOW" || m == "AD" || m == "OD" ||
+        m == "XOD")
       return parseWordLogic(m);
     if (m == "SPA" || m == "SPB" || m == "SPN")
       return parseJump(m);
@@ -812,7 +814,9 @@ private:
   }
 
   bool parseWordLogic(const std::string &m) {
-    auto ty = builder.getI16Type();
+    // AW/OW/XOW operate on words (i16), AD/OD/XOD on double words (i32)
+    auto ty = (m.size() == 3 && m[2] == 'D') ? builder.getI32Type()
+                                             : builder.getI16Type();
     mlir::Value b = popAcc();
     mlir::Value a = popAcc();
     if (!a || !b)
@@ -820,9 +824,9 @@ private:
     a = castTo(a, ty);
     b = castTo(b, ty);
     mlir::Value r;
-    if (m == "AW")
+    if (m[0] == 'A')
       r = builder.create<awl::AndOp>(loc(), ty, a, b);
-    else if (m == "OW")
+    else if (m[0] == 'O')
       r = builder.create<awl::OrOp>(loc(), ty, a, b);
     else
       r = builder.create<awl::XOrOp>(loc(), ty, a, b);

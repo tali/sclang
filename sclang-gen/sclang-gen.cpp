@@ -22,6 +22,7 @@
 
 #include "sclang/SclDialect/Dialect.h"
 #include "sclang/AwlDialect/Dialect.h"
+#include "sclang/AwlDialect/Printer.h"
 #include "sclang/SclGen/MLIRGen.h"
 #include "sclang/SclGen/Parser.h"
 #include "sclang/AwlGen/AwlGen.h"
@@ -66,14 +67,16 @@ static cl::opt<enum InputType> inputType(
                           "load the input file as an MLIR file")));
 
 namespace {
-enum Action { None, DumpAST, DumpMLIR, DumpMLIRStd };
+enum Action { None, DumpAST, DumpMLIR, DumpMLIRStd, DumpAWL };
 }
 static cl::opt<enum Action> emitAction(
     "emit", cl::desc("Select the kind of output desired"),
     cl::values(clEnumValN(DumpAST, "ast", "output the AST dump")),
     cl::values(clEnumValN(DumpMLIR, "mlir", "output the MLIR dump")),
     cl::values(clEnumValN(DumpMLIRStd, "mlir-std",
-                          "output the MLIR dump after std lowering")));
+                          "output the MLIR dump after std lowering")),
+    cl::values(clEnumValN(DumpAWL, "awl",
+                          "output AWL (STL) text after the LowerToAWL pass")));
 
 static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
 
@@ -144,7 +147,7 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
   applyPassManagerCLOptions(pm);
 
   // Check to see what granularity of MLIR we are compiling to.
-  bool isLoweringToStd = emitAction >= Action::DumpMLIRStd;
+  bool isLoweringToStd = emitAction == Action::DumpMLIRStd;
 
   if (enableOpt || isLoweringToStd) {
     mlir::OpPassManager &optFC = pm.nest<mlir::scl::FunctionOp>();
@@ -154,6 +157,12 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
     optFB.addPass(mlir::createCanonicalizerPass());
     optFB.addPass(mlir::createCSEPass());
  }
+
+  if (emitAction == Action::DumpAWL) {
+    // SCL -> AWL backend (docs/design/scl-to-awl.md): scl dialect -> awl
+    // dialect; printed as S7 text by awl::printAwlText in main().
+    pm.addPass(mlir::sclang::createLowerToAWLPass());
+  }
 
   if (isLoweringToStd) {
     // Partially lower the SCL dialect with a few cleanups afterwards.
@@ -208,6 +217,11 @@ int main(int argc, char **argv) {
   mlir::OwningOpRef<mlir::ModuleOp> module;
   if (int error = loadAndProcessMLIR(context, module))
     return error;
+
+  if (emitAction == Action::DumpAWL) {
+    mlir::awl::printAwlText(*module, llvm::outs());
+    return 0;
+  }
 
   module->print(llvm::outs());
   return 0;
