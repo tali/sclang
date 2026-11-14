@@ -621,6 +621,131 @@ private:
         });
   }
 
+  /// The declared array type of an expression if it is an array/string
+  /// variable (local, parameter, output or FB member), without codegen.
+  ArrayType arrayTypeOfAST(const ExpressionAST *expr) {
+    auto *var = llvm::dyn_cast<SimpleVariableAST>(expr);
+    if (!var || var->isSymbol())
+      return nullptr;
+    auto sym = symbolTable.lookup(var->getName());
+    if (!sym.getType())
+      return nullptr;
+    mlir::Type t = sym.getType();
+    if (auto at = t.dyn_cast<AddressType>())
+      t = at.getElementType();
+    return t.dyn_cast<ArrayType>();
+  }
+
+  /// Array type behind an address value (direct element type or byte view).
+  ArrayType arrayTypeOfAddress(mlir::Value addr) {
+    if (!addr || !addr.getType().isa<AddressType>())
+      return nullptr;
+    auto elem = addr.getType().cast<AddressType>().getElementType();
+    if (auto at = elem.dyn_cast<ArrayType>())
+      return at;
+    auto it = byteViewTypes.find(addr);
+    if (it != byteViewTypes.end())
+      return it->second.dyn_cast<ArrayType>();
+    return nullptr;
+  }
+
+  /// Address of element `index` of an array-typed lvalue, plus its load.
+  mlir::Value arrayElemAddr(mlir::Location loc, mlir::Value arrAddr,
+                            ArrayType arrTy, int64_t index,
+                            mlir::TypeAttr attr) {
+    auto elemTy = arrTy.getElementType();
+    auto intTy = getType(tok_int);
+    auto i16 = builder.getIntegerType(16);
+    auto idx = builder.create<ConstantOp>(
+        loc, intTy,
+        builder.getIntegerAttr(i16, arrTy.getDimensions()[0].first + index));
+    return builder.create<GetIndexOp>(loc, AddressType::get(elemTy), arrAddr,
+                                      mlir::ValueRange{idx}, attr);
+  }
+
+  /// String/array comparison (s1 = s2, s1 <> 'lit', </<=/>/>=): unrolled
+  /// byte-wise compare of the char arrays; a string literal side compares
+  /// against its zero-padded bytes. Returns nullptr when neither side is a
+  /// string/array/literal (not handled here).
+  mlir::Value mlirGenStringCompare(const BinaryExpressionAST *expr) {
+    auto location = loc(expr->loc());
+    auto op = expr->getOp();
+    ArrayType lhsArr = arrayTypeOfAST(expr->getLhs());
+    ArrayType rhsArr = arrayTypeOfAST(expr->getRhs());
+    const StringConstantAST *lhsLit =
+        llvm::dyn_cast<StringConstantAST>(expr->getLhs());
+    const StringConstantAST *rhsLit =
+        llvm::dyn_cast<StringConstantAST>(expr->getRhs());
+    if (!lhsArr && !rhsArr && !lhsLit && !rhsLit)
+      return nullptr;
+    ArrayType arrTy = lhsArr ? lhsArr : rhsArr;
+    if (!arrTy) {
+      emitError(location) << "string literal compared with a non-string";
+      return nullptr;
+    }
+    auto elemTy = arrTy.getElementType();
+    if (!elemTy.isa<IntegerType>() ||
+        elemTy.cast<IntegerType>().getWidth() != 8) {
+      emitError(location) << "only string (char array) comparison is supported";
+      return nullptr;
+    }
+    auto dims = arrTy.getDimensions();
+    int64_t count = dims[0].second - dims[0].first + 1;
+    mlir::Value lhsAddr = lhsLit ? nullptr : mlirGen(expr->getLhs());
+    mlir::Value rhsAddr = rhsLit ? nullptr : mlirGen(expr->getRhs());
+    if (!lhsLit && !lhsAddr)
+      return nullptr;
+    if (!rhsLit && !rhsAddr)
+      return nullptr;
+    if ((!lhsLit && !arrayTypeOfAddress(lhsAddr)) ||
+        (!rhsLit && !arrayTypeOfAddress(rhsAddr))) {
+      emitError(location) << "cannot compare a string with a non-string";
+      return nullptr;
+    }
+    mlir::TypeAttr attr = mlir::TypeAttr::get(arrTy);
+    auto i8 = builder.getIntegerType(8);
+    auto i1 = builder.getI1Type();
+    auto constBool = [&](bool v) {
+      return builder.create<ConstantOp>(
+          location, getType(tok_bool),
+          builder.getIntegerAttr(i1, v ? 1 : 0));
+    };
+    // byteAt: i8 value of element i of side (addr or literal)
+    auto byteAt = [&](mlir::Value addr, llvm::StringRef lit,
+                      int64_t i) -> mlir::Value {
+      if (addr)
+        return builder.create<LoadOp>(
+            location, i8, arrayElemAddr(location, addr, arrTy, i, attr));
+      uint8_t byte = i < (int64_t)lit.size() ? (uint8_t)lit[i] : 0;
+      return builder.create<ConstantOp>(location, i8,
+                                        builder.getIntegerAttr(i8, byte));
+    };
+    mlir::Value eqAcc = constBool(true), ltAcc = constBool(false),
+                gtAcc = constBool(false), prefix = constBool(true);
+    for (int64_t i = 0; i < count; ++i) {
+      mlir::Value a = byteAt(lhsAddr, lhsLit ? lhsLit->getValue() : "", i);
+      mlir::Value b = byteAt(rhsAddr, rhsLit ? rhsLit->getValue() : "", i);
+      mlir::Value eq = builder.create<EqualOp>(location, a, b);
+      mlir::Value lt = builder.create<LessThanOp>(location, a, b);
+      mlir::Value gt = builder.create<GreaterThanOp>(location, a, b);
+      eqAcc = builder.create<AndOp>(location, eqAcc, eq);
+      ltAcc = builder.create<OrOp>(
+          location, ltAcc, builder.create<AndOp>(location, prefix, lt));
+      gtAcc = builder.create<OrOp>(
+          location, gtAcc, builder.create<AndOp>(location, prefix, gt));
+      prefix = builder.create<AndOp>(location, prefix, eq);
+    }
+    switch (op) {
+    case tok_cmp_eq: return eqAcc;
+    case tok_cmp_ne: return builder.create<UnaryNotOp>(location, eqAcc);
+    case tok_cmp_lt: return ltAcc;
+    case tok_cmp_gt: return gtAcc;
+    case tok_cmp_le: return builder.create<OrOp>(location, eqAcc, ltAcc);
+    case tok_cmp_ge: return builder.create<OrOp>(location, eqAcc, gtAcc);
+    default: return nullptr;
+    }
+  }
+
   /// Assign a string literal to a string variable: store the literal bytes
   /// (zero-padded to the target length) into the char buffer byte by byte.
   mlir::LogicalResult mlirGenStringAssignment(mlir::Location location,
@@ -686,6 +811,33 @@ private:
     mlir::Value lhs = mlirGenLValue(expr->getLhs());
     if (!lhs)
       return mlir::failure();
+
+    // Whole-array (incl. string) var-to-var assignment `a := b`: copy the
+    // elements one by one (the buffers are flat byte/element buffers).
+    if (ArrayType lhsArr = arrayTypeOfAddress(lhs)) {
+      ArrayType rhsArr = arrayTypeOfAST(expr->getRhs());
+      if (rhsArr && rhsArr.getElementType().isa<IntegerType>() &&
+          lhsArr.getElementType() == rhsArr.getElementType() &&
+          lhsArr.getDimensions() == rhsArr.getDimensions()) {
+        mlir::Value rhsAddr = mlirGen(expr->getRhs());
+        if (!rhsAddr)
+          return mlir::failure();
+        auto elemTy = lhsArr.getElementType();
+        auto dims = lhsArr.getDimensions();
+        int64_t count = dims[0].second - dims[0].first + 1;
+        mlir::TypeAttr attr = mlir::TypeAttr::get(lhsArr);
+        for (int64_t i = 0; i < count; ++i) {
+          mlir::Value dst =
+              arrayElemAddr(location, lhs, lhsArr, i, attr);
+          mlir::Value src =
+              arrayElemAddr(location, rhsAddr, rhsArr, i, attr);
+          mlir::Value v = builder.create<LoadOp>(location, elemTy, src);
+          builder.create<StoreOp>(location, dst, v);
+        }
+        return mlir::success();
+      }
+    }
+
     mlir::Value rhs = mlirGenRValue(expr->getRhs());
     if (!rhs)
       return mlir::failure();
@@ -1106,6 +1258,21 @@ private:
       }
       auto name = llvm::cast<SimpleVariableAST>(expr->getRhs())->getName();
       return mlirGenElement(location, lhs, name);
+    }
+    // String/array comparisons are intercepted before the generic rvalue
+    // conversion, which cannot load a whole array.
+    switch (expr->getOp()) {
+    case tok_cmp_eq:
+    case tok_cmp_ne:
+    case tok_cmp_lt:
+    case tok_cmp_le:
+    case tok_cmp_gt:
+    case tok_cmp_ge:
+      if (mlir::Value strCmp = mlirGenStringCompare(expr))
+        return strCmp;
+      break;
+    default:
+      break;
     }
     // Go through the AST overload so that FB/DB members (addressed as i8
     // views) are loaded with their declared member type.

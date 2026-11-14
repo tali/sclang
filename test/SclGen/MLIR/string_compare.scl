@@ -1,0 +1,24 @@
+// RUN: sclang-gen --emit=mlir %s --opt | FileCheck %s
+// String comparison and whole-string assignment codegen: `b = 'hi'` becomes
+// an unrolled byte-wise cmpeq chain over the char array (ANDed), `b := a`
+// an element-wise load/store copy. Regression test for the lexer bug where a
+// string literal followed by an identifier token was clobbered ('hi' -> 'th').
+// CHECK-LABEL: scl.function @OB1
+// CHECK: scl.getindex {{.*}} from %b : !scl.address<!scl.array<!scl.char, 0:3>>
+// CHECK: scl.load {{.*}} : !scl.address<!scl.char> : !scl.char
+// CHECK: scl.store {{.*}} : !scl.address<!scl.char> = {{.*}} : !scl.char
+// CHECK: scl.load {{.*}} : !scl.address<!scl.char> : i8
+// CHECK: scl.cmpeq {{.*}} : i8
+// CHECK: scl.and {{.*}} : !scl.bool
+function OB1 : int
+var_temp
+  a : string[4];
+  b : string[4];
+end_var
+begin
+  a := 'hi';
+  b := a;
+  if b = 'hi' then
+    %MW0 := 1;
+  end_if;
+end_function

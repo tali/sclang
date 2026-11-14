@@ -1,0 +1,41 @@
+// RUN: sclang --opt --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// String compare + copy + whole-array copy, end to end: b := a ('hi'),
+// b = 'hi' -> r=1, b <> 'xy' -> +10, b < 'hz' (lexicographic) -> +100,
+// arr2 := arr1 copies arr1[0]=7 -> +7. Total 118 = 0x76, big-endian low byte
+// of %MW0 at M[1].
+// CHECK: M:
+// CHECK: M[1]=118
+// CHECK: clock=0ms
+function OB1 : int
+var_temp
+  a : string[4];
+  b : string[4];
+  arr1 : array[0..2] of int;
+  arr2 : array[0..2] of int;
+  r : int;
+end_var
+begin
+  a := 'hi';
+  b := a;
+  if b = 'hi' then
+    r := 1;
+  else
+    r := 2;
+  end_if;
+  if b <> 'xy' then
+    r := r + 10;
+  end_if;
+  if b < 'hz' then
+    r := r + 100;
+  end_if;
+  arr1[0] := 7;
+  arr2 := arr1;
+  r := r + arr2[0];
+  %MW0 := r;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

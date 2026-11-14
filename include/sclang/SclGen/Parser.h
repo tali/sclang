@@ -1279,7 +1279,9 @@ private:
   std::unique_ptr<ConstantAST> ParseStringLiteralExpression() {
     auto loc = lexer.getLastLocation();
 
-    auto value = lexer.getStringValue();
+    // getStringValue() is a StringRef into the lexer's reused buffer; copy it
+    // before consume() lexes the next token (an identifier would clobber it).
+    std::string value = lexer.getStringValue().str();
     Token type = lexer.getLiteralType();
     lexer.consume(tok_string_literal);
 

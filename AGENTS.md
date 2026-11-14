@@ -115,14 +115,15 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 87 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 89 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
   (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
   timer/timer_lower/call_fb/cc, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
   jit_areas + jit_tc + jit_awl (.scl/.awl cross-check) + jit_awl_backend
   (SCL->AWL->JIT) + jit_timer (AWL timers/counters via --jit-cycles/--cycle-ms)
   + jit_fb_awl (CALL FB n, DB m via --dump-areas) + jit_cc (CC via
-  --dump-areas) in sclang.
+  --dump-areas) + jit_string (string compare/copy via --dump-areas) in
+  sclang; string_compare in SclGen/MLIR.
 
 ## Key design decisions (do not regress)
 
@@ -183,8 +184,16 @@ has no `\b` — use python3 for regex edits.
   Boolean literals are i1 (`true`/`false`), and loop conditions go through
   `mlirGenRValue` so a bool variable condition is loaded, not passed as an address.
 - `string[n]` is an array of n chars; `s := 'lit'` stores the literal bytes
-  zero-padded. Case labels support ranges (`1..3:` expands in the parser);
-  `scl.case` lowers to `cf.switch` for any integer selector width.
+  zero-padded. String comparison (`s1 = s2`, `<>`, and lexicographic
+  `</<=/>/>=`, also against a literal) is an unrolled byte-wise compare
+  (AND of cmpeq / OR of cmpne, prefix-eq chain for ordering) in MLIRGen
+  (`mlirGenStringCompare`); string var-to-var and whole-array assignment
+  (`s1 := s2`, `a := b`) is an element-wise copy loop. Lexer pitfall fixed:
+  `getStringValue()` returns a StringRef into the lexer's reused buffer —
+  ParseStringLiteralExpression must copy it BEFORE `consume()` (an identifier
+  token after the literal clobbered it: 'hi' became 'th'). Case labels
+  support ranges (`1..3:` expands in the parser); `scl.case` lowers to
+  `cf.switch` for any integer selector width.
 - `case` -> new `scl.case` op (selector + per-region `array<i32>` case values +
   variadic regions, last = else) -> `cf.switch`. `goto`/labels -> real blocks +
   `cf.br` emitted in MLIRGen (forward gotos create the label block on demand; code
@@ -328,14 +337,14 @@ Remaining technical gaps:
   + AWL timer instructions.
 - Array-of-struct members (`a[i].x`): the byte-view chain has a dynamic offset
   at the inner cast, which `resolveByteViewRoot` cannot fold statically.
-- String comparison, string var-to-var assignment, and string literals outside
-  assignments are not implemented. Strings are zero-padded (SCL pads with
-  spaces).
+- String literals outside assignments/comparisons are not implemented.
+  Strings are zero-padded (SCL pads with spaces — documented deviation).
 - Non-constant FB member initializers are ignored (the IDB global is zeroed).
 - CASE on real/bool selectors is rejected (integer selectors of any width work).
 - `goto` following another terminator is a compile error by design.
-- Whole-array var-to-var assignment (`a := b`) is not lowered (only
-  whole-buffer *input argument* copies via `memref.copy`).
+- Whole-array var-to-var assignment now works for 1-d arrays with scalar
+  element types (element-wise copy in MLIRGen); array-of-struct elements are
+  still not copied.
 
 ## Repo hygiene
 
