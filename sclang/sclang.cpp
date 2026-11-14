@@ -58,6 +58,7 @@
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/Host.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
@@ -103,13 +104,31 @@ static cl::opt<enum Action> emitAction(
 
 static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
 
-/// Size of a simulated memory area in bytes, e.g. `--area-size M=1024`
-/// (areas I/Q/M/T/C; DB areas grow on demand).
+/// Size of a simulated memory area in bytes, e.g. `--area-size M=1024` or
+/// `--area-size DB1=4096` (areas I/Q/M/T/C; DBs grow on demand if unset).
 static cl::list<std::string> areaSizes(
     "area-size",
     cl::desc("Set the size in bytes of a simulated memory area, e.g. "
-             "--area-size M=1024"),
+             "--area-size M=1024 or --area-size DB1=4096"),
     cl::value_desc("AREA=SIZE"));
+
+namespace {
+enum RuntimeKind { Sim, Host };
+}
+/// Which runtime the JIT binds: `sim` (default, built in) or `host` (a
+/// shared library given with --runtime-lib, exporting
+/// scl_host_runtime_vtable()).
+static cl::opt<enum RuntimeKind> runtimeKind(
+    "runtime", cl::init(Sim),
+    cl::desc("Runtime bound to the JIT's @scl_rt_* symbols"),
+    cl::values(clEnumValN(Sim, "sim", "built-in simulation runtime")),
+    cl::values(clEnumValN(Host, "host",
+                          "host runtime from --runtime-lib (ADR 002)")));
+/// Shared library exporting scl_host_runtime_vtable() for --runtime=host.
+static cl::opt<std::string> runtimeLib(
+    "runtime-lib", cl::desc("Shared library with a host runtime vtable "
+                            "(used with --runtime=host)"),
+    cl::value_desc("path.so"));
 
 /// Returns a SCL AST resulting from parsing the file or a nullptr on error.
 std::unique_ptr<sclang::ModuleAST> parseInputFile(llvm::StringRef filename) {
@@ -276,15 +295,60 @@ static void configureSimRuntime() {
       llvm::errs() << "invalid --area-size '" << spec << "', expected AREA=SIZE\n";
       continue;
     }
+    uint64_t size = std::strtoull(spec.c_str() + eq + 1, nullptr, 0);
     llvm::StringRef area(spec.data(), eq);
-    auto areaCode = mlir::scl::DirectType::areaFromName(area.upper());
+    std::string upperStr = area.upper();
+    llvm::StringRef upper(upperStr);
+    if (upper.startswith("DB")) {
+      // DB<n>=size: pre-size a simulated data block
+      uint32_t db = (uint32_t)std::strtoul(upper.data() + 2, nullptr, 0);
+      scl_rt_sim_set_db_size(db, size);
+      continue;
+    }
+    auto areaCode = mlir::scl::DirectType::areaFromName(upper);
     if (!areaCode) {
       llvm::errs() << "invalid --area-size area '" << spec << "'\n";
       continue;
     }
-    uint64_t size = std::strtoull(spec.c_str() + eq + 1, nullptr, 0);
     scl_rt_sim_set_area_size((uint8_t)*areaCode, size);
   }
+}
+
+/// Bind the runtime selected by `--runtime`/`--runtime-lib` (ADR 002):
+/// `sim` clears any registered vtable, `host` loads the vtable exported by
+/// the given shared library and registers it.
+static bool configureRuntimeBinding() {
+  if (runtimeKind == Sim) {
+    scl_rt_register(nullptr);
+    return true;
+  }
+  if (runtimeLib.empty()) {
+    llvm::errs() << "--runtime=host requires --runtime-lib=<path.so>\n";
+    return false;
+  }
+  std::string err;
+  auto lib = llvm::sys::DynamicLibrary::getPermanentLibrary(runtimeLib.c_str(),
+                                                            &err);
+  if (!lib.isValid()) {
+    llvm::errs() << "cannot load runtime lib '" << runtimeLib << "': " << err
+                 << "\n";
+    return false;
+  }
+  auto sym = lib.getAddressOfSymbol("scl_host_runtime_vtable");
+  if (!sym) {
+    llvm::errs() << "runtime lib '" << runtimeLib
+                 << "' does not export scl_host_runtime_vtable\n";
+    return false;
+  }
+  auto getVtable = (const SclRtVTable *(*)())sym;
+  const SclRtVTable *vt = getVtable();
+  if (!vt) {
+    llvm::errs() << "runtime lib '" << runtimeLib
+                 << "' returned a null vtable\n";
+    return false;
+  }
+  scl_rt_register(vt);
+  return true;
 }
 
 int runJit(mlir::ModuleOp module) {
@@ -316,8 +380,11 @@ int runJit(mlir::ModuleOp module) {
   assert(maybeEngine && "failed to construct an execution engine");
   auto &engine = maybeEngine.get();
 
-  // Bind the runtime C ABI (ADR 002) and apply --area-size options.
+  // Bind the runtime C ABI (ADR 002): select sim/host runtime, apply
+  // --area-size options, and bind the JIT symbols to the runtime functions.
   configureSimRuntime();
+  if (!configureRuntimeBinding())
+    return -1;
   bindRuntimeSymbols(*engine);
 
   // Invoke the JIT-compiled function.

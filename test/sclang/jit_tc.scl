@@ -1,0 +1,28 @@
+// RUN: sclang --opt --emit=jit %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+
+// CHECK: tc ok
+// CHECK: tw ok
+// Timers/counters (%T/%C) go through the runtime like other areas; the sim
+// treats them as plain byte areas with a virtual clock (scl_rt_cycle).
+function OB1 : int
+var_temp
+  x : int;
+end_var
+begin
+  %CD0 := 7;
+  %TW2 := 300;
+  x := %CD0;
+  IF x = 7 THEN
+    // DEBUG PRINT tc ok
+  END_IF;
+  x := %TW2;
+  IF x = 300 THEN
+    // DEBUG PRINT tw ok
+  END_IF;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

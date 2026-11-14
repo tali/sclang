@@ -45,9 +45,14 @@ one-line pointer here.
 - `--opt` enables canonicalizer/CSE between stages.
 - Memory areas: the JIT binds `@scl_rt_*` to the sim runtime
   (`lib/Runtime/SimRuntime.cpp`) via `ExecutionEngine::registerSymbols`;
-  `--area-size M=1024` configures simulated area sizes (default 65536 bytes,
-  OOB aborts; DBs grow lazily). A host redirects calls with
-  `scl_rt_register(&vtable)` (ADR 002).
+  `--area-size M=1024` / `--area-size DB1=4096` configure simulated area/DB
+  sizes (default 65536 bytes for I/Q/M/T/C, OOB aborts; DBs grow lazily unless
+  sized). `--runtime=host --runtime-lib=path.so` dlopens a host runtime
+  exporting `scl_host_runtime_vtable()` and registers its vtable via
+  `scl_rt_register` (LLVM 17: `DynamicLibrary::getPermanentLibrary` returns a
+  value, check `isValid()`; `llvm::JITSymbolFlags`, not `llvm::orc::…`).
+  `%T`/`%C` are accepted and treated as plain areas (IEC timer semantics and
+  callers of `scl_rt_cycle` are a known gap).
 
 ## LLVM version
 
@@ -92,9 +97,9 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 67 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, sclang JIT),
+- 68 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, sclang JIT),
   incl. direct_address (Parse), direct (MLIR), direct + big_endian
-  (SclTransforms), jit_areas (JIT).
+  (SclTransforms), jit_areas + jit_tc (JIT).
 
 ## Key design decisions (do not regress)
 
@@ -202,16 +207,16 @@ has no `\b` — use python3 for regex edits.
 ## Known gaps (parsed but not lowered / not code-generated)
 
 Planned next features (designs in `docs/design/`, ADRs in `docs/decisions/`):
-the AWL frontend and the SCL→AWL text backend, host-process runtime binding
-via driver flags (`--runtime=host` / `--runtime-lib`; the `SclRtVTable`
-mechanism in Runtime.h already works), timers/counters (`%T`/`%C`) with
-`scl_rt_cycle`.
+the AWL frontend and the SCL→AWL text backend.
 
-Memory areas `%I`/`%Q`/`%M`/`%DB…` are implemented (phase 1, see above):
+Memory areas `%I`/`%Q`/`%M`/`%DB…`/`%T`/`%C` are implemented (see above):
 `!scl.direct` type, `scl.getdirect`, `%`-address parsing, lowering to the
-`scl_rt_*` C ABI, sim runtime + JIT binding, OB scan-cycle hooks, big-endian.
+`scl_rt_*` C ABI, sim runtime + JIT binding, host binding via
+`--runtime=host --runtime-lib=…`, OB scan-cycle hooks, big-endian.
 
 Remaining technical gaps:
+- IEC timer semantics (S5TIME encoding, timer start/reset) and anything
+  calling `scl_rt_cycle` — `%T`/`%C` are plain byte areas in the sim.
 
 - Array-of-struct members (`a[i].x`): the byte-view chain has a dynamic offset
   at the inner cast, which `resolveByteViewRoot` cannot fold statically.

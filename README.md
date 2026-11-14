@@ -10,11 +10,11 @@ parsing SCL files works well. Code generation covers functions, function blocks,
 organization blocks, expressions, control flow (if/elsif/else, for, while,
 repeat-until, CASE, GOTO/labels, continue/exit/return), array variables,
 user-defined struct types, strings and date/time types, memory areas
-(`%I`/`%Q`/`%M`/`%DB…` direct addressing via the runtime C ABI, with a
-simulation runtime for the JIT and big-endian storage matching S7), and the
-compiler can JIT-execute the result on the host (67 lit tests pass).
-Not yet implemented: timers/counters (`%T`/`%C`), host-process runtime
-binding via CLI, and AWL — see `docs/` for the design.
+(`%I`/`%Q`/`%M`/`%DB…`/`%T`/`%C` direct addressing via the runtime C ABI, with a
+simulation runtime for the JIT, host runtime binding via `--runtime-lib`,
+and big-endian storage matching S7), and the compiler can JIT-execute the
+result on the host (68 lit tests pass).
+Not yet implemented: AWL — see `docs/` for the design.
 
 Design documentation lives in [`docs/`](docs/): ADRs for hard-to-reverse
 decisions (`docs/decisions/`) and design plans (`docs/design/`).

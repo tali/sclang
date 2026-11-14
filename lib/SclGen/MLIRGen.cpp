@@ -1031,11 +1031,9 @@ private:
                           << "'";
       return nullptr;
     }
-    if (*area == DirectArea::Timer || *area == DirectArea::Counter) {
-      emitError(location) << "timers/counters (%" << expr->getText()
-                          << ") are not yet supported";
-      return nullptr;
-    }
+    // %T/%C go through the runtime like the other areas; the sim treats them
+    // as plain byte areas and the virtual clock advances via scl_rt_cycle
+    // (full IEC timer semantics are a known gap).
     return builder.create<GetDirectOp>(location, *area, expr->getDb(),
                                        expr->getByte(), expr->getBit(),
                                        expr->getWidth());

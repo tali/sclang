@@ -31,6 +31,7 @@ struct SimState {
   std::vector<uint8_t> areaBytes[256];   // indexed by area code (ASCII)
   uint64_t areaSize[256] = {};           // configured size, 0 = default
   std::map<uint32_t, std::vector<uint8_t>> dbs; // DB number -> bytes
+  std::map<uint32_t, uint64_t> dbSize;   // configured DB sizes, 0 = grow lazily
   const SclRtVTable *vtable = nullptr;
   uint64_t clockMs = 0;
 };
@@ -47,6 +48,20 @@ std::vector<uint8_t> &bufferFor(uint8_t area, uint32_t db, uint32_t byteOff,
   auto &s = state();
   if (area == SCL_RT_AREA_DB) {
     auto &buf = s.dbs[db];
+    auto sizeIt = s.dbSize.find(db);
+    if (sizeIt != s.dbSize.end()) {
+      // explicitly sized DB: bounds-checked like the other areas
+      if ((uint64_t)byteOff + width > sizeIt->second) {
+        fprintf(stderr,
+                "scl_rt: out-of-bounds access: DB %u byte %u width %u, "
+                "DB size %llu\n",
+                db, byteOff, width, (unsigned long long)sizeIt->second);
+        abort();
+      }
+      if (buf.size() < sizeIt->second)
+        buf.resize(sizeIt->second, 0);
+      return buf;
+    }
     if (buf.size() < (uint64_t)byteOff + width)
       buf.resize((uint64_t)byteOff + width, 0);
     return buf;
@@ -168,11 +183,20 @@ void scl_rt_sim_set_area_size(uint8_t area, uint64_t size) {
     buf.resize(size, 0);
 }
 
+void scl_rt_sim_set_db_size(uint32_t db, uint64_t size) {
+  auto &s = state();
+  s.dbSize[db] = size;
+  s.dbs[db].resize(size, 0);
+}
+
 void scl_rt_sim_reset(void) {
   auto &s = state();
   for (auto &b : s.areaBytes)
     b.clear();
+  for (auto &sz : s.areaSize)
+    sz = 0;
   s.dbs.clear();
+  s.dbSize.clear();
   s.clockMs = 0;
 }
 

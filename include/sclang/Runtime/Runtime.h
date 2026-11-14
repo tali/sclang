@@ -95,12 +95,20 @@ typedef struct SclRtVTable {
 void scl_rt_register(const SclRtVTable *vtable);
 
 /// Simulation-only configuration (NOT part of the fixed ABI): set the size
-/// in bytes of a simulated area (I/Q/M/T/C). DB areas grow on demand.
+/// in bytes of a simulated area (I/Q/M/T/C). DB areas grow on demand unless
+/// a size is set with scl_rt_sim_set_db_size().
 void scl_rt_sim_set_area_size(uint8_t area, uint64_t size);
+/// Set the size in bytes of a simulated data block (grown on demand if unset).
+void scl_rt_sim_set_db_size(uint32_t db, uint64_t size);
 /// Reset the simulation state (all areas, DBs, the virtual clock).
 void scl_rt_sim_reset(void);
 /// Virtual clock of the simulation in milliseconds.
 uint64_t scl_rt_sim_clock_ms(void);
+
+/// Entry point a host runtime shared library must export when loaded with
+/// `--runtime-lib=path.so`: returns the vtable the driver registers via
+/// scl_rt_register().
+const SclRtVTable *scl_host_runtime_vtable(void);
 
 #ifdef __cplusplus
 }

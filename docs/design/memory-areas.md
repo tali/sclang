@@ -35,12 +35,22 @@
 - Big-endian storage (ADR 001) is implemented in the byte-assembly helpers,
   the IDB initializer baking, and the sim runtime.
 
+## Implemented (phase 2)
+
+- `%T`/`%C` accepted by MLIRGen; the sim treats them as plain byte areas
+  (IEC timer semantics — S5TIME encoding, timer instructions — and callers
+  of `scl_rt_cycle` remain a gap).
+- `--area-size DB<n>=size` pre-sizes simulated DBs (bounds-checked like the
+  other areas; unset DBs still grow lazily).
+- Host-process binding via driver flags: `--runtime=host --runtime-lib=path.so`
+  dlopens the library, resolves `scl_host_runtime_vtable()` and registers the
+  returned `SclRtVTable` via `scl_rt_register()` — the sim forwards all ABI
+  calls to it. `--runtime=sim` (default) clears the vtable. Verified manually
+  with a logging host `.so`.
+
 ## Pending
 
-- Host-process binding via driver flags (`--runtime=host`, `--runtime-lib`):
-  the `SclRtVTable` mechanism exists, the CLI wiring does not yet.
-- Timers/counters (`%T`/`%C`) and `scl_rt_cycle` semantics.
-- DB area sizing (currently lazy growth in the sim).
+- IEC timer semantics and `scl_rt_cycle` callers.
 - AWL operand mapping (below) and the SCL->AWL backend.
 
 ## Addressing model
