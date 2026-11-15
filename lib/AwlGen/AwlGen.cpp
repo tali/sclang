@@ -241,7 +241,7 @@ private:
       if (t.ident.starts_with("__") && !t.ident.starts_with("__ASSERT") &&
           t.ident != "__ACCU" && t.ident != "__STW" && t.ident != "__AR" &&
           t.ident != "__DBR" && t.ident != "__SLEEP" &&
-          t.ident != "__STWRST") {
+          t.ident != "__STWRST" && t.ident != "__FEATURE") {
         while (!cur.empty() && cur.front() != '\n')
           cur = cur.drop_front();
         return scan();
@@ -1600,6 +1600,7 @@ private:
   };
   llvm::SmallVector<Bracket, 4> brackets;
   bool sawOB1 = false;
+  std::vector<std::string> obBlockNames; // OB block names, for JIT wrappers
   // awl.block "__scl_db_init" collecting DATA_BLOCK initial values, created
   // lazily; the JIT driver invokes it once before the first scan cycle.
   awl::BlockOp dbInitBlock = nullptr;
@@ -2216,6 +2217,8 @@ private:
                                            : kind + std::to_string(num);
     if (kind == "OB" && num == 1)
       sawOB1 = true;
+    if (kind == "OB" && quotedName.empty())
+      obBlockNames.push_back(name); // for the JIT startup-OB wrappers
     curBlockNum = (int32_t)num;
     curBlockFb = kind == "FB";
     if (!quotedName.empty()) {
@@ -2820,6 +2823,25 @@ private:
       auto i1 = builder.getI1Type();
       rlo = builder.create<awl::ConstOp>(loc(), i1, builder.getIntegerAttr(i1, 0));
       rloActive = true;
+      return true;
+    }
+    if (m == "__FEATURE") { // awlsim test directive: __FEATURE t [, v]
+      int64_t target = 0, value = -1;
+      if (lexer.getCurToken() == Tok::integer) {
+        target = lexer.getInteger();
+        lexer.next();
+      }
+      if (lexer.getCurToken() == Tok::comma) {
+        lexer.next();
+        if (lexer.getCurToken() == Tok::integer) {
+          value = lexer.getInteger();
+          lexer.next();
+        }
+      }
+      acc.push_back(builder.create<awl::FeatureOp>(
+          loc(), builder.getI32Type(),
+          builder.getI32IntegerAttr((int32_t)target),
+          builder.getI32IntegerAttr((int32_t)value)));
       return true;
     }
     if (m == "__SLEEP") { // awlsim test directive: advance the virtual clock

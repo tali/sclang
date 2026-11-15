@@ -2897,6 +2897,28 @@ struct AwlSetDbRefOpLowering : public OpConversionPattern<awl::SetDbRefOp> {
   }
 };
 
+// __FEATURE t [, v] -> @scl_rt_feature(target: i32, value: i32) -> i32
+struct AwlFeatureOpLowering : public OpConversionPattern<awl::FeatureOp> {
+  using OpConversionPattern<awl::FeatureOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::FeatureOp op, awl::FeatureOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i32 = rewriter.getI32Type();
+    Value tC = rewriter.create<arith::ConstantOp>(
+        loc, i32, rewriter.getI32IntegerAttr(op.getTarget()));
+    Value vC = rewriter.create<arith::ConstantOp>(
+        loc, i32, rewriter.getI32IntegerAttr(op.getValue()));
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_feature",
+                                rewriter.getFunctionType({i32, i32}, {i32}));
+    auto call = rewriter.create<func::CallOp>(loc, fn, TypeRange{i32},
+                                              ValueRange{tC, vC});
+    rewriter.replaceOp(op, call.getResult(0));
+    return success();
+  }
+};
+
 // DBLG/DBNO/DILG/DINO -> @scl_rt_db_info(kind: i32, db: i32) -> i64
 struct AwlDbInfoOpLowering : public OpConversionPattern<awl::DbInfoOp> {
   using OpConversionPattern<awl::DbInfoOp>::OpConversionPattern;
@@ -3328,6 +3350,16 @@ struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
           loc, i32, rewriter.getI32IntegerAttr(frameSize));
       auto pushCall =
           rewriter.create<func::CallOp>(loc, pushFn, TypeRange{}, ValueRange{frameC});
+      // OB entry: write the S7 OB-temp preset header into the new frame
+      if (op.getSymName().startswith("OB")) {
+        int32_t obNum = atoi(op.getSymName().substr(2).str().c_str());
+        auto obFn = getOrInsertRtFunc(rewriter, module, "scl_rt_ob_start",
+                                      rewriter.getFunctionType({i32}, {}));
+        rewriter.setInsertionPointAfter(pushCall);
+        auto obC = rewriter.create<arith::ConstantOp>(
+            loc, i32, rewriter.getI32IntegerAttr(obNum));
+        rewriter.create<func::CallOp>(loc, obFn, TypeRange{}, ValueRange{obC});
+      }
       // FC interface parameters: copy the caller frame's parameter area into
       // this frame on entry (and back on exit), so recursive calls keep
       // per-invocation parameters and output params propagate to the caller
@@ -3443,7 +3475,7 @@ void SclToStdLoweringPass::runOnOperation() {
       AwlLoadBitIndirectOpLowering,
       AwlLoadIndirectOpLowering, AwlRealMathOpLowering, AwlSetDbOpLowering,
       AwlSetDbvOpLowering, AwlSetDbSizeOpLowering, AwlSetDbRefOpLowering,
-      AwlSetDiOpLowering,
+      AwlSetDiOpLowering, AwlFeatureOpLowering,
       AwlShiftOpLowering, AwlSleepOpLowering, AwlStoreIndirectOpLowering,
       AwlTimerResetLowering, AwlWriteBitIndirectOpLowering,
       AwlRloLowering<awl::RloAndOp, false>,

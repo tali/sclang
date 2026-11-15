@@ -141,7 +141,12 @@ has no `\b` — use python3 for regex edits.
   malformed assert forms skip the line). sclang driver exits 2 when
   scl_rt_assert_failures() > 0 after the cycle loop.
   Current: AWL 116/116 (100%), SCL single 15/15, SCL per-project 16/17,
-  JIT smoke 72/77 (94%), oracle (__ASSERT value-level) 32/53 (60%).
+  JIT smoke 72/77 (94%), oracle (__ASSERT value-level) 34/53 (64%).
+  lit is 114/114. OB-temp presets (OB1 header) are written at OB entry
+  (scl_rt_ob_start); the JIT driver runs the startup OB (OB 102 on a
+  4-accu CPU, else OB 100) before the OB 1 cycles; __FEATURE t [, v] is
+  implemented (awl.feature op -> scl_rt_feature: nrAccus default 4,
+  OB-temp presets flag).
   Corpora + licenses + results + gap list:
   `docs/conformance.md`.
   `check-sclang` includes `test/conformance` (added to test/CMakeLists.txt).

@@ -331,6 +331,8 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_param_out", (void *)&scl_rt_param_out);
     add("scl_rt_sfb", (void *)&scl_rt_sfb);
     add("scl_rt_sfc", (void *)&scl_rt_sfc);
+    add("scl_rt_ob_start", (void *)&scl_rt_ob_start);
+    add("scl_rt_feature", (void *)&scl_rt_feature);
     add("scl_rt_timer_fb", (void *)&scl_rt_timer_fb);
     add("scl_rt_assert_cmp", (void *)&scl_rt_assert_cmp);
     add("scl_rt_assert_cmp_r", (void *)&scl_rt_assert_cmp_r);
@@ -462,9 +464,13 @@ int runJit(mlir::ModuleOp module) {
       llvm::errs() << "JIT db-init invocation failed\n" << err << "\n";
   }
 
-  // S7 startup behavior: run OB 100 (if present) once before the cyclic
-  // scans (awlsim test harnesses do the same: OB100, then OB1).
-  if (engine->lookupPacked("OB100")) {
+  // S7 startup behavior (awlsim cpu.startup): on a 4-accumulator CPU run
+  // OB 102 (cold start) if present, else OB 100 (warm start); then the
+  // cyclic scans of OB 1.
+  if (scl_rt_feature(0, -1) == 4 && engine->lookupPacked("OB102")) {
+    if (auto err = engine->invokePacked("OB102", {}))
+      llvm::errs() << "JIT OB102 invocation failed\n" << err << "\n";
+  } else if (engine->lookupPacked("OB100")) {
     if (auto err = engine->invokePacked("OB100", {}))
       llvm::errs() << "JIT OB100 invocation failed\n" << err << "\n";
   }

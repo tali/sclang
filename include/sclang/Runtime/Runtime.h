@@ -168,6 +168,7 @@ typedef struct SclRtVTable {
   void (*ar_set)(uint8_t ar, uint64_t ptr);
   void (*sfb)(uint32_t n); ///< run SFB n on its instance area
   void (*sfc)(uint32_t n); ///< run SFC n (params staged at the marker area)
+  void (*ob_start)(uint32_t obNum); ///< write the OB-temp preset header
   uint64_t (*ar_add)(uint8_t ar, uint32_t offBits); // returns new ptr
   int64_t (*read_indirect)(uint64_t ptr, uint8_t widthBytes);
   void (*write_indirect)(uint64_t ptr, int64_t value, uint8_t widthBytes);
@@ -227,6 +228,13 @@ void scl_rt_sfb(uint32_t n);
 /// parameter staging area in the marker area at kParamBase, like awlsim's
 /// systemblocks. Sim-only; hosts may override via the vtable.
 void scl_rt_sfc(uint32_t n);
+/// Write the S7 OB-temp preset header (EV_CLASS/SCAN/PRIORITY/OB_NUMBR/
+/// cycle times/DATE_TIME) into the current L frame at OB entry
+/// (awlsim obtemp.OB1TempPresets; only OB 1 has presets). Sim-only.
+void scl_rt_ob_start(uint32_t obNum);
+/// __FEATURE t [, v]: get/set CPU feature flags (t=0 nrAccus, t=1 OB-temp
+/// presets). value < 0 means get. Returns the current value. Sim-only.
+int32_t scl_rt_feature(uint32_t target, int32_t value);
 void scl_rt_l_pop(void);
 
 /// Set the DI register (AUF/OPN DI n). DINO/DILG read it. Sim-only.

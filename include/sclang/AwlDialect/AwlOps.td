@@ -340,6 +340,15 @@ def SetDbRefOp : AwlOp<"set_db_ref"> {
   let assemblyFormat = "attr-dict $db `,` $bytes";
 }
 
+// __FEATURE target [, value]: get/set CPU feature flags (target 0 = number
+// of accumulator registers, 1 = OB-temp presets enabled). value = -1: get.
+def FeatureOp : AwlOp<"feature"> {
+  let summary = "__FEATURE test directive: get/set a CPU feature flag";
+  let arguments = (ins I32Attr:$target, I32Attr:$value);
+  let results = (outs I32:$result);
+  let assemblyFormat = "attr-dict $target `,` $value `->` type($result)";
+}
+
 // DBLG/DBNO/DILG/DINO pseudo operands: DB info from the runtime.
 // kind: 0 = DBLG (DB size in bytes), 1 = DBNO (DB number), 2 = DILG
 // (instance DB size), 3 = DINO (instance DB number). db = 0 = current DB.

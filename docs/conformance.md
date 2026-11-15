@@ -69,7 +69,7 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 - SCL per project: **16/17 pass (94%)**
 - JIT smoke (files with OB 1, full pipeline + execution): **72/77 pass (94%)**
 - Oracle (`__ASSERT` files with OB 1, value-level, exit code must be 0):
-  **32/53 pass (60%)** — see "Oracle tier" below
+  **34/53 pass (64%)** — see "Oracle tier" below
 
 ## Remaining failures = documented gaps
 
@@ -95,7 +95,7 @@ references when a file is compiled alone:
 
 ## Oracle tier: what passes and what the failures mean
 
-32 of 53 `__ASSERT` files pass all their executed oracles (was 31). Block
+34 of 53 `__ASSERT` files pass all their executed oracles (was 32). Block
 calls are now fully modeled: FC params are frame-relative with
 param_in/param_out copies (recursion works — factorial passes), RET_VAL is an
 implicit interface member, indirect `UC FC [MW x]` dispatches over the
@@ -134,8 +134,10 @@ actual/expected):
   multi-instance vars, END_STRUCT/initializer edge cases); real math
   (SIN/COS/TAN/.../LN) lowers to libm double calls rounded to f32,
   bit-identical to awlsim, so benchmark.awl JITs (math.tan legalization);
-- startup info (`startup_*`, `ob_startup_info`: OB number / cycle info in the
-  ACCU at OB start not provided);
+- startup info: `ob_startup_info` and `startup_OB102` pass (OB-temp preset
+  header written at OB entry, startup OB 102/100 run before OB 1,
+  __FEATURE implemented); `startup_OB100`/`startup_multiple` additionally
+  need the status word cleared at OB entry (STW gap below);
 - `insn_SI`/`insn_Z`: timer/counter NUMBER indirection through interface
   words; `insn_MISC`: BCD/INV edge cases; `latin1`: char literal encoding;
 - IEC library FCs (`fc4_delete`, `fc9_eq_dt`, `fc12_ge_dt`, `fc21_len`):

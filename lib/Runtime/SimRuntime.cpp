@@ -67,6 +67,9 @@ struct SimState {
   std::map<uint32_t, uint64_t> dbRefHighWater; // highest referenced DB byte
   const SclRtVTable *vtable = nullptr;
   uint64_t clockMs = 0;
+  uint64_t lastCycleMs = 0, minCycleMs = 0, maxCycleMs = 0; // OB1 presets
+  uint32_t nrAccus = 4;      // __FEATURE 0 (awlsim tests run 4-accu CPUs)
+  bool obTempPresets = false; // __FEATURE 1
   TimerState timers[256];                // indexed by timer number
   CounterState counters[256];            // indexed by counter number
   // builtin timer FB (TON/TOF/TP) state, keyed by instance DB buffer address
@@ -1201,6 +1204,59 @@ void scl_rt_sfc(uint32_t n) {
     off += w;
   }
   scl_rt_write(SCL_RT_AREA_M, 0, kParamBase + RETV, 2, 0); // RET_VAL = 0
+}
+
+// MARK: OB-temp presets (awlsim obtemp.OB1TempPresets; only OB 1 has them)
+void scl_rt_ob_start(uint32_t obNum) {
+  auto &s = state();
+  if (s.vtable && s.vtable->ob_start) {
+    s.vtable->ob_start(obNum);
+    return;
+  }
+  if (obNum != 1)
+    return; // OBTempPresets_table only has OB 1
+  // write the 20-byte header into the current L frame (bytes 0..19)
+  auto put = [&](uint32_t byte, uint8_t w, uint64_t v) {
+    scl_rt_write(SCL_RT_AREA_L, 0, byte, w, v);
+  };
+  auto bcd = [](uint32_t n) { return (uint8_t)(((n / 10) << 4) | (n % 10)); };
+  put(0, 1, 0x11);      // EV_CLASS: cyclic OB
+  put(1, 1, 0x03);      // SCAN_1
+  put(2, 1, 0x01);      // PRIORITY
+  put(3, 1, obNum);     // OB_NUMBR
+  put(4, 1, 0);         // RESERVED_1
+  put(5, 1, 0);         // RESERVED_2
+  uint64_t ms = s.clockMs;
+  uint64_t sec = ms / 1000;
+  put(6, 2, s.lastCycleMs & 0x7FFF);  // PREV_CYCLE
+  put(8, 2, s.minCycleMs & 0x7FFF);   // MIN_CYCLE
+  put(10, 2, s.maxCycleMs & 0x7FFF);  // MAX_CYCLE
+  // DATE_TIME (BCD), date fixed at 2024-01-01 plus the sim clock time-of-day
+  put(12, 1, bcd(24));                       // year
+  put(13, 1, bcd(1));                        // month
+  put(14, 1, bcd(1));                        // day
+  put(15, 1, bcd((sec / 3600) % 24));        // hour
+  put(16, 1, bcd((sec / 60) % 60));          // minute
+  put(17, 1, bcd(sec % 60));                 // second
+  put(18, 1, bcd((ms % 1000) / 10));         // ms high
+  put(19, 1, (uint8_t)(bcd(ms % 10) * 16 + 1)); // ms low + day of week
+}
+
+// __FEATURE t [, v] (awlsim insn_feature): t=0 number of accumulator
+// registers (default 4), t=1 OB-temp presets enabled. value < 0: get.
+int32_t scl_rt_feature(uint32_t target, int32_t value) {
+  auto &s = state();
+  if (target == 0) {
+    if (value >= 0)
+      s.nrAccus = (uint32_t)value;
+    return (int32_t)s.nrAccus;
+  }
+  if (target == 1) {
+    if (value >= 0)
+      s.obTempPresets = value != 0;
+    return s.obTempPresets ? 1 : 0;
+  }
+  return 0;
 }
 
 // MARK: test oracles (ABI v4)
