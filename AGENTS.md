@@ -115,8 +115,8 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 108 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
-  sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
+- 109 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+  sclang JIT, conformance), incl. direct_address (Parse), direct (MLIR), direct + big_endian
   (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
   timer/timer_lower/call_fb/cc, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
   jit_areas + jit_tc + jit_awl (.scl/.awl cross-check) + jit_awl_backend
@@ -128,7 +128,14 @@ has no `\b` — use python3 for regex edits.
   SclTransforms (to_awl_fc), SclGen/MLIR (string_compare); jit_fb_init +
   jit_awl_fc (FC params via SCL->AWL->JIT) + jit_byte_trunc (int->byte
   truncation, direct and via AWL) + jit_char_lit (char := 'A') +
-  jit_ton (builtin TON) in sclang.
+  jit_ton (builtin TON) in sclang, and test/conformance/conformance.mlir
+  (external corpora runner — see "External conformance" below).
+- External conformance: `test/conformance/run_conformance.py` compiles public
+  SCL/AWL corpora (default root $SCLANG_CONFORMANCE_CORPORA or
+  /Users/martin/scl-external; SKIPs when absent) and enforces pass-rate floors.
+  Current: AWL 109/116 (94%), SCL single 13/22, SCL per-project 11/17.
+  Corpora + licenses + results + gap list: `docs/conformance.md`.
+  `check-sclang` includes `test/conformance` (added to test/CMakeLists.txt).
 
 ## Key design decisions (do not regress)
 
@@ -389,7 +396,13 @@ has no `\b` — use python3 for regex edits.
 
 ## Known gaps (parsed but not lowered / not code-generated)
 
-AWL: no known instruction gaps in either direction. CALL DB m is N/A —
+AWL: shift/rotate instructions (SSI/SLD/SRD/RLD/RRD) and real math
+(ABS/TAN and friends; RND* truncates) are NOT implemented — the awl dialect
+has no shift/float-math ops (see docs/conformance.md; 7 corpus files fail on
+this). Everything else the awlsim corpus uses is handled, incl. awlsim
+extensions (headers, quoted names, `#locals`, `L/LD/LW`, symbolic operands,
+indirect `[AR1, P#…]` addressing, S5T#/T#/D#/TOD# literals, CALL SFC47 /
+CALL "name", …) — see test/AwlGen/awlsim-extensions.awl. CALL DB m is N/A —
 S7 AWL has no CALL DB instruction (DBs are opened with OPN, which our
 explicit `DBn.` operands make unnecessary). IEC timer instructions
 SP/SE/SS/SV/SI (`awl.timer_start` + `scl_rt_timer_start`) and counters
