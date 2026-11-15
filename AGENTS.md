@@ -141,7 +141,7 @@ has no `\b` — use python3 for regex edits.
   malformed assert forms skip the line). sclang driver exits 2 when
   scl_rt_assert_failures() > 0 after the cycle loop.
   Current: AWL 109/116 (94%), SCL single 15/15, SCL per-project 16/17,
-  JIT smoke 63/77 (82%), oracle (__ASSERT value-level) 27/53 (51%).
+  JIT smoke 65/77 (84%), oracle (__ASSERT value-level) 31/53 (58%).
   Corpora + licenses + results + gap list:
   `docs/conformance.md`.
   `check-sclang` includes `test/conformance` (added to test/CMakeLists.txt).

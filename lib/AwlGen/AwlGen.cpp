@@ -1098,6 +1098,7 @@ static void parseStructBody(Lexer &lx, Layout &layout,
           bit += sz * 8;
           m.section = (uint8_t)section;
           layout.members[name] = m;
+          bool capturedInit = false;
           if (lx.getCurToken() == Tok::colon || lx.getCurToken() == Tok::assign) {
             llvm::StringRef raw = lx.raw();
             size_t pos = raw.find(';');
@@ -1107,9 +1108,14 @@ static void parseStructBody(Lexer &lx, Layout &layout,
                                         slice[i] == ' ' || slice[i] == '\t'))
               ++i;
             layout.memberInit[name] = slice.substr(i);
+            capturedInit = true;
           }
-          while (lx.getCurToken() != Tok::semi && lx.getCurToken() != Tok::eof)
-            lx.next();
+          // skip the initializer text only when one was captured; otherwise
+          // the next token may already be the next member (e.g. after
+          // END_STRUCT without a trailing ';')
+          if (capturedInit)
+            while (lx.getCurToken() != Tok::semi && lx.getCurToken() != Tok::eof)
+              lx.next();
           continue;
         }
         m.type = t;
@@ -1133,6 +1139,7 @@ static void parseStructBody(Lexer &lx, Layout &layout,
       m.section = (uint8_t)section;
       layout.members[name] = m;
       // capture the raw initializer text (up to ';'), then skip to ';'
+      bool capturedInit = false;
       if (lx.getCurToken() == Tok::colon || lx.getCurToken() == Tok::assign) {
         llvm::StringRef raw = lx.raw();
         size_t pos = raw.find(';');
@@ -1144,9 +1151,11 @@ static void parseStructBody(Lexer &lx, Layout &layout,
                                     slice[i] == ' ' || slice[i] == '\t'))
           ++i;
         layout.memberInit[name] = slice.substr(i);
+        capturedInit = true;
       }
-      while (lx.getCurToken() != Tok::semi && lx.getCurToken() != Tok::eof)
-        lx.next();
+      if (capturedInit)
+        while (lx.getCurToken() != Tok::semi && lx.getCurToken() != Tok::eof)
+          lx.next();
       continue;
     }
     lx.next();
@@ -1178,6 +1187,7 @@ public:
   int indirectSeq = 0; // unique label prefix for indirect-call dispatch
   std::map<int32_t, Layout> sfbCache; // SFB n instance layouts
   std::map<int32_t, int32_t> dbFbRef;        // DATA_BLOCK DB n -> "FB n" line
+  std::vector<std::string> typeDeclSpans; // TYPE decl text, for fixpoint
   std::map<std::string, Layout> tempLayouts; // VAR_TEMP of OB/FC/FB (L-stack)
   std::map<std::string, Layout> namedLayouts; // FUNCTION(_BLOCK) quoted names
   std::string forcedKind; // set by parseModule for FUNCTION(_BLOCK) quoted
@@ -1190,7 +1200,8 @@ public:
   static constexpr int32_t kLocalBase = 8192;
 
   /// Pre-scan the file for TYPE / FUNCTION_BLOCK / FUNCTION / DATA_BLOCK
-  /// declarations and collect their member layouts (single forward pass).
+  /// declarations and collect their member layouts (single forward pass,
+  /// plus a fixpoint re-parse of TYPE declarations for forward references).
   void preScan() {
     // idempotent re-run: clear everything collected by a previous pass
     udtLayouts.clear();
@@ -1200,7 +1211,49 @@ public:
     tempLayouts.clear();
     namedLayouts.clear();
     dbFbRef.clear();
+    typeDeclSpans.clear();
     gFbLayouts = &fbLayouts;
+    // Pre-pass: collect the TYPE declarations and parse them to a fixpoint,
+    // so forward UDT references (TYPE UDT 1 uses UDT 2 declared later)
+    // resolve before the main pass computes DB/FB layouts.
+    {
+      Lexer sx(sourceText, file);
+      sx.start();
+      while (sx.getCurToken() != Tok::eof) {
+        if (sx.getCurToken() == Tok::ident && upperStr(sx.getIdent()) == "TYPE") {
+          // span from the start of the "TYPE" token to the end of the source
+          // (token idents point into the source buffer)
+          const char *tokBegin = sx.getIdent().begin();
+          typeDeclSpans.push_back(std::string(
+              llvm::StringRef(tokBegin, sourceText.end() - tokBegin)));
+        }
+        sx.next();
+      }
+    }
+    for (int round = 0; round < 4 && !typeDeclSpans.empty(); ++round) {
+      std::map<std::string, int32_t> before;
+      for (auto &kv : udtLayouts)
+        before[kv.first] = kv.second.size;
+      for (auto &span : typeDeclSpans) {
+        Lexer sub(span, file);
+        sub.start();
+        if (sub.getCurToken() != Tok::ident || upperStr(sub.getIdent()) != "TYPE")
+          continue;
+        sub.next();
+        std::string name = typeNameOf(sub);
+        udtLayouts[name] = Layout();
+        Layout &L = udtLayouts[name];
+        if (sub.getCurToken() == Tok::ident &&
+            upperStr(sub.getIdent()) == "STRUCT")
+          sub.next();
+        parseStructBody(sub, L, udtLayouts, {"END_TYPE"});
+      }
+      std::map<std::string, int32_t> after;
+      for (auto &kv : udtLayouts)
+        after[kv.first] = kv.second.size;
+      if (after == before)
+        break;
+    }
     Lexer lx(sourceText, file);
     lx.start();
     while (lx.getCurToken() != Tok::eof) {
@@ -1212,6 +1265,7 @@ public:
       if (w == "TYPE") {
         lx.next();
         std::string name = typeNameOf(lx);
+        udtLayouts[name] = Layout(); // fresh (the pre-pass left one)
         Layout &L = udtLayouts[name];
         if (lx.getCurToken() == Tok::ident &&
             upperStr(lx.getIdent()) == "STRUCT")
@@ -1332,13 +1386,27 @@ public:
             for (auto &kv : secLayouts[sec].members) {
               MemberInfo m = kv.second;
               int32_t absBit = baseBit + m.byte * 8 + m.bit;
+              if (!m.isBit) {
+                // re-align at the section boundary per S7 rules (BOOL stays
+                // bit-packed; WORD/DWORD are even-aligned)
+                absBit = (absBit + 7) & ~7;
+                if (m.widthBits >= 16)
+                  absBit = (absBit + 15) & ~15;
+              }
               m.byte = absBit / 8;
               m.bit = absBit % 8;
               L.members[kv.first] = m;
+              // total member extent in bits (arrays: count * elem stride)
+              int32_t totalBits =
+                  m.type == "ARRAY"
+                      ? (m.isBit ? m.count : m.count * m.stride * 8)
+                      : (m.widthBits ? m.widthBits : 1);
+              int32_t endBit = absBit + totalBits;
+              if (endBit > L.bitCursor)
+                L.bitCursor = endBit;
             }
             for (auto &kv : secLayouts[sec].memberInit)
               L.memberInit[kv.first] = kv.second;
-            L.bitCursor += secLayouts[sec].bitCursor;
           }
           // the implicit RET_VAL of an FC goes right after VAR_OUTPUT
           // (awlsim appends it to the OUT fields, even when empty)
@@ -1972,7 +2040,9 @@ private:
           width = it->second.widthBits ? it->second.widthBits : 16;
           if (lexer.getCurToken() == Tok::lbracket)
             addBits(byte, bit, consumeArrayIndices(&it->second));
-          // .sub-member chains (UDT / inline STRUCT)
+          // .sub-member chains (UDT / inline STRUCT / array elements),
+          // arbitrarily deep: VAR10.VAR10_3[1].VAR10_3_2[2]
+          const MemberInfo *cur = &it->second;
           while (lexer.getCurToken() == Tok::dot) {
             lexer.next();
             if (lexer.getCurToken() != Tok::ident &&
@@ -1981,16 +2051,16 @@ private:
             std::string sub = upperStr(lexer.getIdent());
             lexer.next();
             const Layout *next = nullptr;
-            if (it->second.nested)
-              next = it->second.nested.get();
-            else if (it->second.type == "ARRAY" && it->second.elemNested)
-              next = it->second.elemNested.get();
-            else if (it->second.type != "ARRAY") {
-              auto uit = udtLayouts.find(it->second.type);
+            if (cur->nested)
+              next = cur->nested.get();
+            else if (cur->type == "ARRAY" && cur->elemNested)
+              next = cur->elemNested.get();
+            else if (cur->type != "ARRAY") {
+              auto uit = udtLayouts.find(cur->type);
               if (uit != udtLayouts.end())
                 next = &uit->second;
             } else {
-              auto uit = udtLayouts.find(it->second.elemType);
+              auto uit = udtLayouts.find(cur->elemType);
               if (uit != udtLayouts.end())
                 next = &uit->second;
             }
@@ -2002,13 +2072,9 @@ private:
             byte += it2->second.byte;
             bit = it2->second.bit;
             width = it2->second.widthBits ? it2->second.widthBits : 16;
-            // rebind the member pointer for further chaining
-            const MemberInfo *nextMi = &it2->second;
-            // consume further [i] indices on the sub-member
+            cur = &it2->second;
             if (lexer.getCurToken() == Tok::lbracket)
-              addBits(byte, bit, consumeArrayIndices(nextMi));
-            // NOTE: chains deeper than one level re-resolve via udtLayouts
-            break;
+              addBits(byte, bit, consumeArrayIndices(cur));
           }
         }
       }
@@ -3404,11 +3470,15 @@ private:
     }
     if (lexer.getCurToken() != Tok::ident)
       return (error("expected operand"), nullptr);
+    std::string raw = lexer.getIdent().str();
     std::string w = upperIdent();
     bool quoted = lexer.curQuoted();
     lexer.next();
-    if (quoted)
+    if (quoted) {
+      if (raw.size() == 1) // char literal 'A' / latin-1 byte: raw byte value
+        return constInt(builder.getI32Type(), (unsigned char)raw[0]);
       return symbolicOperand(w); // "symbol" / 'literal' in operand position
+    }
     // pseudo operands DBLG/DBNO/DILG/DINO (DB length/number): runtime info;
     // db = 0 refers to the current DB (AUF/OPN)
     if (w == "DBLG" || w == "DBNO" || w == "DILG" || w == "DINO") {
@@ -5055,6 +5125,41 @@ private:
         }
       }
     };
+    // Whole-STRUCT/UDT parameter copy: `P := DB10.STRUCTVAR` copies all of
+    // the source struct's bytes between the source operand and the callee's
+    // interface area (like copyArrayParam, but for a single struct member).
+    auto copyBlockParam = [&](const MemberInfo *m, int32_t baseByte,
+                              mlir::Value srcDirect,
+                              mlir::scl::DirectArea dstArea, int32_t dstDb,
+                              bool toCallee) {
+      auto sdt = mlir::cast<mlir::scl::DirectType>(srcDirect.getType());
+      const Layout *sub = m->nested ? m->nested.get() : nullptr;
+      if (!sub) {
+        auto uit = udtLayouts.find(m->type);
+        if (uit != udtLayouts.end())
+          sub = &uit->second;
+      }
+      int32_t total = sub ? sub->size : (m->widthBits + 7) / 8;
+      for (int32_t k = 0; k < total; ++k) {
+        auto saddr = builder.create<awl::DirectOp>(loc(), sdt.getArea(),
+                                                   sdt.getDb(),
+                                                   sdt.getByte() + k, 0, 8);
+        auto daddr = mkDirect(dstArea, dstDb, baseByte + k, 0, 8);
+        if (toCallee) {
+          mlir::Value v = builder.create<awl::LoadOp>(loc(), saddr);
+          builder.create<awl::StoreOp>(loc(), v, daddr);
+        } else {
+          mlir::Value v = builder.create<awl::LoadOp>(loc(), daddr);
+          builder.create<awl::StoreOp>(loc(), v, saddr);
+        }
+      }
+    };
+    // a param is copied as a block when it is a STRUCT or UDT member
+    auto isBlockParam = [&](const MemberInfo *m) {
+      return m->type == "STRUCT" ||
+             (m->type != "ARRAY" && !m->type.empty() &&
+              udtLayouts.count(m->type) > 0);
+    };
     llvm::SmallVector<OutParam, 4> outParams;
     if (lexer.getCurToken() == Tok::lparen) {
       lexer.next();
@@ -5131,6 +5236,10 @@ private:
               mlir::isa<mlir::scl::DirectType>(target.getType())) {
             copyArrayParam(m, byte, target, area,
                            isDbParam ? paramDb : 0, true);
+          } else if (isBlockParam(m) && target &&
+                     mlir::isa<mlir::scl::DirectType>(target.getType())) {
+            copyBlockParam(m, byte, target, area, isDbParam ? paramDb : 0,
+                           true);
           } else {
             auto addr = mkDirect(area, isDbParam ? paramDb : 0,
                                  byte, m->bit, width);
@@ -5208,6 +5317,12 @@ private:
       if (op.array && mlir::isa<mlir::scl::DirectType>(op.target.getType())) {
         copyArrayParam(op.m, byte, op.target, area,
                        isDbParam ? paramDb : 0, false);
+        continue;
+      }
+      if (isBlockParam(op.m) &&
+          mlir::isa<mlir::scl::DirectType>(op.target.getType())) {
+        copyBlockParam(op.m, byte, op.target, area, isDbParam ? paramDb : 0,
+                       false);
         continue;
       }
       auto addr = mkDirect(area, isDbParam ? paramDb : 0, byte,

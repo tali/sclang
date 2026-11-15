@@ -67,9 +67,9 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 - AWL compile: **109/116 pass (94%)**
 - SCL single file: **15/15 pass (100%)**
 - SCL per project: **16/17 pass (94%)**
-- JIT smoke (files with OB 1, full pipeline + execution): **63/77 pass (82%)**
+- JIT smoke (files with OB 1, full pipeline + execution): **65/77 pass (84%)**
 - Oracle (`__ASSERT` files with OB 1, value-level, exit code must be 0):
-  **27/53 pass (51%)** — see "Oracle tier" below
+  **31/53 pass (58%)** — see "Oracle tier" below
 
 ## Remaining failures = documented gaps
 
@@ -95,7 +95,7 @@ references when a file is compiled alone:
 
 ## Oracle tier: what passes and what the failures mean
 
-27 of 53 `__ASSERT` files pass all their executed oracles (was 24). Block
+31 of 53 `__ASSERT` files pass all their executed oracles (was 27). Block
 calls are now fully modeled: FC params are frame-relative with
 param_in/param_out copies (recursion works — factorial passes), RET_VAL is an
 implicit interface member, indirect `UC FC [MW x]` dispatches over the
@@ -122,8 +122,15 @@ actual/expected):
 - pointers/ANY/DB-pointer types (`pointer`, `anypointer`,
   `any-to-instance-db`, `dbpointer`): `P#`-valued variables and ANY
   pointer params are not yet modeled;
-- `array`, `string`, `struct`, `udt` (compile-tier gaps + a few value gaps:
-  struct.awl:212 DBLG size, udt.awl:132 nested-UDT init);
+- `array`, `string` (compile-tier gaps), `dbpointer` (compile gap);
+  `struct`, `udt`, `DB`, `latin1` now pass: FB/FC interface sections are
+  re-aligned at section boundaries (BOOL bit-packed, WORD/DWORD even),
+  initializer skipping no longer eats members after `END_STRUCT` without
+  `;`, DB-init member chains resolve arbitrarily deep
+  (VAR10.VAR10_3[1].VAR10_3_2[2]), whole-STRUCT/UDT CALL params are copied
+  byte-wise, TYPE declarations are pre-scanned to a fixpoint so forward UDT
+  references size correctly, and single-char quoted literals ('ä') yield
+  their raw byte value;
 - startup info (`startup_*`, `ob_startup_info`: OB number / cycle info in the
   ACCU at OB start not provided);
 - `insn_SI`/`insn_Z`: timer/counter NUMBER indirection through interface
