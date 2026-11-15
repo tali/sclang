@@ -799,6 +799,8 @@ private:
 
 // MARK: data model (S7 type layouts for UDTs / DBs / FB-FC interfaces)
 
+struct Layout;
+
 struct MemberInfo {
   int32_t byte = 0, bit = 0, widthBits = 0; // offset within the parent
   bool isBit = false;
@@ -810,6 +812,8 @@ struct MemberInfo {
   int32_t lo = 1;        // ARRAY lower bound of the first dimension
   int32_t elemSize = 0;  // ARRAY element size in bytes
   std::vector<std::pair<int32_t, int32_t>> dims; // ARRAY (lo, hi) per dim
+  std::shared_ptr<Layout> nested;     // inline STRUCT member layout
+  std::shared_ptr<Layout> elemNested; // ARRAY OF STRUCT element layout
 };
 
 struct Layout {
@@ -819,12 +823,32 @@ struct Layout {
   int32_t bitCursor = 0; // absolute bit offset for the next member (BOOL packing)
 };
 
+// block header keywords (TITLE = ..., AUTHOR : ..., VERSION : ...):
+// such a line is skipped entirely
+static bool isHeaderKwLine(const std::string &w) {
+  return w == "TITLE" || w == "AUTHOR" || w == "FAMILY" || w == "NAME" ||
+         w == "VERSION" || w == "NETWORK" || w == "KNOW_HOW_PROTECT";
+}
+
 static std::string upperStr(llvm::StringRef s) {
   std::string r(s);
   for (auto &c : r)
     c = (char)toupper((unsigned char)c);
   return r;
 }
+
+// A type name is an identifier, optionally followed by a number
+// ("UDT 1"); the name is the uppercased ident + " " + number.
+static std::string typeNameOf(Lexer &lx) {
+  std::string t = lx.getCurToken() == Tok::ident ? upperStr(lx.getIdent()) : "";
+  lx.next();
+  if (lx.getCurToken() == Tok::integer) {
+    t += " " + std::to_string(lx.getInteger());
+    lx.next();
+  }
+  return t;
+}
+
 
 // size/alignment/width of a (non-array) type; BOOL is bit-packed (size 0)
 static void typeInfo(const std::string &ty, const std::map<std::string, Layout> &udts,
@@ -876,8 +900,10 @@ static void parseStructBody(Lexer &lx, Layout &layout,
       bool isEnd = false;
       for (const char *e : endKws)
         if (w == e) isEnd = true;
-      if (isEnd) { lx.next(); break; }
-      if (w.rfind("END_", 0) == 0) { lx.next(); break; }
+      if (isEnd) { lx.next(); goto done; }
+      if (w.rfind("END_", 0) == 0) { lx.next(); goto done; }
+      if (w == "STRUCT") { lx.next(); continue; } // struct header keyword
+      if (isHeaderKwLine(w)) { lx.nextLine(); continue; } // TITLE/VERSION/...
       // member?
       Tok save = lx.getCurToken();
       std::string name = w;
@@ -890,8 +916,7 @@ static void parseStructBody(Lexer &lx, Layout &layout,
       }
       lx.next(); // :
       MemberInfo m;
-      std::string t = lx.getCurToken() == Tok::ident ? upperStr(lx.getIdent()) : "";
-      lx.next();
+      std::string t = typeNameOf(lx);
       if (t == "ARRAY" && lx.getCurToken() == Tok::lbracket) {
         lx.next();
         // all dimensions: ARRAY [lo .. hi, lo .. hi, ...] OF elem
@@ -909,11 +934,20 @@ static void parseStructBody(Lexer &lx, Layout &layout,
         if (lx.getCurToken() == Tok::rbracket) lx.next();
         if (lx.getCurToken() == Tok::ident && upperStr(lx.getIdent()) == "OF")
           lx.next();
-        std::string et = lx.getCurToken() == Tok::ident ? upperStr(lx.getIdent()) : "INT";
-        lx.next();
+        std::string et = typeNameOf(lx);
+        if (et.empty())
+          et = "INT";
         int32_t esize, ealign, ewidth;
         bool ebit;
         typeInfo(et, udts, esize, ealign, ewidth, ebit);
+        if (et == "STRUCT") { // ARRAY [..] OF STRUCT <members> END_STRUCT
+          auto en = std::make_shared<Layout>();
+          parseStructBody(lx, *en, udts, {"END_STRUCT"});
+          m.elemNested = en;
+          esize = en->size;
+          ewidth = en->size * 8;
+          ebit = false;
+        }
         m.type = "ARRAY";
         m.elemType = et;
         m.count = 1;
@@ -950,6 +984,35 @@ static void parseStructBody(Lexer &lx, Layout &layout,
           while (lx.getCurToken() != Tok::rbracket && lx.getCurToken() != Tok::eof)
             lx.next();
           if (lx.getCurToken() == Tok::rbracket) lx.next();
+        }
+        if (t == "STRUCT") { // inline anonymous struct member
+          auto nested = std::make_shared<Layout>();
+          parseStructBody(lx, *nested, udts, {"END_STRUCT"});
+          m.type = "STRUCT";
+          m.nested = nested;
+          int32_t sz = nested->size;
+          bit = (bit + 7) & ~7;
+          if (sz >= 2) bit = (bit + 15) & ~15;
+          m.byte = bit / 8;
+          m.bit = 0;
+          m.widthBits = sz * 8;
+          m.isBit = false;
+          bit += sz * 8;
+          m.section = (uint8_t)section;
+          layout.members[name] = m;
+          if (lx.getCurToken() == Tok::colon || lx.getCurToken() == Tok::assign) {
+            llvm::StringRef raw = lx.raw();
+            size_t pos = raw.find(';');
+            std::string slice = pos == llvm::StringRef::npos ? raw.str() : raw.take_front(pos).str();
+            size_t i = 0;
+            while (i < slice.size() && (slice[i] == ':' || slice[i] == '=' ||
+                                        slice[i] == ' ' || slice[i] == '\t'))
+              ++i;
+            layout.memberInit[name] = slice.substr(i);
+          }
+          while (lx.getCurToken() != Tok::semi && lx.getCurToken() != Tok::eof)
+            lx.next();
+          continue;
         }
         m.type = t;
         int32_t sz, al, wb;
@@ -989,7 +1052,9 @@ static void parseStructBody(Lexer &lx, Layout &layout,
       continue;
     }
     lx.next();
+    continue;
   }
+done:
   int32_t off = (bit + 7) / 8;
   if (off % 2) ++off;
   layout.size = off;
@@ -1077,11 +1142,11 @@ public:
       std::string w = upperStr(lx.getIdent());
       if (w == "TYPE") {
         lx.next();
-        std::string name;
-        if (lx.getCurToken() == Tok::ident)
-          name = upperStr(lx.getIdent());
-        lx.next();
+        std::string name = typeNameOf(lx);
         Layout &L = udtLayouts[name];
+        if (lx.getCurToken() == Tok::ident &&
+            upperStr(lx.getIdent()) == "STRUCT")
+          lx.next();
         parseStructBody(lx, L, udtLayouts, {"END_TYPE"});
         continue;
       }
@@ -1517,21 +1582,18 @@ private:
         builder.create<awl::SetDbSizeOp>(
             loc(), builder.getI32IntegerAttr(db),
             builder.getI32IntegerAttr(lit->second.size));
-      // declaration initializers (STRUCT/VAR member := value) first
+      // declaration initializers (STRUCT/VAR member := value, incl. UDT
+      // defaults) first
       if (lit != dbLayouts.end()) {
-        for (auto &kv : lit->second.memberInit) {
-          const MemberInfo *mi = nullptr;
-          auto mit = lit->second.members.find(kv.first);
-          if (mit != lit->second.members.end())
-            mi = &mit->second;
-          for (const std::string &assign : expandMemberInit(kv.first, kv.second, mi)) {
-            Lexer sub(assign, "<dbinit>"); // assign must outlive sub
-            sub.start();
-            Lexer savedLexer = lexer;
-            lexer = sub;
-            parseDbInitLine();
-            lexer = savedLexer;
-          }
+        std::vector<std::string> assigns;
+        collectInitAssigns(lit->second, "", udtLayouts, assigns);
+        for (const std::string &assign : assigns) {
+          Lexer sub(assign, "<dbinit>"); // assign must outlive sub
+          sub.start();
+          Lexer savedLexer = lexer;
+          lexer = sub;
+          parseDbInitLine();
+          lexer = savedLexer;
         }
       }
     }
@@ -1554,6 +1616,69 @@ private:
       builder.create<awl::BeOp>(loc());
     }
     return true;
+  }
+
+  // "[i, j]" index text for flat element k of an array member
+  static std::string arrayIndexText(const MemberInfo &mi, int64_t k) {
+    std::string idx;
+    int64_t rem = k;
+    for (size_t d = 0; d < mi.dims.size(); ++d) {
+      int64_t radix = 1;
+      for (size_t j = d + 1; j < mi.dims.size(); ++j)
+        radix *= mi.dims[j].second - mi.dims[j].first + 1;
+      int64_t i = mi.dims.empty() ? 0 : rem / radix;
+      if (!mi.dims.empty())
+        rem %= radix;
+      idx += (d ? ", " : "[") +
+             std::to_string(mi.dims.empty() ? 0
+                                            : mi.dims[d].first + (int32_t)i);
+    }
+    idx += "]";
+    return idx;
+  }
+
+  // Collect all declaration initializers of a layout as "PREFIX.NAME[i].sub
+  // := value;" texts, recursing into UDT / inline-STRUCT members (per array
+  // element for arrays).
+  static void collectInitAssigns(const Layout &lay, const std::string &prefix,
+                                 const std::map<std::string, Layout> &udts,
+                                 std::vector<std::string> &out) {
+    for (auto &kv : lay.members) {
+      const MemberInfo *mi = &kv.second;
+      std::string base = prefix.empty() ? kv.first : prefix + "." + kv.first;
+      auto initIt = lay.memberInit.find(kv.first);
+      if (initIt != lay.memberInit.end()) {
+        for (auto &a : expandMemberInit(kv.first, initIt->second, mi)) {
+          std::string suffix = a.substr(kv.first.size()); // "[i] := v"/" := v"
+          out.push_back(base + suffix);
+        }
+      }
+      const Layout *sub = nullptr;
+      if (mi->type == "ARRAY") {
+        if (mi->elemNested)
+          sub = mi->elemNested.get();
+        else {
+          auto u = udts.find(mi->elemType);
+          if (u != udts.end())
+            sub = &u->second;
+        }
+        if (sub && !sub->memberInit.empty()) {
+          for (int32_t k = 0; k < mi->count; ++k)
+            collectInitAssigns(*sub, base + arrayIndexText(*mi, k), udts, out);
+          continue;
+        }
+      } else {
+        if (mi->nested)
+          sub = mi->nested.get();
+        else {
+          auto u = udts.find(mi->type);
+          if (u != udts.end())
+            sub = &u->second;
+        }
+      }
+      if (sub && !sub->memberInit.empty())
+        collectInitAssigns(*sub, base, udts, out);
+    }
   }
 
   // Expand a declaration initializer into one "NAME[i,...] := value;" text
@@ -1685,6 +1810,44 @@ private:
           width = it->second.widthBits ? it->second.widthBits : 16;
           if (lexer.getCurToken() == Tok::lbracket)
             addBits(byte, bit, consumeArrayIndices(&it->second));
+          // .sub-member chains (UDT / inline STRUCT)
+          while (lexer.getCurToken() == Tok::dot) {
+            lexer.next();
+            if (lexer.getCurToken() != Tok::ident &&
+                lexer.getCurToken() != Tok::localvar)
+              break;
+            std::string sub = upperStr(lexer.getIdent());
+            lexer.next();
+            const Layout *next = nullptr;
+            if (it->second.nested)
+              next = it->second.nested.get();
+            else if (it->second.type == "ARRAY" && it->second.elemNested)
+              next = it->second.elemNested.get();
+            else if (it->second.type != "ARRAY") {
+              auto uit = udtLayouts.find(it->second.type);
+              if (uit != udtLayouts.end())
+                next = &uit->second;
+            } else {
+              auto uit = udtLayouts.find(it->second.elemType);
+              if (uit != udtLayouts.end())
+                next = &uit->second;
+            }
+            if (!next)
+              break;
+            auto it2 = next->members.find(sub);
+            if (it2 == next->members.end())
+              break;
+            byte += it2->second.byte;
+            bit = it2->second.bit;
+            width = it2->second.widthBits ? it2->second.widthBits : 16;
+            // rebind the member pointer for further chaining
+            const MemberInfo *nextMi = &it2->second;
+            // consume further [i] indices on the sub-member
+            if (lexer.getCurToken() == Tok::lbracket)
+              addBits(byte, bit, consumeArrayIndices(nextMi));
+            // NOTE: chains deeper than one level re-resolve via udtLayouts
+            break;
+          }
         }
       }
       addr = mkDirect(mlir::scl::DirectArea::DataBlock, effDb(dbOverride), byte,
@@ -2207,6 +2370,12 @@ private:
         ptr = constInt(builder.getI64Type(), off);
       } else if (lexer.getCurToken() == Tok::ident && !lexer.curQuoted()) {
         std::string w = upperIdent();
+        if (w == "AR1" || w == "AR2") { // LARn ARm: copy the other AR
+          lexer.next();
+          ptr = builder.create<awl::ArGetOp>(
+              loc(), builder.getI64Type(),
+              builder.getI32IntegerAttr(w[2] - '0'));
+        } else {
         bool looksOperand =
             w.rfind("DB", 0) == 0 || w.rfind("DI", 0) == 0 ||
             (isAreaLetter(w[0]) &&
@@ -2229,6 +2398,7 @@ private:
           if (!ptr)
             return true;
         }
+        }
       }
       if (!ptr)
         ptr = castTo(popAcc(), builder.getI64Type()); // bare LARn = TARn
@@ -2248,12 +2418,15 @@ private:
         ptr = constInt(builder.getI64Type(), off);
       } else if (lexer.getCurToken() == Tok::ident && !lexer.curQuoted()) {
         std::string w = upperIdent();
-        bool looksOperand =
-            w.rfind("DB", 0) == 0 || w.rfind("DI", 0) == 0 ||
+        if (w == "AR1" || w == "AR2") { // TARn ARm: copy the other AR
+          lexer.next();
+          ptr = builder.create<awl::ArGetOp>(
+              loc(), builder.getI64Type(),
+              builder.getI32IntegerAttr(w[2] - '0'));
+        } else if ((w.rfind("DB", 0) == 0 || w.rfind("DI", 0) == 0 ||
             (isAreaLetter(w[0]) &&
              (w.size() == 1 || isdigit((unsigned char)w[1]) ||
-              w[1] == 'B' || w[1] == 'W' || w[1] == 'D'));
-        if (looksOperand && lexer.curLine() == insnLine) {
+              w[1] == 'B' || w[1] == 'W' || w[1] == 'D'))) && lexer.curLine() == insnLine) {
           if (w.size() <= 2 && w[0] == 'L' &&
               lexer.peekToken() == Tok::integer) { // LD/LW/LB operand
             lexer.next();
@@ -3004,15 +3177,25 @@ private:
                 lexer.getCurToken() == Tok::localvar) {
               std::string sub = upperStr(lexer.getIdent());
               lexer.next();
-              auto uit = udtLayouts.find(type);
-              if (uit != udtLayouts.end()) {
-                auto sit = uit->second.members.find(sub);
-                if (sit != uit->second.members.end()) {
+              const Layout *next = nullptr;
+              if (mi && mi->nested)
+                next = mi->nested.get();
+              else if (mi && mi->type == "ARRAY" && mi->elemNested)
+                next = mi->elemNested.get();
+              else {
+                auto uit = udtLayouts.find(type);
+                if (uit != udtLayouts.end())
+                  next = &uit->second;
+              }
+              if (next) {
+                auto sit = next->members.find(sub);
+                if (sit != next->members.end()) {
                   byte += sit->second.byte;
                   bit = sit->second.bit;
                   width = sit->second.widthBits ? sit->second.widthBits : 16;
                   type = sit->second.type;
                   stride = sit->second.stride;
+                  mi = &sit->second;
                 }
               }
             }
@@ -3043,6 +3226,29 @@ private:
                                            builder.getI32IntegerAttr(0));
     }
 
+    // __STW <bitname>: individual status-word bit (A0/A1 = CC0/CC1 = 6/7)
+    if (w == "__STW") {
+      if (lexer.getCurToken() == Tok::ident) { // w's lexer.next() already done
+        std::string bitName = upperStr(lexer.getIdent());
+        lexer.next();
+        int bitNo = -1;
+        if (bitName == "A0" || bitName == "CC0") bitNo = 6;
+        else if (bitName == "A1" || bitName == "CC1") bitNo = 7;
+        else if (bitName == "BIE" || bitName == "BR") bitNo = 8;
+        else if (bitName == "NER") bitNo = 0;
+        else if (bitName == "VKE") bitNo = 1;
+        else if (bitName == "STA") bitNo = 2;
+        else if (bitName == "OR") bitNo = 3;
+        else if (bitName == "OS") bitNo = 4;
+        else if (bitName == "OV") bitNo = 5;
+        if (bitNo >= 0)
+          return builder.create<awl::DirectOp>(
+              loc(), mlir::scl::DirectArea::Marker, 0, bitNo / 8,
+              bitNo % 8, 1);
+      }
+      return builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::Marker,
+                                            0, 0, 0, 16);
+    }
     // STW: status word — approximated by marker word 0
     if (w == "STW")
       return builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::Marker,
@@ -3204,7 +3410,11 @@ private:
               lexer.next();
               if (lay) {
                 const Layout *next = lay;
-                if (mi && mi->type != "ARRAY") {
+                if (mi && mi->nested)
+                  next = mi->nested.get();
+                else if (mi && mi->type == "ARRAY" && mi->elemNested)
+                  next = mi->elemNested.get();
+                else if (mi && mi->type != "ARRAY") {
                   auto uit = udtLayouts.find(mi->type);
                   if (uit != udtLayouts.end())
                     next = &uit->second;
@@ -3238,6 +3448,9 @@ private:
           if (width == 1)
             bit = mi->bit;
         }
+        if (width != 1 && width != 8 && width != 16 && width != 32 &&
+            width != 64)
+          width = 32; // UDT/STRING whole-access: dword granularity
         return builder.create<awl::DirectOp>(
             loc(), mlir::scl::DirectArea::DataBlock, effDb(db), byte, bit,
             width);

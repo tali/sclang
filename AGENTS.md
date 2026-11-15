@@ -172,6 +172,16 @@ has no `\b` — use python3 for regex edits.
   labels, default = SPL operand); `BEB`/`BEC` lower to the new `awl.be_if`
   op (conditional block end); `BEU` = `BE`. S5T encoding picks the FINEST
   timebase covering the value (awlsim `Timer_seconds_to_s5t`), units in ms.
+- UDT/inline-STRUCT handling: type names may contain a space (`TYPE UDT 1`);
+  `parseStructBody` must compute `layout.size` even when it exits via an
+  END keyword (goto done), must skip `STRUCT`/header-keyword lines, and
+  inline `STRUCT` members get a nested Layout (`MemberInfo.nested` /
+  `elemNested`) resolved in all dot-chains. Declaration initializers are
+  collected recursively (`collectInitAssigns`, incl. per-element for arrays
+  of UDTs) and replayed into `__scl_db_init` before the BEGIN section.
+  `__STW <bit>` is a real bit operand (A0/A1 = bits 6/7); `LARn/TARn ARm`
+  copies the other AR. STW bit *tracking* (A0/A1/OV/OS set by comparisons)
+  is still a gap — stw_operators value asserts fail on that.
 
 - `SclTypeConverter` maps `!scl.address<T>` to a **0-d memref with dynamic offset**
   (`memref<T, strided<[], offset: ?>>`) so array element addresses from
