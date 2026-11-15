@@ -1,0 +1,39 @@
+// RUN: sclang --opt --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// String literal as a named FB call argument: 'AB' is copied into the
+// string[8] input member of DB1; FB1 adds the chars to n = 65 + 66 + 3 = 134
+// = 0x86 (big-endian low byte of %MW0 at M[1]).
+// CHECK: M:
+// CHECK: M[1]=134
+// CHECK: clock=0ms
+function_block FB1
+var_input
+  s : string[8];
+  n : int;
+end_var
+var_temp
+  i : int;
+  c : int;
+end_var
+begin
+  for i := 0 to 7 do
+    c := s[i];
+    n := n + c;
+  end_for;
+end_function_block
+data_block DB1
+  FB1
+end_data_block
+function OB1 : int
+var_temp
+  r : int;
+end_var
+begin
+  FB1."DB1"(s := 'AB', n := 3);
+  r := "DB1".n;
+  %MW0 := r;
+end_function
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

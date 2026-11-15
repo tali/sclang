@@ -621,6 +621,26 @@ struct FunctionOpLowering : public OpConversionPattern<scl::FunctionOp> {
 static Value loadFromByteBuffer(OpBuilder &b, Location loc, Value addr,
                                 Type resTy) {
   auto memTy = addr.getType().cast<MemRefType>();
+  // Whole-buffer load (array value): the address of an array IS the buffer
+  // memref, so the load is the address itself.
+  if (resTy.isa<MemRefType>()) {
+    if (resTy == memTy)
+      return addr;
+    // Byte view (array/struct member of an FB/IDB): cast the view to the
+    // requested buffer type using the result's static size.
+    auto rm = resTy.cast<MemRefType>();
+    auto zero = b.create<arith::ConstantIndexOp>(loc, 0);
+    if (memTy.getRank() == 1 && memTy.getElementType().isInteger(8) &&
+        rm.getRank() == 1 && rm.getElementType().isInteger(8) &&
+        rm.getShape()[0] != ShapedType::kDynamic) {
+      auto n = b.create<arith::ConstantIndexOp>(loc, rm.getShape()[0]);
+      auto one = b.create<arith::ConstantIndexOp>(loc, 1);
+      return b.create<memref::ReinterpretCastOp>(loc, rm, addr, zero,
+                                                 ValueRange{n},
+                                                 ValueRange{one});
+    }
+    return nullptr;
+  }
   auto zero = b.create<arith::ConstantIndexOp>(loc, 0);
   if (memTy.getElementType() == resTy) {
     SmallVector<Value, 1> indices(memTy.getRank(), zero);
@@ -790,12 +810,24 @@ static LogicalResult storeToByteBuffer(OpBuilder &b, Location loc, Value value,
     Value src = value;
     auto am = addr.getType().cast<MemRefType>();
     if (src.getType() != addr.getType()) {
-      // struct window address: cast the buffer to the window type first
+      auto sm = src.getType().cast<MemRefType>();
+      if (sm.getRank() != 1 || sm.getElementType() != am.getElementType())
+        return failure();
       if (am.getRank() == 1 && am.getElementType().isInteger(8) &&
           am.getShape()[0] != ShapedType::kDynamic) {
+        // struct window address: cast the buffer to the window type first
         auto n = b.create<arith::ConstantIndexOp>(loc, am.getShape()[0]);
         auto one = b.create<arith::ConstantIndexOp>(loc, 1);
         src = b.create<memref::ReinterpretCastOp>(loc, am, value, zero,
+                                                 ValueRange{n}, ValueRange{one});
+      } else if (am.getRank() == 1 && am.getElementType().isInteger(8) &&
+                 am.getShape()[0] == ShapedType::kDynamic &&
+                 sm.getShape()[0] != ShapedType::kDynamic) {
+        // dynamic byte view (array/struct member of an FB/IDB): cast the
+        // source buffer to the view type using the source's static size
+        auto n = b.create<arith::ConstantIndexOp>(loc, sm.getShape()[0]);
+        auto one = b.create<arith::ConstantIndexOp>(loc, 1);
+        src = b.create<memref::ReinterpretCastOp>(loc, am, src, zero,
                                                  ValueRange{n}, ValueRange{one});
       } else {
         return failure();

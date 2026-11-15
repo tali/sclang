@@ -44,6 +44,7 @@ target_link_libraries(sclang
     MLIRCallInterfaces
     MLIRCastInterfaces
     MLIRExecutionEngine
+    mlir_c_runner_utils
     MLIRIR
     MLIRLLVMCommonConversion
     MLIRMemRefDialect

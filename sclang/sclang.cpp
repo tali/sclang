@@ -37,6 +37,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/ExecutionEngine/CRunnerUtils.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
 #include "mlir/ExecutionEngine/OptUtils.h"
 #include "mlir/IR/AsmState.h"
@@ -319,6 +320,8 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_timer_start", (void *)&scl_rt_timer_start);
     add("scl_rt_counter_op", (void *)&scl_rt_counter_op);
     add("scl_rt_timer_fb", (void *)&scl_rt_timer_fb);
+    // memref.copy lowers to a call to the MLIR C runner helper.
+    add("memrefCopy", (void *)&memrefCopy);
     return map;
   });
 }

@@ -1,0 +1,40 @@
+// RUN: sclang --opt --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// String literal as a named FC call argument: 'AB' is zero-padded into the
+// string[8] input; FC1 returns sum of chars + n = 65 + 66 + 3 = 134 = 0x86
+// (big-endian low byte of %MW0 at M[1]).
+// CHECK: M:
+// CHECK: M[1]=134
+// CHECK: clock=0ms
+function FC1 : int
+var_input
+  s : string[8];
+  n : int;
+end_var
+var_temp
+  i : int;
+  c : int;
+  r : int;
+end_var
+begin
+  r := 0;
+  for i := 0 to 7 do
+    c := s[i];
+    r := r + c;
+  end_for;
+  FC1 := r + n;
+end_function
+
+function OB1 : int
+var_temp
+  r : int;
+end_var
+begin
+  r := FC1(s := 'AB', n := 3);
+  %MW0 := r;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

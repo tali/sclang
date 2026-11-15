@@ -97,15 +97,32 @@ public:
     // add them to the module.
     theModule = mlir::ModuleOp::create(builder.getUnknownLoc());
 
-    // Pre-pass: collect function result types and FB names so that calls and
-    // type references can be resolved regardless of definition order.
+    // Pre-pass: register user-defined types and FB names first, so that type
+    // references can be resolved regardless of definition order.
     for (const auto &unit : *moduleAST) {
-      if (auto *fn = llvm::dyn_cast<FunctionAST>(unit.get()))
-        functionResultTypes[fn->getIdentifier()] = getType(fn->getType());
-      else if (auto *ob = llvm::dyn_cast<OrganizationBlockAST>(unit.get()))
-        functionResultTypes[ob->getIdentifier()] = builder.getNoneType();
-      else if (auto *fb = llvm::dyn_cast<FunctionBlockAST>(unit.get()))
+      if (auto *udt = llvm::dyn_cast<UserDefinedTypeAST>(unit.get())) {
+        if (failed(mlirGen(udt)))
+          return nullptr;
+      } else if (auto *fb = llvm::dyn_cast<FunctionBlockAST>(unit.get())) {
         fbNames[fb->getIdentifier()] = true;
+      }
+    }
+    // Second pre-pass: collect function result types and the declared types
+    // of all variables per callable, so that call arguments (incl. string
+    // literals) can be typed even before the callee is generated.
+    for (const auto &unit : *moduleAST) {
+      if (auto *fn = llvm::dyn_cast<FunctionAST>(unit.get())) {
+        functionResultTypes[fn->getIdentifier()] = getType(fn->getType());
+        collectVarTypes(fn->getDeclarations(),
+                        callableVarTypes[fn->getIdentifier()]);
+      } else if (auto *ob = llvm::dyn_cast<OrganizationBlockAST>(unit.get())) {
+        functionResultTypes[ob->getIdentifier()] = builder.getNoneType();
+        collectVarTypes(ob->getDeclarations(),
+                        callableVarTypes[ob->getIdentifier()]);
+      } else if (auto *fb = llvm::dyn_cast<FunctionBlockAST>(unit.get())) {
+        collectVarTypes(fb->getDeclarations(),
+                        callableVarTypes[fb->getIdentifier()]);
+      }
     }
 
     for (const auto &unit : *moduleAST) {
@@ -163,6 +180,32 @@ private:
   /// Function/OB name -> result type, collected in a pre-pass over the
   /// module so calls can be typed even before the callee is generated.
   llvm::StringMap<mlir::Type> functionResultTypes;
+  /// Callable name (function/OB/FB) -> variable name -> declared type,
+  /// collected in a pre-pass so call arguments can be typed (and string
+  /// literals materialized) even before the callee is generated.
+  llvm::StringMap<llvm::StringMap<mlir::Type>> callableVarTypes;
+
+  /// Collect the declared types of all variables of a declaration section
+  /// into `map`, keyed by variable name.
+  void collectVarTypes(const DeclarationSectionAST *declarations,
+                       llvm::StringMap<mlir::Type> &map) {
+    if (!declarations)
+      return;
+    for (const auto &decl : declarations->getDecls()) {
+      if (decl->getKind() !=
+          DeclarationSubsectionAST::DeclarationASTKind::Decl_Variable)
+        continue;
+      const auto &vardecls =
+          llvm::cast<VariableDeclarationSubsectionAST>(*decl);
+      for (const auto &value : vardecls.getValues()) {
+        auto type = getType(value->getDataType());
+        if (!type)
+          continue;
+        for (const auto &var : value->getVars())
+          map[var->getIdentifier()] = type;
+      }
+    }
+  }
   /// Names of all function blocks in the module (for type resolution).
   llvm::StringMap<bool> fbNames;
 
@@ -773,6 +816,75 @@ private:
     }
   }
 
+  /// Store the bytes of a string literal into a char-array buffer address
+  /// (zero-padded to the array length), byte by byte.
+  mlir::LogicalResult mlirGenStoreStringBytes(mlir::Location location,
+                                              mlir::Value addr,
+                                              ArrayType arrTy,
+                                              llvm::StringRef value) {
+    auto elemTy = arrTy.getElementType();
+    if (!elemTy.isa<IntegerType>() ||
+        elemTy.cast<IntegerType>().getWidth() != 8) {
+      emitError(location) << "string target is not an array of char";
+      return mlir::failure();
+    }
+    auto dims = arrTy.getDimensions();
+    if (dims.size() != 1) {
+      emitError(location) << "only 1-d strings are supported";
+      return mlir::failure();
+    }
+    int64_t count = dims[0].second - dims[0].first + 1;
+    auto intTy = getType(tok_int);
+    auto i16 = builder.getIntegerType(16);
+    auto charAddrTy = AddressType::get(elemTy);
+    auto i8 = builder.getIntegerType(8);
+    auto arrayTypeAttr = mlir::TypeAttr::get(arrTy);
+    for (int64_t i = 0; i < count; ++i) {
+      uint8_t byte = i < (int64_t)value.size() ? (uint8_t)value[i] : 0;
+      auto idx = builder.create<ConstantOp>(
+          location, intTy, builder.getIntegerAttr(i16, dims[0].first + i));
+      auto elem = builder.create<GetIndexOp>(location, charAddrTy, addr,
+                                             mlir::ValueRange{idx}, arrayTypeAttr);
+      auto byteVal = builder.create<ConstantOp>(
+          location, elemTy, builder.getIntegerAttr(i8, byte));
+      builder.create<StoreOp>(location, elem, byteVal);
+    }
+    return mlir::success();
+  }
+
+  /// Materialize a string literal as a value of the declared parameter type:
+  /// allocate a temp char-array buffer, store the literal bytes (zero-padded)
+  /// into it and load the whole array value.
+  mlir::Value mlirGenStringLiteralValue(
+      mlir::Location location, const llvm::StringMap<mlir::Type> *paramTypes,
+      StringRef name, const StringConstantAST *str) {
+    if (!paramTypes) {
+      emitError(location) << "string literal argument '" << name
+                          << "': parameter type unknown";
+      return nullptr;
+    }
+    auto it = paramTypes->find(name);
+    if (it == paramTypes->end()) {
+      emitError(location) << "string literal argument: unknown parameter '"
+                          << name << "'";
+      return nullptr;
+    }
+    auto arrTy = it->second.dyn_cast<ArrayType>();
+    if (!arrTy || !arrTy.getElementType().isa<IntegerType>() ||
+        arrTy.getElementType().cast<IntegerType>().getWidth() != 8) {
+      emitError(location) << "string literal argument to non-string parameter '"
+                          << name << "'";
+      return nullptr;
+    }
+    auto addrTy = AddressType::get(arrTy);
+    auto storage = builder.create<TempVariableOp>(location, addrTy,
+                                                  builder.getStringAttr("strlit"));
+    if (failed(mlirGenStoreStringBytes(location, storage, arrTy,
+                                       str->getValue())))
+      return nullptr;
+    return builder.create<LoadOp>(location, arrTy, storage);
+  }
+
   /// Assign a string literal to a string variable: store the literal bytes
   /// (zero-padded to the target length) into the char buffer byte by byte.
   mlir::LogicalResult mlirGenStringAssignment(mlir::Location location,
@@ -794,7 +906,6 @@ private:
       }
     }
     ArrayType arrTy;
-    mlir::TypeAttr arrayTypeAttr;
     if (auto at = baseElem.dyn_cast<ArrayType>()) {
       arrTy = at;
     } else {
@@ -804,36 +915,8 @@ private:
         return mlir::failure();
       }
       arrTy = it->second.cast<ArrayType>();
-      arrayTypeAttr = mlir::TypeAttr::get(arrTy);
     }
-    auto elemTy = arrTy.getElementType();
-    if (!elemTy.isa<IntegerType>() ||
-        elemTy.cast<IntegerType>().getWidth() != 8) {
-      emitError(location) << "string target is not an array of char";
-      return mlir::failure();
-    }
-    auto dims = arrTy.getDimensions();
-    if (dims.size() != 1) {
-      emitError(location) << "only 1-d strings are supported";
-      return mlir::failure();
-    }
-    int64_t count = dims[0].second - dims[0].first + 1;
-    auto intTy = getType(tok_int);
-    auto i16 = builder.getIntegerType(16);
-    auto charAddrTy = AddressType::get(elemTy);
-    auto i8 = builder.getIntegerType(8);
-    auto value = str->getValue();
-    for (int64_t i = 0; i < count; ++i) {
-      uint8_t byte = i < (int64_t)value.size() ? (uint8_t)value[i] : 0;
-      auto idx = builder.create<ConstantOp>(
-          location, intTy, builder.getIntegerAttr(i16, dims[0].first + i));
-      auto elem = builder.create<GetIndexOp>(location, charAddrTy, lhs,
-                                             mlir::ValueRange{idx}, arrayTypeAttr);
-      auto byteVal = builder.create<ConstantOp>(
-          location, elemTy, builder.getIntegerAttr(i8, byte));
-      builder.create<StoreOp>(location, elem, byteVal);
-    }
-    return mlir::success();
+    return mlirGenStoreStringBytes(location, lhs, arrTy, str->getValue());
   }
 
   /// Codegen a variable assignment
@@ -1475,9 +1558,11 @@ private:
     return mlirGenFcCall(expr, callee->getName());
    }
 
-  mlir::LogicalResult mlirGenCallParameters(const FunctionCallAST *fc,
-        std::function<void (StringRef, mlir::Value)> fN,
-        std::function<void (mlir::Value)> fNN) {
+  mlir::LogicalResult mlirGenCallParameters(
+      const FunctionCallAST *fc,
+      std::function<void (StringRef, mlir::Value)> fN,
+      std::function<void (mlir::Value)> fNN,
+      const llvm::StringMap<mlir::Type> *paramTypes = nullptr) {
     for (auto &arg : fc->getParameters()) {
       auto binary = dyn_cast<BinaryExpressionAST>(arg.get());
       if (binary && binary->getOp() == tok_assignment) {
@@ -1487,7 +1572,14 @@ private:
           emitError(loc(lhs->loc()), "invalid parameter name");
           return mlir::failure();
         }
-        mlir::Value value = mlirGenRValue(binary->getRhs());
+        mlir::Value value;
+        if (auto *str = dyn_cast<StringConstantAST>(binary->getRhs()))
+          value = mlirGenStringLiteralValue(loc(binary->getRhs()->loc()),
+                                            paramTypes, name->getName(), str);
+        else
+          value = mlirGenRValue(binary->getRhs());
+        if (!value)
+          return mlir::failure();
         fN(name->getName(), value);
       } else {
         if (!fNN) {
@@ -1504,9 +1596,11 @@ private:
     return mlir::success();
   }
 
-  mlir::LogicalResult mlirGenCallParameters(const FunctionCallAST *fc,
-       std::function<void (StringRef, mlir::Value)> f) {
-    return mlirGenCallParameters(fc, f, nullptr);
+  mlir::LogicalResult mlirGenCallParameters(
+      const FunctionCallAST *fc,
+      std::function<void (StringRef, mlir::Value)> f,
+      const llvm::StringMap<mlir::Type> *paramTypes = nullptr) {
+    return mlirGenCallParameters(fc, f, nullptr, paramTypes);
   }
 
   mlir::Value mlirGenFcCall(const FunctionCallAST *expr, StringRef callee) {
@@ -1516,13 +1610,17 @@ private:
     // get arguments
     SmallVector<mlir::Value, 4> arguments;
     SmallVector<mlir::Attribute, 4> argNames;
+    const llvm::StringMap<mlir::Type> *paramTypes = nullptr;
+    auto ptIt = callableVarTypes.find(callee);
+    if (ptIt != callableVarTypes.end())
+      paramTypes = &ptIt->second;
     if (failed(mlirGenCallParameters(expr, [&] (StringRef name, mlir::Value value) {
       argNames.push_back(mlir::StringAttr::get(context, name));
       arguments.push_back(value);
       return mlir::success();
     }, [&] (mlir::Value value) {
       arguments.push_back(value);
-    })))
+    }, paramTypes)))
       return nullptr;
 
     auto rtIt = functionResultTypes.find(callee);
@@ -1551,11 +1649,15 @@ private:
       return mlir::failure();
     }
 
+    const llvm::StringMap<mlir::Type> *paramTypes = nullptr;
+    auto ptIt = callableVarTypes.find(fb);
+    if (ptIt != callableVarTypes.end())
+      paramTypes = &ptIt->second;
     if (failed(mlirGenCallParameters(expr, [&] (StringRef name, mlir::Value value) {
       auto elem = mlirGenElement(location, idbRef, name);
       builder.create<StoreOp>(location, elem, value);
       return mlir::success();
-    })))
+    }, nullptr, paramTypes)))
         return mlir::failure();
 
     builder.create<CallFbOp>(location, fb, idbRef);

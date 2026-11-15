@@ -115,7 +115,7 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 100 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 102 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
   (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
   timer/timer_lower/call_fb/cc, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
@@ -380,10 +380,12 @@ Remaining technical gaps:
 - SCL-side timer FBs TON/TOF/TP work as builtins (see the builtin bullet
   above); raw %T/%C areas + AWL timer instructions also work.
 - Array-of-struct members (`a[i].x`) work (see above).
-- String literals in assignments to a string var (byte copy, zero-padded) or
-  to a char (first byte) work; string literals elsewhere (e.g. as call
-  arguments) are not implemented. Strings are zero-padded (SCL pads with
-  spaces — documented deviation).
+- String literals work in assignments to a string var (byte copy,
+  zero-padded) or to a char (first byte), and as named FC/FB call arguments
+  (materialized into a temp buffer of the declared parameter type via
+  `mlirGenStringLiteralValue`, using the `callableVarTypes` pre-pass; whole-
+  array load/store through dynamic i8 byte views in LowerToStd).
+  Strings are zero-padded (SCL pads with spaces — documented deviation).
 - FB member initializers that are constant EXPRESSIONS (e.g. `40 + 2`) are
   folded by `foldConstBits` and baked into the IDB global's cold start;
   genuinely non-constant initializers are still ignored (zeroed).
