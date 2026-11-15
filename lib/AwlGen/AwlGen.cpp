@@ -77,6 +77,7 @@ public:
   // line of the current token (lineNo itself is ahead due to lookahead)
   int curLine() const { return cur_.line; }
   bool curQuoted() const { return cur_.quoted; }
+  bool curBcdLit() const { return cur_.bcdLit; }
 
   Tok next() {
     cur_ = ahead_;
@@ -105,6 +106,7 @@ private:
     int64_t intVal = 0;
     double realVal = 0;
     bool quoted = false; // came from a "..." or '...' literal
+    bool bcdLit = false; // C#... counter literal (raw BCD pattern)
     int line = 0;        // line the token starts on
   };
 
@@ -223,7 +225,8 @@ private:
       // oracle check (awl.assert), see parseAssert.
       if (t.ident.starts_with("__") && !t.ident.starts_with("__ASSERT") &&
           t.ident != "__ACCU" && t.ident != "__STW" && t.ident != "__AR" &&
-          t.ident != "__DBR") {
+          t.ident != "__DBR" && t.ident != "__SLEEP" &&
+          t.ident != "__STWRST") {
         while (!cur.empty() && cur.front() != '\n')
           cur = cur.drop_front();
         return scan();
@@ -381,6 +384,22 @@ private:
         }
         t.intVal = neg ? -v : v;
         t.tok = Tok::integer;
+        return t;
+      }
+      // C#123: BCD counter literal — the value is the BCD pattern as a
+      // binary number (0x123 = 291), decoded by S Z n / compared raw
+      if (t.ident == "C" && !cur.empty() && cur.front() == '#') {
+        cur = cur.drop_front();
+        int64_t v = 0;
+        while (!cur.empty() && isxdigit((unsigned char)cur.front())) {
+          char h = cur.front();
+          int d = isdigit(h) ? h - '0' : tolower(h) - 'a' + 10;
+          v = v * 16 + d;
+          cur = cur.drop_front();
+        }
+        t.intVal = v;
+        t.tok = Tok::integer;
+        t.bcdLit = true;
         return t;
       }
       // typed literal: ident '#' base '#' digits, e.g. B#16#FF
@@ -901,6 +920,7 @@ private:
     // only real operands are handled here; symbolic member names
     // (TIMER_VAR, TEST1_A, ...) are approximated as DB word 0 via the
     // DBn branch of parseOperand — detect those by shape and skip the line
+    std::string symName;
     {
       std::string w0 = upperIdent();
       bool looksOperand =
@@ -908,12 +928,17 @@ private:
           (isAreaLetter(w0[0]) &&
            (w0.size() == 1 || isdigit((unsigned char)w0[1]) ||
             w0[1] == 'B' || w0[1] == 'W' || w0[1] == 'D'));
-      if (!looksOperand) {
-        lexer.nextLine();
-        return true;
-      }
+      if (!looksOperand)
+        symName = w0; // symbolic member name (e.g. TIMER_VAR := T 24)
     }
-    mlir::Value addr = parseOperand(false);
+    mlir::Value addr;
+    if (symName.empty()) {
+      addr = parseOperand(false);
+    } else {
+      lexer.next(); // member name
+      addr = builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::DataBlock,
+                                            effDb(dbOverride), 0, 0, 16);
+    }
     if (!addr) {
       lexer.nextLine();
       return true;
@@ -934,6 +959,15 @@ private:
         val = builder.create<awl::ConstOp>(
             loc(), i1, builder.getIntegerAttr(i1, w == "TRUE" ? 1 : 0));
         lexer.next();
+      } else if ((w == "T" || w == "C" || w == "Z" || w == "TIME" || w == "S5TIME") &&
+                 lexer.peekToken() == Tok::integer) {
+        // TIMER_VAR := T 24 — raw S5TIME value
+        lexer.next();
+        int64_t n = lexer.getInteger();
+        lexer.next();
+        auto i16 = builder.getI16Type();
+        val = builder.create<awl::ConstOp>(loc(), i16,
+                                            builder.getIntegerAttr(i16, n));
       } else {
         lexer.nextLine();
         return true;
@@ -1405,8 +1439,8 @@ private:
         m == "XOD" || m == "UD" || m == "UW")
       return parseWordLogic(m == "UD" ? "AD" : m == "UW" ? "OW" : m);
     if (m == "SP" || m == "SE" || m == "SS" || m == "SV" || m == "SI" ||
-        m == "SD") // SD = German on-delay (English SE)
-      return parseTimerStart(m == "SD" ? "SE" : m);
+        m == "SA" || m == "SD") // SD = English off-delay (German SA)
+      return parseTimerStart(m == "SD" ? "SA" : m);
     if (m == "ZV" || m == "ZR")
       return parseCounterZW(m == "ZV");
     if (m == "SPA" || m == "SPB" || m == "SPN" || m == "SPBN")
@@ -1441,14 +1475,13 @@ private:
       acc.push_back(castTo(a, builder.getF32Type()));
       return true;
     }
-    if (m == "FR") { // FR T n / FR C n / FR DB: enable — accepted, no-op
-      if (lexer.getCurToken() == Tok::ident)
-        lexer.next();
-      if (lexer.getCurToken() == Tok::integer)
-        lexer.next();
-      rlo = builder.create<awl::ConstOp>(loc(), builder.getI1Type(),
-                                          builder.getIntegerAttr(builder.getI1Type(), 1));
-      rloActive = true;
+    if (m == "FR") { // FR T n / FR C n: enable — reset the edge memory of
+      // the timer/counter at runtime; the RLO is NOT modified
+      mlir::Value v = parseOperand(false);
+      if (!v)
+        return false;
+      if (auto dt = mlir::dyn_cast<mlir::scl::DirectType>(v.getType()))
+        builder.create<awl::FrOp>(loc(), v, rloInput());
       return true;
     }
     if (m == "TDB") { // TDB [DB n]: transfer DB register — not modelled
@@ -1481,10 +1514,23 @@ private:
       }
       return true;
     }
+    if (m == "__STWRST") { // awlsim test directive: reset status word (RLO=0)
+      auto i1 = builder.getI1Type();
+      rlo = builder.create<awl::ConstOp>(loc(), i1, builder.getIntegerAttr(i1, 0));
+      rloActive = true;
+      return true;
+    }
+    if (m == "__SLEEP") { // awlsim test directive: advance the virtual clock
+      int64_t ms = 0;
+      if (lexer.getCurToken() == Tok::integer) {
+        ms = lexer.getInteger();
+        lexer.next();
+      }
+      builder.create<awl::SleepOp>(loc(), builder.getI32IntegerAttr((int32_t)ms));
+      return true;
+    }
     if (m == "LC") // LC Z n: load counter value into ACCU1
       return parseLoad();
-    if (m == "SA") // SA T n: start timer (pulse model, same as SP)
-      return parseTimerStart("SP");
     if (m == "FP" || m == "FN") // edge memory not modelled: approximated
       return parseRloLogic(m == "FP" ? "U" : "UN"); // by U/UN
     if (m == "SAVE" || m == "MCRA" || m == "MCRD")
@@ -1754,6 +1800,16 @@ private:
       pow16 *= 16;
     }
     return bcd;
+  }
+
+  // RLO value for a timer/counter instruction input: the current RLO if a
+  // logic chain is active, else the preserved value, else 0 at block start
+  mlir::Value rloInput() {
+    if (rloActive && rlo)
+      return rlo;
+    if (rlo)
+      return rlo;
+    return constInt(builder.getI1Type(), 0);
   }
 
   bool ensureRlo() {
@@ -2236,7 +2292,8 @@ private:
     if (!v)
       return false;
     acc.push_back(v);
-    rloActive = false;
+    // L does not modify the RLO (S7 semantics): the current RLO value is
+    // preserved for a following timer/counter/logic instruction
     return true;
   }
 
@@ -2363,9 +2420,8 @@ private:
       mlir::Value val;
       int op;
       if (set) {
-        val = popAcc();
-        if (!val)
-          return false;
+        // S C n reads ACCU1 as the new count but does not pop it (S7)
+        val = acc.empty() ? constInt(builder.getI32Type(), 0) : acc.back();
         op = 2; // SCL_RT_COUNTER_SET
       } else {
         auto i16 = builder.getI16Type();
@@ -2373,23 +2429,18 @@ private:
                                             builder.getIntegerAttr(i16, 0));
         op = 3; // SCL_RT_COUNTER_RESET
       }
-      llvm::SmallVector<mlir::NamedAttribute, 1> attrs;
-      attrs.push_back(builder.getNamedAttr("op", builder.getI32IntegerAttr(op)));
-      builder.create<awl::CounterOp>(loc(), mlir::TypeRange{},
-                                     mlir::ValueRange{val, v}, attrs);
-      auto i1 = builder.getI1Type();
-      rlo = builder.create<awl::ConstOp>(
-          loc(), i1, builder.getIntegerAttr(i1, set ? 1 : 0));
-      rloActive = true;
+      builder.create<awl::CounterOp>(
+          loc(), mlir::TypeRange{}, mlir::ValueRange{val, v, rloInput()},
+          builder.getNamedAttr("op", builder.getI32IntegerAttr(op)));
+      // S/R on a counter do not modify the RLO (awlsim semantics)
       return true;
     }
     if (dt.getArea() == mlir::scl::DirectArea::Timer && dt.getWidth() != 1) {
-      // R T n resets the timer; timer state is runtime (not modelled here)
+      // R T n resets the timer at runtime
       if (set)
         return error("S on a timer operand is not valid");
-      auto i1 = builder.getI1Type();
-      rlo = builder.create<awl::ConstOp>(loc(), i1, builder.getIntegerAttr(i1, 0));
-      rloActive = true;
+      builder.create<awl::TimerResetOp>(loc(), v);
+      // R T n does not modify the RLO
       return true;
     }
     if (!isBit(v))
@@ -2461,13 +2512,12 @@ private:
       t = builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::Timer,
                                         0, 0, 0, 16);
     }
-    int mode = m == "SP" ? 0 : m == "SE" ? 1 : m == "SS" ? 2 : m == "SV" ? 3 : 4;
-    llvm::SmallVector<mlir::NamedAttribute, 1> attrs;
-    attrs.push_back(
+    // SclRtTimerMode: SP=0, SE=1, SS=2, SV=3, SI=4, SA=5
+    int mode = m == "SP" ? 0 : m == "SE" ? 1 : m == "SS" ? 2
+               : m == "SV" ? 3 : m == "SI" ? 4 : 5;
+    builder.create<awl::TimerStartOp>(
+        loc(), mlir::TypeRange{}, mlir::ValueRange{dur, t, rloInput()},
         builder.getNamedAttr("mode", builder.getI32IntegerAttr(mode)));
-    builder.create<awl::TimerStartOp>(loc(), mlir::TypeRange{},
-                                      mlir::ValueRange{dur, t}, attrs);
-    rloActive = false;
     return true;
   }
 
@@ -2488,12 +2538,9 @@ private:
     auto i16 = builder.getI16Type();
     mlir::Value zero = builder.create<awl::ConstOp>(
         loc(), i16, builder.getIntegerAttr(i16, 0));
-    llvm::SmallVector<mlir::NamedAttribute, 1> attrs;
-    attrs.push_back(builder.getNamedAttr(
-        "op", builder.getI32IntegerAttr(up ? 0 : 1)));
-    builder.create<awl::CounterOp>(loc(), mlir::TypeRange{},
-                                   mlir::ValueRange{zero, c}, attrs);
-    rloActive = false;
+    builder.create<awl::CounterOp>(
+        loc(), mlir::TypeRange{}, mlir::ValueRange{zero, c, rloInput()},
+        builder.getNamedAttr("op", builder.getI32IntegerAttr(up ? 0 : 1)));
     return true;
   }
 
@@ -2676,11 +2723,14 @@ private:
                lexer.getCurToken() == Tok::real ||
                lexer.getCurToken() == Tok::minus) {
       // constant lhs (e.g. __ASSERT== 1, 2 or a pointer literal P#E 2.1, 17)
+      bool bcd = lexer.curBcdLit();
       mlir::Value c = parseConst();
       if (!c) {
         lexer.nextLine();
         return true;
       }
+      if (bcd) // C#122 in an assert compares the decoded count
+        c = bcdToInt(c, c.getType(), 3);
       actual = c;
     } else {
       lexer.nextLine(); // unsupported lhs form: skip the line
@@ -2714,11 +2764,14 @@ private:
                      ? (mlir::Value)builder.create<awl::LoadOp>(loc(), addr)
                      : addr;
     } else {
+      bool bcd = lexer.curBcdLit();
       mlir::Value c = parseConst();
       if (!c) {
         lexer.nextLine();
         return true;
       }
+      if (bcd) // C#122 in an assert compares the decoded count
+        c = bcdToInt(c, c.getType(), 3);
       expected = c;
     }
     auto idAttr = builder.getI32IntegerAttr((int32_t)id);

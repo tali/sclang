@@ -75,37 +75,51 @@ void scl_rt_update_outputs(void);
 /// Advance the virtual clock by `elapsedMs` milliseconds.
 void scl_rt_cycle(uint64_t elapsedMs);
 
-/// Timer modes for scl_rt_timer_start (the S7 AWL timer instructions).
+/// Timer modes for scl_rt_timer_start (the S7 AWL timer instructions,
+/// awlsim-compatible edge semantics; `in` is the RLO/VKE input).
 enum SclRtTimerMode {
-  SCL_RT_TIMER_PULSE = 0,     ///< SP: output while the timer runs
-  SCL_RT_TIMER_EXT_PULSE = 1, ///< SE: retriggerable pulse
-  SCL_RT_TIMER_ON_DELAY = 2,  ///< SS: output after the delay has elapsed
-  SCL_RT_TIMER_OFF_DELAY = 3, ///< SV: output until the delay has elapsed
-  SCL_RT_TIMER_IMPULSE = 4,   ///< SI: impulse
+  SCL_RT_TIMER_PULSE = 0,      ///< SP: pos edge starts, Q while running
+  SCL_RT_TIMER_ON_DELAY = 1,   ///< SE: pos edge starts, Q after expiry, IN=0 stops
+  SCL_RT_TIMER_LATCH_ON_DELAY = 2, ///< SS: pos edge starts, Q after expiry (latched)
+  SCL_RT_TIMER_EXT_PULSE = 3,  ///< SV: pos edge starts/retriggers, Q while running
+  SCL_RT_TIMER_IMPULSE = 4,    ///< SI: pos edge starts, IN=0 stops, Q while running
+  SCL_RT_TIMER_OFF_DELAY = 5,  ///< SA: neg edge starts, Q=1 while IN or running
 };
-/// Start (or retrigger, for SE) timer `t` with the S5TIME-encoded 16-bit
-/// duration `durS5` taken from ACC1 (AWL `SP/SE/SS/SV/SI T n`).
-void scl_rt_timer_start(uint32_t t, uint8_t mode, uint64_t durS5);
+/// Run the timer instruction: edge-detect on `in`, start/retrigger timer `t`
+/// with the S5TIME-encoded 16-bit duration `durS5` from ACC1
+/// (AWL `SP/SE/SS/SV/SI/SA T n`).
+void scl_rt_timer_start(uint32_t t, uint8_t mode, uint64_t durS5,
+                        uint8_t in);
+/// Reset timer `t` (AWL `R T n`): running = 0, Q = 0, remaining = 0.
+void scl_rt_timer_reset(uint32_t t);
+/// FR T n: on a positive `in` edge, reset the timer's edge memory (prevIn).
+void scl_rt_timer_fr(uint32_t t, uint8_t in);
 
 /// Counter operations for scl_rt_counter_op (AWL `ZV`/`ZR`/`S`/`R C n`).
 enum SclRtCounterOp {
-  SCL_RT_COUNTER_UP = 0,   ///< ZV: increment (saturates at 999)
-  SCL_RT_COUNTER_DOWN = 1, ///< ZR: decrement (floors at 0)
-  SCL_RT_COUNTER_SET = 2,  ///< S: set the count to the ACC1 value
-  SCL_RT_COUNTER_RESET = 3 ///< R: reset the count to 0
+  SCL_RT_COUNTER_UP = 0,   ///< ZV: increment on positive `in` edge (max 999)
+  SCL_RT_COUNTER_DOWN = 1, ///< ZR: decrement on positive `in` edge (min 0)
+  SCL_RT_COUNTER_SET = 2,  ///< S: set count to BCD-decoded ACC1 on pos edge
+  SCL_RT_COUNTER_RESET = 3, ///< R: reset the count to 0
+  SCL_RT_COUNTER_FR = 4    ///< FR: on pos `in` edge, reset the edge memory
 };
-/// Apply a counter operation; `value` is only used for SCL_RT_COUNTER_SET.
-void scl_rt_counter_op(uint32_t c, uint8_t op, uint64_t value);
+/// Apply a counter operation; `value` is only used for SCL_RT_COUNTER_SET,
+/// `in` is the RLO/VKE input (edge-detected per counter and operation).
+void scl_rt_counter_op(uint32_t c, uint8_t op, uint64_t value, uint8_t in);
+
+/// Advance the virtual clock by `ms` (awlsim `__SLEEP n` test directive).
+void scl_rt_sleep(uint32_t ms);
 /// Builtin timer function blocks TON/TOF/TP (mode 0/1/2) operating on an
 /// instance DB buffer with the builtin layout (IN @0, PT @4 i32 BE ms,
 /// Q @8, ET @12 i32 BE ms).
 void scl_rt_timer_fb(uint8_t mode, uint64_t idbPtr);
 
-/// Timer/counter semantics (simulation): reads of the `T`/`C` areas return
-/// the current timer remaining time in ms / the counter value, and bit 0
-/// reads return the status (timer Q output / counter != 0). The timer
-/// duration is decoded from S5TIME: bits 12-15 select the time base
-/// (0=10ms, 1=100ms, 2=1s, 3=10s), bits 0-11 hold the BCD value 0..999.
+/// Timer/counter semantics (simulation, awlsim-compatible): reads of the
+/// `T` area return the remaining time in units of the active time base
+/// (binary time value, as `L T n`), bit 0 reads return the Q status; reads
+/// of the `C` area return the counter value (binary), bit 0 returns
+/// counter != 0. Durations are S5TIME-encoded: bits 12-15 select the time
+/// base (0=10ms, 1=100ms, 2=1s, 3=10s), bits 0-11 the BCD value 0..999.
 
 /// Host-provided runtime operations. A host registers a vtable with
 /// scl_rt_register(); the bound runtime forwards all ABI calls through it.
@@ -122,8 +136,12 @@ typedef struct SclRtVTable {
   void (*cycle)(uint64_t elapsedMs);
   /* Appended for timers/counters (v2). May be NULL in older host runtimes;
      the sim then handles timer/counter operations itself. */
-  void (*timer_start)(uint32_t t, uint8_t mode, uint64_t durS5);
-  void (*counter_op)(uint32_t c, uint8_t op, uint64_t value);
+  void (*timer_start)(uint32_t t, uint8_t mode, uint64_t durS5,
+                      uint8_t in);
+  void (*counter_op)(uint32_t c, uint8_t op, uint64_t value, uint8_t in);
+  void (*timer_reset)(uint32_t t);
+  void (*timer_fr)(uint32_t t, uint8_t in);
+  void (*sleep)(uint32_t ms);
   /* Appended for builtin timer FBs TON/TOF/TP (v3). May be NULL in older
      host runtimes; the sim then handles them itself. mode: 0=TON, 1=TOF,
      2=TP. idbPtr is the instance DB buffer (builtin layout: IN @0, PT @4

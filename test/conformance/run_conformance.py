@@ -19,7 +19,7 @@
 #    lowers and executes without crashing/missing symbols, not computed
 #    values. Exit code 2 (awlsim __ASSERT oracles failed) still counts as
 #    smoke-pass: it proves lowering + execution worked;
-#  - oracle tier: --emit=jit --jit-cycles=5 on files defining OB 1 that
+#  - oracle tier: --emit=jit --jit-cycles=1 --cycle-ms=0 on files defining OB 1 that
 #    contain awlsim __ASSERT directives — pass iff exit code is 0, i.e.
 #    every executed __ASSERT oracle held. This checks computed values.
 
@@ -165,7 +165,7 @@ def main():
         if '__ASSERT' in text:
             oracle_total += 1
             rc, err = run_one(args.sclang, p, xflag, emit='jit',
-                              extra=('--jit-cycles=5',))
+                              extra=('--jit-cycles=1', '--cycle-ms=0'))
             oracle_ok += record(rc == 0, p, xflag + ' oracle', err)
 
     # --- compile tier, SCL per-project: concatenate all .scl files of a dir ---

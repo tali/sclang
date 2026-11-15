@@ -2550,7 +2550,7 @@ struct AwlNopOpLowering : public OpConversionPattern<awl::NopOp> {
   }
 };
 
-// SP/SE/SS/SV/SI T n -> @scl_rt_timer_start(timer: i32, mode: i8, dur: i64)
+// SP/SE/SS/SV/SI/SA T n -> @scl_rt_timer_start(timer: i32, mode: i8, dur: i64, in: i8)
 struct AwlTimerStartLowering : public OpConversionPattern<awl::TimerStartOp> {
   using OpConversionPattern<awl::TimerStartOp>::OpConversionPattern;
   LogicalResult
@@ -2569,16 +2569,101 @@ struct AwlTimerStartLowering : public OpConversionPattern<awl::TimerStartOp> {
     Value modeC = rewriter.create<arith::ConstantOp>(
         loc, i8, rewriter.getI8IntegerAttr(op.getMode()));
     Value dur = convertScalarTo(rewriter, loc, adaptor.getDur(), i64);
+    Value inC = rewriter.create<arith::ConstantOp>(loc, i8,
+                                                   rewriter.getI8IntegerAttr(1));
+    if (adaptor.getIn())
+      inC = rewriter.create<arith::ExtUIOp>(loc, i8, adaptor.getIn());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_timer_start",
-                                rewriter.getFunctionType({i32, i8, i64}, {}));
+                                rewriter.getFunctionType({i32, i8, i64, i8}, {}));
     rewriter.create<func::CallOp>(loc, fn, TypeRange{},
-                                  ValueRange{timerC, modeC, dur});
+                                  ValueRange{timerC, modeC, dur, inC});
     rewriter.eraseOp(op);
     return success();
   }
 };
 
-// ZV/ZR/S/R C n -> @scl_rt_counter_op(counter: i32, op: i8, value: i64)
+// R T n -> @scl_rt_timer_reset(timer: i32)
+struct AwlTimerResetLowering : public OpConversionPattern<awl::TimerResetOp> {
+  using OpConversionPattern<awl::TimerResetOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::TimerResetOp op, awl::TimerResetOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto dt = op.getTimer().getType().dyn_cast<scl::DirectType>();
+    if (!dt)
+      return rewriter.notifyMatchFailure(op, "timer_reset needs a direct operand");
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i32 = rewriter.getI32Type();
+    Value timerC = rewriter.create<arith::ConstantOp>(
+        loc, i32, rewriter.getI32IntegerAttr(dt.getByte()));
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_timer_reset",
+                                rewriter.getFunctionType({i32}, {}));
+    rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{timerC});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// FR T n / FR C n -> @scl_rt_timer_fr(t: i32, in: i8) / counter_op FR
+struct AwlFrOpLowering : public OpConversionPattern<awl::FrOp> {
+  using OpConversionPattern<awl::FrOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::FrOp op, awl::FrOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto dt = op.getOperand().getType().dyn_cast<scl::DirectType>();
+    if (!dt)
+      return rewriter.notifyMatchFailure(op, "fr needs a direct operand");
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i8 = rewriter.getI8Type();
+    auto i32 = rewriter.getI32Type();
+    auto i64 = rewriter.getI64Type();
+    Value idxC = rewriter.create<arith::ConstantOp>(
+        loc, i32, rewriter.getI32IntegerAttr(dt.getByte()));
+    Value inC = rewriter.create<arith::ConstantOp>(loc, i8,
+                                                   rewriter.getI8IntegerAttr(1));
+    if (adaptor.getIn())
+      inC = rewriter.create<arith::ExtUIOp>(loc, i8, adaptor.getIn());
+    if (dt.getArea() == scl::DirectArea::Timer) {
+      auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_timer_fr",
+                                  rewriter.getFunctionType({i32, i8}, {}));
+      rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{idxC, inC});
+    } else if (dt.getArea() == scl::DirectArea::Counter) {
+      Value opC = rewriter.create<arith::ConstantOp>(
+          loc, i8, rewriter.getI8IntegerAttr(4 /* SCL_RT_COUNTER_FR */));
+      Value zero = rewriter.create<arith::ConstantOp>(
+          loc, i64, rewriter.getI64IntegerAttr(0));
+      auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_counter_op",
+                                  rewriter.getFunctionType({i32, i8, i64, i8}, {}));
+      rewriter.create<func::CallOp>(loc, fn, TypeRange{},
+                                    ValueRange{idxC, opC, zero, inC});
+    }
+    // FR DB: nothing to do
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// __SLEEP n -> @scl_rt_sleep(ms: i32)
+struct AwlSleepOpLowering : public OpConversionPattern<awl::SleepOp> {
+  using OpConversionPattern<awl::SleepOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::SleepOp op, awl::SleepOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i32 = rewriter.getI32Type();
+    Value msC = rewriter.create<arith::ConstantOp>(
+        loc, i32, rewriter.getI32IntegerAttr(op.getMs()));
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_sleep",
+                                rewriter.getFunctionType({i32}, {}));
+    rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{msC});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// ZV/ZR/S/R C n -> @scl_rt_counter_op(counter: i32, op: i8, value: i64, in: i8)
 struct AwlCounterOpLowering : public OpConversionPattern<awl::CounterOp> {
   using OpConversionPattern<awl::CounterOp>::OpConversionPattern;
   LogicalResult
@@ -2597,10 +2682,14 @@ struct AwlCounterOpLowering : public OpConversionPattern<awl::CounterOp> {
     Value opC = rewriter.create<arith::ConstantOp>(
         loc, i8, rewriter.getI8IntegerAttr(op.getOp()));
     Value val = convertScalarTo(rewriter, loc, adaptor.getValue(), i64);
+    Value inC = rewriter.create<arith::ConstantOp>(loc, i8,
+                                                   rewriter.getI8IntegerAttr(0));
+    if (adaptor.getIn())
+      inC = rewriter.create<arith::ExtUIOp>(loc, i8, adaptor.getIn());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_counter_op",
-                                rewriter.getFunctionType({i32, i8, i64}, {}));
+                                rewriter.getFunctionType({i32, i8, i64, i8}, {}));
     rewriter.create<func::CallOp>(loc, fn, TypeRange{},
-                                  ValueRange{cntC, opC, val});
+                                  ValueRange{cntC, opC, val, inC});
     rewriter.eraseOp(op);
     return success();
   }
@@ -2988,13 +3077,14 @@ void SclToStdLoweringPass::runOnOperation() {
       AwlAssertOpLowering, AwlAssertROpLowering,
       AwlCmpGtLowering, AwlCmpLeLowering, AwlCmpLtLowering, AwlCmpNeLowering,
       AwlConstOpLowering, AwlCounterOpLowering, AwlDirectOpLowering,
-      AwlDivLowering, AwlLoadOpLowering, AwlMulLowering, AwlNegOpLowering,
+      AwlDivLowering, AwlFrOpLowering, AwlLoadOpLowering, AwlMulLowering,
+      AwlNegOpLowering,
       AwlNopOpLowering, AwlNotOpLowering, AwlOrLowering,
       AwlArGetOpLowering, AwlArSetOpLowering, AwlIndirectOpLowering,
       AwlLoadBitIndirectOpLowering,
       AwlLoadIndirectOpLowering, AwlRealMathOpLowering, AwlSetDbOpLowering,
-      AwlShiftOpLowering, AwlStoreIndirectOpLowering,
-      AwlWriteBitIndirectOpLowering,
+      AwlShiftOpLowering, AwlSleepOpLowering, AwlStoreIndirectOpLowering,
+      AwlTimerResetLowering, AwlWriteBitIndirectOpLowering,
       AwlRloLowering<awl::RloAndOp, false>,
       AwlRloLowering<awl::RloOrOp, true>, AwlSetResetLowering<awl::ResetOp, false>,
       AwlSetResetLowering<awl::SetOp, true>, AwlStoreOpLowering, AwlSubLowering,

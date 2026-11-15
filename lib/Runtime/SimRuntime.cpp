@@ -28,11 +28,31 @@ namespace {
 /// scl_rt_sim_set_area_size() (driver CLI `--area-size`).
 constexpr uint64_t kDefaultAreaSize = 65536;
 
+// Classic AWL timer, awlsim-compatible (awlsim/core/timers.py): edge-triggered
+// start on the RLO input, remaining time in units of the active time base,
+// Q status set/cleared at the deadline depending on the mode.
 struct TimerState {
-  uint8_t mode = 0;      // SclRtTimerMode
+  uint8_t mode = 0;             // SclRtTimerMode
+  bool prevIn = false;          // previous RLO input (edge detection)
+  bool prevFR = false;          // previous RLO input of the FR instruction
+  bool deadlineSetsStatus = false; // SE/SS: Q=1 at expiry, else Q=0
   bool running = false;
-  uint64_t startMs = 0;  // clock at (re)start
-  uint64_t durMs = 0;    // decoded duration in ms
+  bool status = false;          // Q output
+  uint64_t deadlineMs = 0;      // clock at expiry
+  uint64_t remainingMs = 0;     // cached remaining time (when stopped)
+  uint8_t timebase = 0;         // S5TIME base of the last start (0=10ms)
+  uint64_t durMs = 0;           // last preset in ms
+  uint64_t tvRaw = 0;           // TV register: last written value (timebase
+                                // units), returned by reads while not running
+};
+
+// Classic AWL counter, awlsim-compatible (awlsim/core/counters.py):
+// ZV/ZR count on positive RLO edges, S sets the BCD-decoded ACC1 on a
+// positive edge, R resets.
+struct CounterState {
+  uint32_t value = 0;           // count (0..999)
+  bool prevS = false, prevZV = false, prevZR = false;
+  bool prevFR = false;          // previous RLO input of the FR instruction
 };
 
 struct SimState {
@@ -43,7 +63,7 @@ struct SimState {
   const SclRtVTable *vtable = nullptr;
   uint64_t clockMs = 0;
   TimerState timers[256];                // indexed by timer number
-  uint32_t counters[256] = {};           // counter values (0..999)
+  CounterState counters[256];            // indexed by counter number
   // builtin timer FB (TON/TOF/TP) state, keyed by instance DB buffer address
   struct TimerFbState {
     bool prevIn = false;
@@ -67,24 +87,41 @@ static uint64_t s5timeToMs(uint64_t s5) {
   return val * baseMs[base];
 }
 
-/// Current timer value in ms: while running, the remaining time (0 when
-/// expired); when stopped, the preset (writing %T sets the preset, as on S7).
-static uint64_t timerRemainingMs(const TimerState &t, uint64_t clockMs) {
+static const uint64_t kTimeBaseMs[4] = {10, 100, 1000, 10000};
+
+/// Lazy deadline check (awlsim Timer.__checkDeadline).
+static void timerCheck(TimerState &t, uint64_t now) {
   if (!t.running)
-    return t.durMs;
-  uint64_t elapsed = clockMs - t.startMs;
-  return elapsed >= t.durMs ? 0 : t.durMs - elapsed;
+    return;
+  t.remainingMs = t.deadlineMs > now ? t.deadlineMs - now : 0;
+  if (t.remainingMs == 0) {
+    t.running = false;
+    t.status = t.deadlineSetsStatus;
+  }
 }
 
-/// Timer status bit (Q output): on-delay timers switch on after the delay,
-/// the others while running.
-static bool timerStatus(const TimerState &t, uint64_t clockMs) {
-  if (!t.running)
-    return false;
-  bool expired = (clockMs - t.startMs) >= t.durMs;
-  if (t.mode == SCL_RT_TIMER_ON_DELAY)
-    return expired;
-  return !expired;
+/// (Re)start the timer with an S5TIME-encoded duration (awlsim Timer.__start).
+static void timerStart(TimerState &t, uint64_t durS5, uint64_t now) {
+  t.timebase = (uint8_t)((durS5 >> 12) & 3);
+  t.durMs = s5timeToMs(durS5);
+  t.deadlineMs = now + t.durMs;
+  t.remainingMs = t.durMs;
+  t.running = true;
+}
+
+/// Binary timer value in units of the active time base (awlsim
+/// Timer.getTimevalBin, used by `L T n`).
+static uint64_t timerValueBin(TimerState &t, uint64_t now) {
+  timerCheck(t, now);
+  uint64_t unit = kTimeBaseMs[t.timebase & 3];
+  return (t.remainingMs + unit / 2) / unit;
+}
+
+/// Decode a BCD counter value (awlsim Counter.setValueBCD).
+static uint32_t bcdDecode(uint64_t v) {
+  uint32_t a = v & 0xF, b = (v >> 4) & 0xF, c = (v >> 8) & 0xF;
+  uint32_t val = a + b * 10 + c * 100;
+  return val > 999 ? 999 : val;
 }
 
 SimState &state() {
@@ -149,7 +186,15 @@ int64_t scl_rt_read(uint8_t area, uint32_t db, uint32_t byteOff,
   // Timers/counters: the value is computed from the sim state (remaining
   // time in ms / counter value), not stored in the area buffer.
   if (area == SCL_RT_AREA_T && widthBytes > 1) {
-    uint64_t v = timerRemainingMs(state().timers[byteOff], state().clockMs);
+    auto &tm = state().timers[byteOff];
+    timerCheck(tm, state().clockMs);
+    // while running (or stopped mid-run): remaining time in timebase units
+    // (awlsim getTimevalBin); a T T n / %TWn := write loads the TV register
+    // and is returned verbatim while not running
+    uint64_t unit = kTimeBaseMs[tm.timebase & 3];
+    uint64_t v = tm.running ? (tm.remainingMs + unit / 2) / unit
+                            : (tm.tvRaw != 0 ? tm.tvRaw
+                                             : (tm.remainingMs + unit / 2) / unit);
     if (widthBytes < 8) {
       uint64_t signBit = 1ull << (widthBytes * 8 - 1);
       if (v & signBit)
@@ -158,7 +203,7 @@ int64_t scl_rt_read(uint8_t area, uint32_t db, uint32_t byteOff,
     return (int64_t)v;
   }
   if (area == SCL_RT_AREA_C && widthBytes > 1)
-    return (int64_t)state().counters[byteOff];
+    return (int64_t)state().counters[byteOff].value;
   auto &buf = bufferFor(area, db, byteOff, widthBytes);
   // big-endian: byte 0 is the most significant byte
   uint64_t v = 0;
@@ -188,11 +233,20 @@ void scl_rt_write(uint8_t area, uint32_t db, uint32_t byteOff,
   // Writing a counter value (e.g. SCL `%Cn := v`) sets the count; writing a
   // timer value (e.g. `%TWn := v`) sets the preset (TV).
   if (area == SCL_RT_AREA_C && widthBytes > 1) {
-    state().counters[byteOff] = (uint32_t)(value > 999 ? 999 : value);
+    state().counters[byteOff].value = (uint32_t)(value > 999 ? 999 : value);
     return;
   }
   if (area == SCL_RT_AREA_T && widthBytes > 1) {
-    state().timers[byteOff].durMs = value;
+    // T T n: load the TV register; restarts a running timer (awlsim
+    // Timer.setTimevalS5T)
+    auto &tm = state().timers[byteOff];
+    tm.tvRaw = value;
+    if (tm.running)
+      timerStart(tm, value, state().clockMs);
+    else {
+      tm.timebase = (uint8_t)((value >> 12) & 3);
+      tm.durMs = s5timeToMs(value);
+    }
     return;
   }
   auto &buf = bufferFor(area, db, byteOff, widthBytes);
@@ -212,10 +266,12 @@ bool scl_rt_read_bit(uint8_t area, uint32_t db, uint32_t byteOff,
   if (area == SCL_RT_AREA_DB && db == 0 && state().currentDb != 0)
     db = state().currentDb; // DB 0 operand = current DB (AUF/OPN)
   // Timer/counter status bit (AWL `U T n` / `U Z n`).
-  if (bit == 0 && area == SCL_RT_AREA_T)
-    return timerStatus(state().timers[byteOff], state().clockMs);
+  if (bit == 0 && area == SCL_RT_AREA_T) {
+    timerCheck(state().timers[byteOff], state().clockMs);
+    return state().timers[byteOff].status;
+  }
   if (bit == 0 && area == SCL_RT_AREA_C)
-    return state().counters[byteOff] > 0;
+    return state().counters[byteOff].value > 0;
   auto &buf = bufferFor(area, db, byteOff, 1);
   return (buf[byteOff] >> bit) & 1;
 }
@@ -260,52 +316,158 @@ void scl_rt_cycle(uint64_t elapsedMs) {
   state().clockMs += elapsedMs;
 }
 
-void scl_rt_timer_start(uint32_t t, uint8_t mode, uint64_t durS5) {
+void scl_rt_timer_start(uint32_t t, uint8_t mode, uint64_t durS5,
+                        uint8_t in) {
   auto &s = state();
   if (s.vtable && s.vtable->timer_start) {
-    s.vtable->timer_start(t, mode, durS5);
+    s.vtable->timer_start(t, mode, durS5, in);
     return;
   }
   if (t > 255) {
     fprintf(stderr, "scl_rt_timer_start: invalid timer %u\n", t);
     abort();
   }
-  uint64_t durMs = s5timeToMs(durS5);
   TimerState &tm = s.timers[t];
-  if (mode == SCL_RT_TIMER_EXT_PULSE && tm.running) {
-    // SE retrigger extends the running pulse
-    tm.durMs = timerRemainingMs(tm, s.clockMs) + durMs;
-    tm.startMs = s.clockMs;
-  } else {
-    tm.mode = mode;
-    tm.running = true;
-    tm.startMs = s.clockMs;
-    tm.durMs = durMs;
+  bool posEdge = in && !tm.prevIn;
+  bool negEdge = !in && tm.prevIn;
+  uint64_t now = s.clockMs;
+  switch (mode) {
+  case SCL_RT_TIMER_ON_DELAY: // SE
+    tm.deadlineSetsStatus = true;
+    if (in) {
+      if (posEdge)
+        timerStart(tm, durS5, now);
+    } else {
+      timerCheck(tm, now);
+      tm.running = false;
+      tm.status = false;
+    }
+    break;
+  case SCL_RT_TIMER_LATCH_ON_DELAY: // SS
+    tm.deadlineSetsStatus = true;
+    if (posEdge)
+      timerStart(tm, durS5, now);
+    break;
+  case SCL_RT_TIMER_EXT_PULSE: // SV
+    tm.deadlineSetsStatus = false;
+    if (posEdge) {
+      tm.status = true;
+      timerStart(tm, durS5, now);
+    }
+    break;
+  case SCL_RT_TIMER_IMPULSE: // SI
+    tm.deadlineSetsStatus = false;
+    if (in) {
+      if (posEdge) {
+        tm.status = true;
+        timerStart(tm, durS5, now);
+      }
+    } else {
+      timerCheck(tm, now);
+      tm.running = false;
+      tm.status = false;
+    }
+    break;
+  case SCL_RT_TIMER_OFF_DELAY: // SA
+    tm.deadlineSetsStatus = false;
+    if (posEdge) {
+      timerCheck(tm, now);
+      tm.status = true;
+      tm.running = false;
+    }
+    if (negEdge) {
+      tm.status = true;
+      timerStart(tm, durS5, now);
+    }
+    break;
+  default: // SP: pulse — pos edge starts, Q while running
+    tm.deadlineSetsStatus = false;
+    if (posEdge) {
+      tm.status = true;
+      timerStart(tm, durS5, now);
+    }
+    break;
   }
+  tm.prevIn = in != 0;
 }
 
-void scl_rt_counter_op(uint32_t c, uint8_t op, uint64_t value) {
+void scl_rt_timer_reset(uint32_t t) {
+  auto &s = state();
+  if (s.vtable && s.vtable->timer_reset) {
+    s.vtable->timer_reset(t);
+    return;
+  }
+  if (t > 255) {
+    fprintf(stderr, "scl_rt_timer_reset: invalid timer %u\n", t);
+    abort();
+  }
+  TimerState &tm = s.timers[t];
+  tm.running = false;
+  tm.status = false;
+  tm.remainingMs = 0;
+}
+
+void scl_rt_timer_fr(uint32_t t, uint8_t in) {
+  auto &s = state();
+  if (s.vtable && s.vtable->timer_fr) {
+    s.vtable->timer_fr(t, in);
+    return;
+  }
+  if (t > 255) {
+    fprintf(stderr, "scl_rt_timer_fr: invalid timer %u\n", t);
+    abort();
+  }
+  TimerState &tm = s.timers[t];
+  if (in && !tm.prevFR)
+    tm.prevIn = false; // re-enable: next timer instruction sees a pos edge
+  tm.prevFR = in != 0;
+}
+
+void scl_rt_sleep(uint32_t ms) {
+  auto &s = state();
+  if (s.vtable && s.vtable->sleep) {
+    s.vtable->sleep(ms);
+    return;
+  }
+  s.clockMs += ms;
+}
+
+void scl_rt_counter_op(uint32_t c, uint8_t op, uint64_t value, uint8_t in) {
   auto &s = state();
   if (s.vtable && s.vtable->counter_op) {
-    s.vtable->counter_op(c, op, value);
+    s.vtable->counter_op(c, op, value, in);
     return;
   }
   if (c > 255) {
     fprintf(stderr, "scl_rt_counter_op: invalid counter %u\n", c);
     abort();
   }
+  CounterState &cs = s.counters[c];
   switch (op) {
-  case SCL_RT_COUNTER_UP:
-    s.counters[c] = s.counters[c] >= 999 ? 999 : s.counters[c] + 1;
+  case SCL_RT_COUNTER_UP: // ZV
+    if (in && !cs.prevZV && cs.value < 999)
+      ++cs.value;
+    cs.prevZV = in != 0;
     break;
-  case SCL_RT_COUNTER_DOWN:
-    s.counters[c] = s.counters[c] == 0 ? 0 : s.counters[c] - 1;
+  case SCL_RT_COUNTER_DOWN: // ZR
+    if (in && !cs.prevZR && cs.value > 0)
+      --cs.value;
+    cs.prevZR = in != 0;
     break;
-  case SCL_RT_COUNTER_SET:
-    s.counters[c] = (uint32_t)(value > 999 ? 999 : value);
+  case SCL_RT_COUNTER_SET: // S: BCD-decoded ACC1 on positive edge
+    if (in && !cs.prevS)
+      cs.value = bcdDecode(value);
+    cs.prevS = in != 0;
     break;
-  case SCL_RT_COUNTER_RESET:
-    s.counters[c] = 0;
+  case SCL_RT_COUNTER_RESET: // R
+    cs.value = 0;
+    break;
+  case SCL_RT_COUNTER_FR: // FR: reset edge memory on positive edge
+    if (in && !cs.prevFR) {
+      cs.prevS = cs.prevZV = cs.prevZR = false;
+    }
+    cs.prevFR = in != 0;
+    break;
     break;
   default:
     fprintf(stderr, "scl_rt_counter_op: invalid op %u\n", op);
@@ -416,7 +578,7 @@ void scl_rt_sim_reset(void) {
   for (auto &t : s.timers)
     t = TimerState{};
   for (auto &c : s.counters)
-    c = 0;
+    c = CounterState{};
 }
 
 uint64_t scl_rt_sim_clock_ms(void) { return state().clockMs; }
@@ -614,13 +776,14 @@ void scl_rt_sim_dump_areas(void) {
   for (uint32_t t = 0; t < 256; ++t) {
     if (!s.timers[t].running && s.timers[t].durMs == 0)
       continue;
+    timerCheck(s.timers[t], s.clockMs);
     printf("T%u=%llums%s\n", t,
-           (unsigned long long)timerRemainingMs(s.timers[t], s.clockMs),
-           timerStatus(s.timers[t], s.clockMs) ? " on" : " off");
+           (unsigned long long)s.timers[t].remainingMs,
+           s.timers[t].status ? " on" : " off");
   }
   for (uint32_t c = 0; c < 256; ++c)
-    if (s.counters[c] != 0)
-      printf("C%u=%u%s\n", c, s.counters[c], s.counters[c] > 0 ? " on" : "");
+    if (s.counters[c].value != 0)
+      printf("C%u=%u on\n", c, s.counters[c].value);
   printf("clock=%llums\n", (unsigned long long)s.clockMs);
 }
 

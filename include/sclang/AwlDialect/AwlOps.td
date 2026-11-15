@@ -246,20 +246,46 @@ def CallOp : AwlOp<"call", [DeclareOpInterfaceMethods<CallOpInterface>]> {
 
 // MARK: timers (SP/SE/SS/SV/SI T n) and counters (ZV/ZR/S/R C n)
 
-// Timer start: pops the S5TIME-encoded duration from ACC1, starts the timer.
-// `mode` is one of SclRtTimerMode (SP=0, SE=1, SS=2, SV=3, SI=4).
+// Timer instruction: the S5TIME-encoded duration comes from ACC1 (`dur`),
+// `in` is the RLO input (edge-detected per timer). `mode` is one of
+// SclRtTimerMode (SP=0, SE=1, SS=2, SV=3, SI=4, SA=5).
 def TimerStartOp : AwlOp<"timer_start"> {
-  let summary = "SP/SE/SS/SV/SI: start timer with ACC1 = S5TIME duration";
-  let arguments = (ins I32Attr:$mode, AnyType:$dur, Awl_Direct:$timer);
-  let assemblyFormat = "attr-dict $mode `,` $dur `:` type($dur) `,` $timer `:` type($timer)";
+  let summary = "SP/SE/SS/SV/SI/SA: timer instruction with ACC1 = S5TIME duration, RLO = input";
+  let arguments = (ins I32Attr:$mode, AnyType:$dur, Awl_Direct:$timer,
+                       Optional<Awl_Bool>:$in);
+  let assemblyFormat = "attr-dict $mode `,` $dur `:` type($dur) `,` $timer `:` type($timer) (`,` `in` $in^ `:` type($in))?";
+}
+
+// R T n: reset the timer (running = 0, Q = 0, remaining = 0).
+def TimerResetOp : AwlOp<"timer_reset"> {
+  let summary = "R T n: reset timer";
+  let arguments = (ins Awl_Direct:$timer);
+  let assemblyFormat = "attr-dict $timer `:` type($timer)";
 }
 
 // Counter operation. `op` is one of SclRtCounterOp (ZV=0, ZR=1, S=2, R=3);
-// `value` is the new count for S (from ACC1), 0 otherwise.
+// `value` is the ACC1 value for S (BCD-decoded), 0 otherwise; `in` is the
+// RLO input (edge-detected per counter and operation).
 def CounterOp : AwlOp<"counter"> {
-  let summary = "ZV/ZR/S/R: counter operation on C n";
-  let arguments = (ins I32Attr:$op, AnyType:$value, Awl_Direct:$counter);
-  let assemblyFormat = "attr-dict $op `,` $value `:` type($value) `,` $counter `:` type($counter)";
+  let summary = "ZV/ZR/S/R: counter operation on C n with RLO input";
+  let arguments = (ins I32Attr:$op, AnyType:$value, Awl_Direct:$counter,
+                       Optional<Awl_Bool>:$in);
+  let assemblyFormat = "attr-dict $op `,` $value `:` type($value) `,` $counter `:` type($counter) (`,` `in` $in^ `:` type($in))?";
+}
+
+// FR T n / FR C n: enable — on a positive RLO edge, reset the edge memory
+// of the addressed timer/counter (does not modify the RLO).
+def FrOp : AwlOp<"fr"> {
+  let summary = "FR T n / FR C n: reset timer/counter edge memory";
+  let arguments = (ins Awl_Direct:$operand, Optional<Awl_Bool>:$in);
+  let assemblyFormat = "attr-dict $operand `:` type($operand) (`,` `in` $in^ `:` type($in))?";
+}
+
+// awlsim __SLEEP n test directive: advance the virtual clock by n ms.
+def SleepOp : AwlOp<"sleep"> {
+  let summary = "__SLEEP n: advance the virtual clock by n ms";
+  let arguments = (ins I32Attr:$ms);
+  let assemblyFormat = "attr-dict $ms";
 }
 
 // __ASSERT==/__ASSERT<>... (awlsim test oracles): runtime value check.

@@ -190,6 +190,15 @@ struct TextPrinter {
                    cast<CounterOp>(u).getOp() != 2;
           }))
         skipConsts.insert(res);
+      // the RLO input operand of timer/counter/fr ops is not printed (it is
+      // regenerated from the preceding logic chain on re-parse)
+      if (res.getType().isInteger(1) && !res.use_empty() &&
+          llvm::all_of(res.getUsers(), [&](Operation *u) {
+            return (isa<TimerStartOp>(u) && cast<TimerStartOp>(u).getIn() == res) ||
+                   (isa<CounterOp>(u) && cast<CounterOp>(u).getIn() == res) ||
+                   (isa<FrOp>(u) && cast<FrOp>(u).getIn() == res);
+          }))
+        skipConsts.insert(res);
       // S5TIME consts feeding a timer start print as S5T# literals
       if (auto ia = o.getAttrOfType<IntegerAttr>("value")) {
         for (Operation *u : res.getUsers()) {
