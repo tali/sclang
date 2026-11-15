@@ -167,6 +167,7 @@ typedef struct SclRtVTable {
   uint32_t (*current_db)(void);
   void (*ar_set)(uint8_t ar, uint64_t ptr);
   void (*sfb)(uint32_t n); ///< run SFB n on its instance area
+  void (*sfc)(uint32_t n); ///< run SFC n (params staged at the marker area)
   uint64_t (*ar_add)(uint8_t ar, uint32_t offBits); // returns new ptr
   int64_t (*read_indirect)(uint64_t ptr, uint8_t widthBytes);
   void (*write_indirect)(uint64_t ptr, int64_t value, uint8_t widthBytes);
@@ -222,6 +223,10 @@ void scl_rt_param_out(uint32_t bytes);
 /// timers) on its instance area in the DI-register DB at the AR2 base
 /// offset (multi-instance base), like awlsim's systemblocks.
 void scl_rt_sfb(uint32_t n);
+/// Run a system function (SFC 21 FILL / 47 WAIT / 64 TIME_TCK) on the
+/// parameter staging area in the marker area at kParamBase, like awlsim's
+/// systemblocks. Sim-only; hosts may override via the vtable.
+void scl_rt_sfc(uint32_t n);
 void scl_rt_l_pop(void);
 
 /// Set the DI register (AUF/OPN DI n). DINO/DILG read it. Sim-only.
@@ -239,6 +244,9 @@ uint64_t scl_rt_pack_s7(uint32_t area, uint32_t db, uint32_t byte,
 void scl_rt_sim_set_area_size(uint8_t area, uint64_t size);
 /// Set the size in bytes of a simulated data block (grown on demand if unset).
 void scl_rt_sim_set_db_size(uint32_t db, uint64_t size);
+/// Register the highest referenced byte of a DB (frontend pre-scan), used
+/// for ANY-pointer (SFC 21) bounds checks on undeclared DBs. Sim-only.
+void scl_rt_sim_db_ref(uint32_t db, uint64_t bytes);
 /// Reset the simulation state (all areas, DBs, the virtual clock).
 void scl_rt_sim_reset(void);
 /// Virtual clock of the simulation in milliseconds.

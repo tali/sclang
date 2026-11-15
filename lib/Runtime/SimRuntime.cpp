@@ -64,6 +64,7 @@ struct SimState {
   uint64_t areaSize[256] = {};           // configured size, 0 = default
   std::map<uint32_t, std::vector<uint8_t>> dbs; // DB number -> bytes
   std::map<uint32_t, uint64_t> dbSize;   // configured DB sizes, 0 = grow lazily
+  std::map<uint32_t, uint64_t> dbRefHighWater; // highest referenced DB byte
   const SclRtVTable *vtable = nullptr;
   uint64_t clockMs = 0;
   TimerState timers[256];                // indexed by timer number
@@ -885,6 +886,15 @@ void scl_rt_sim_set_db_size(uint32_t db, uint64_t size) {
   s.dbs[db].resize(size, 0);
 }
 
+// Register the highest referenced byte of a DB (frontend pre-scan); used
+// for ANY-pointer bounds checks on DBs without a DATA_BLOCK declaration.
+void scl_rt_sim_db_ref(uint32_t db, uint64_t bytes) {
+  auto &s = state();
+  auto &hw = s.dbRefHighWater[db];
+  if (bytes > hw)
+    hw = bytes;
+}
+
 void scl_rt_sim_reset(void) {
   auto &s = state();
   for (auto &b : s.areaBytes)
@@ -893,6 +903,7 @@ void scl_rt_sim_reset(void) {
     sz = 0;
   s.dbs.clear();
   s.dbSize.clear();
+  s.dbRefHighWater.clear();
   s.currentDb = 0;
   s.ars[0] = s.ars[1] = 0;
   s.clockMs = 0;
@@ -1032,6 +1043,164 @@ void scl_rt_write_bit_indirect(uint64_t ptr, bool value) {
   }
   uint64_t p = rawToPacked(ptr);
   scl_rt_write_bit(ptrArea(p), ptrDb(p), ptrByte(p), ptrBit(p), value);
+}
+
+// MARK: system functions (SFCs). The frontend stages the parameters in the
+// marker area at kParamBase (SFC 21: BVAL/BLK as i64 S7 pointers @+0/+8,
+// RET_VAL i16 @+16; SFC 47: WT i16 @+0; SFC 64: RET_VAL i32 @+0).
+void scl_rt_sfc(uint32_t n) {
+  auto &s = state();
+  if (s.vtable && s.vtable->sfc) {
+    s.vtable->sfc(n);
+    return;
+  }
+  if (n == 64) { // TIME_TCK: 31-bit millisecond timestamp
+    scl_rt_write(SCL_RT_AREA_M, 0, kParamBase + 0, 4,
+                 s.clockMs & 0x7FFFFFFF);
+    return;
+  }
+  if (n == 47) { // WAIT: WT in microseconds, max 32767 (awlsim sfc_47)
+    int wt = (int16_t)(uint16_t)scl_rt_read(SCL_RT_AREA_M, 0, kParamBase + 0, 2);
+    if (wt > 0)
+      s.clockMs += ((uint64_t)std::min(wt, 32767) + 999) / 1000;
+    return;
+  }
+  if (n != 21)
+    return; // other SFCs: host-provided stub
+  // SFC 21 FILL (awlsim system_sfc_21): fill the BLK ANY block with BVAL.
+  // The frontend stages the full 10-byte ANY headers inline in the marker
+  // area: BVAL @ kParamBase+0, BLK @ kParamBase+10, RET_VAL (i16) @ +20.
+  constexpr uint32_t BVAL = 0, BLK = 10, RETV = 20;
+  auto fail = [&](uint16_t code) {
+    scl_rt_write(SCL_RT_AREA_M, 0, kParamBase + RETV, 2, code);
+  };
+  auto anyByte = [&](uint32_t base, uint32_t i) -> uint8_t {
+    return (uint8_t)scl_rt_read(SCL_RT_AREA_M, 0, kParamBase + base + i, 1);
+  };
+  auto anyWord = [&](uint32_t base, uint32_t i) -> uint32_t {
+    return ((uint32_t)anyByte(base, i) << 8) | anyByte(base, i + 1);
+  };
+  if (anyByte(BVAL, 0) != 0x10)
+    return fail(0x8124); // E_RAREA p1: invalid BVAL magic
+  if (anyByte(BLK, 0) != 0x10)
+    return fail(0x8325); // E_WAREA p3: invalid BLK magic
+  // ANY type code -> width in bits (awlsim ANYPointerConst + typeWidths)
+  auto typeWidth = [](uint32_t code) -> int {
+    switch (code) {
+    case 0x01: return 1;                                   // BOOL
+    case 0x02: case 0x03: return 8;                        // BYTE CHAR
+    case 0x04: case 0x05: case 0x09: case 0x0C: return 16; // WORD INT DATE S5T
+    case 0x06: case 0x07: case 0x08: case 0x0A:
+    case 0x0B: return 32; // DWORD DINT REAL TOD TIME
+    case 0x0E: return 64;                                  // DT
+    case 0x17: case 0x18: case 0x19: case 0x1A:
+    case 0x1C: case 0x1D: return 16; // BLOCK_* COUNTER TIMER
+    default: return -1;
+    }
+  };
+  int bw = typeWidth(anyByte(BVAL, 1));
+  if (bw <= 0)
+    return fail(0x8124);
+  int lw = typeWidth(anyByte(BLK, 1));
+  if (lw <= 0)
+    return fail(0x8325);
+  uint64_t blen = (uint64_t)bw * anyWord(BVAL, 2);
+  uint64_t llen = (uint64_t)lw * anyWord(BLK, 2);
+  if (blen % 8)
+    return fail(0x8122); // E_RLEN p1
+  if (llen % 8)
+    return fail(0x8323); // E_WLEN p3
+  blen /= 8;
+  llen /= 8;
+  // decode the ANY pointer dwords (S7 format: area<<24|db<<16|byte<<3|bit)
+  auto decode = [&](uint32_t base, uint32_t &area, uint32_t &byte,
+                    uint32_t &bit) {
+    uint64_t ptr = ((uint64_t)anyByte(base, 6) << 24) |
+                   ((uint64_t)anyByte(base, 7) << 16) |
+                   ((uint64_t)anyByte(base, 8) << 8) | anyByte(base, 9);
+    area = (uint32_t)(ptr >> 24) & 0xFF;
+    byte = (uint32_t)(ptr >> 3) & 0x1FFF;
+    bit = (uint32_t)ptr & 7;
+  };
+  uint32_t bArea, bByte, bBit, lArea, lByte, lBit;
+  decode(BVAL, bArea, bByte, bBit);
+  decode(BLK, lArea, lByte, lBit);
+  // resolve the effective runtime area; DB/DI areas take the DB number from
+  // the ANY header (word @4); DB 0 / DB >= 0x100 are never loaded (awlsim
+  // dbsAlloc = 0x100)
+  auto resolve = [&](uint32_t area, uint32_t base, uint8_t &outArea,
+                     uint32_t &outDb) -> int {
+    if (area == 0x84 || area == 0x85) {
+      uint32_t dbNr = anyWord(base, 4);
+      if (dbNr == 0 || dbNr >= 0x100)
+        return 1;
+      outArea = SCL_RT_AREA_DB;
+      outDb = dbNr;
+      return 0;
+    }
+    static const uint8_t s7area[7] = {'P', 'I', 'Q', 'M', 'D', 'D', 'L'};
+    if (area >= 0x80 && area <= 0x86) {
+      outArea = s7area[area - 0x80];
+      outDb = 0;
+      return 0;
+    }
+    return 2; // invalid area
+  };
+  uint8_t bRta = 0, lRta = 0;
+  uint32_t bRtd = 0, lRtd = 0;
+  int br = resolve(bArea, BVAL, bRta, bRtd);
+  if (br == 1)
+    return fail(0x813A); // E_DBNOTEXIST p1
+  int lr = resolve(lArea, BLK, lRta, lRtd);
+  if (lr == 1)
+    return fail(0x833A); // E_DBNOTEXIST p3
+  if (br != 0 || bBit != 0)
+    return fail(0x8128); // E_RALIGN p1
+  if (lr != 0 || lBit != 0)
+    return fail(0x8329); // E_WALIGN p3
+  // bounds check for the copy loop (OOB -> fetch/store error, awlsim raises)
+  auto areaBound = [&](uint8_t area, uint32_t db, uint32_t byte,
+                       uint32_t w) -> bool {
+    uint32_t off = byte;
+    if (area == SCL_RT_AREA_DB) {
+      auto it = s.dbSize.find(db);
+      uint64_t size = it != s.dbSize.end() ? it->second : 0;
+      if (s.dbs.count(db) && s.dbs[db].size() > size)
+        size = s.dbs[db].size();
+      auto hw = s.dbRefHighWater.find(db);
+      if (hw != s.dbRefHighWater.end() && hw->second > size)
+        size = hw->second; // referenced extent of an undeclared DB
+      return (uint64_t)off + w <= size;
+    }
+    if (area == SCL_RT_AREA_L)
+      off += (uint32_t)s.lBase;
+    auto &buf = s.areaBytes[area];
+    uint64_t size = buf.empty() ? (s.areaSize[area] ? s.areaSize[area]
+                                                   : kDefaultAreaSize)
+                                : (uint64_t)buf.size();
+    return (uint64_t)off + w <= size;
+  };
+  // copy loop: DWORD/WORD/BYTE chunks; BVAL wraps around to its begin when
+  // exhausted (awlsim system_sfc_21), so the fill pattern repeats
+  uint64_t bOff = 0;
+  for (uint64_t off = 0; off < llen;) {
+    uint32_t w = 1;
+    if (llen - off >= 4 && blen - bOff >= 4)
+      w = 4;
+    else if (llen - off >= 2 && blen - bOff >= 2)
+      w = 2;
+    if (!areaBound(bRta, bRtd, bByte + bOff, w))
+      return fail(0x8124); // fetch error -> E_RAREA p1
+    if (!areaBound(lRta, lRtd, lByte + off, w))
+      return fail(0x8325); // store error -> E_WAREA p3
+    uint64_t v = scl_rt_read(bRta, bRtd, bByte + bOff, (uint8_t)w);
+    scl_rt_write(lRta, lRtd, lByte + off, (uint8_t)w, v);
+    bOff += w;
+    if (bOff >= blen)
+      bOff = 0;
+    off += w;
+  }
+  scl_rt_write(SCL_RT_AREA_M, 0, kParamBase + RETV, 2, 0); // RET_VAL = 0
 }
 
 // MARK: test oracles (ABI v4)

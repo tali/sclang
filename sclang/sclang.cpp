@@ -322,6 +322,7 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_timer_reset", (void *)&scl_rt_timer_reset);
     add("scl_rt_db_info", (void *)&scl_rt_db_info);
     add("scl_rt_sim_set_db_size", (void *)&scl_rt_sim_set_db_size);
+    add("scl_rt_sim_db_ref", (void *)&scl_rt_sim_db_ref);
     add("scl_rt_timer_fr", (void *)&scl_rt_timer_fr);
     add("scl_rt_sleep", (void *)&scl_rt_sleep);
     add("scl_rt_l_push", (void *)&scl_rt_l_push);
@@ -329,6 +330,7 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_param_in", (void *)&scl_rt_param_in);
     add("scl_rt_param_out", (void *)&scl_rt_param_out);
     add("scl_rt_sfb", (void *)&scl_rt_sfb);
+    add("scl_rt_sfc", (void *)&scl_rt_sfc);
     add("scl_rt_timer_fb", (void *)&scl_rt_timer_fb);
     add("scl_rt_assert_cmp", (void *)&scl_rt_assert_cmp);
     add("scl_rt_assert_cmp_r", (void *)&scl_rt_assert_cmp_r);

@@ -2519,11 +2519,21 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
         sfbN = sfcAttr.value();
       }
     }
+    // SFC n: run in the runtime (params staged in the marker area by the
+    // frontend at kLocalBase)
+    bool sfcRt = false;
+    int32_t sfcN = 0;
+    if (auto sfcAttr = op.getSfc()) {
+      if (op.getCallee().startswith("SFC")) {
+        sfcRt = true;
+        sfcN = sfcAttr.value();
+      }
+    }
     // Cross-file / system block callee (not defined in this module): create
     // an empty stub so single files of a multi-file project still lower and
     // JIT-run (the callee body is not modelled — documented approximation).
     ModuleOp module = op->getParentOfType<ModuleOp>();
-    if (!sfbRt && !module.lookupSymbol(op.getCallee())) {
+    if (!sfbRt && !sfcRt && !module.lookupSymbol(op.getCallee())) {
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointToEnd(module.getBody());
       SmallVector<Type, 4> argTys;
@@ -2606,6 +2616,17 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
         rewriter.create<func::CallOp>(op.getLoc(), setFn, TypeRange{},
                                       ValueRange{arC, savedAr2});
       }
+      rewriter.eraseOp(op);
+      return success();
+    }
+    if (sfcRt) {
+      auto i32 = rewriter.getI32Type();
+      auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_sfc",
+                                  rewriter.getFunctionType({i32}, {}));
+      auto nC = rewriter.create<arith::ConstantOp>(
+          op.getLoc(), i32, rewriter.getI32IntegerAttr(sfcN));
+      rewriter.create<func::CallOp>(op.getLoc(), fn, TypeRange{},
+                                    ValueRange{nC});
       rewriter.eraseOp(op);
       return success();
     }
@@ -2846,6 +2867,28 @@ struct AwlSetDbSizeOpLowering : public OpConversionPattern<awl::SetDbSizeOp> {
     Value szC = rewriter.create<arith::ConstantOp>(
         loc, i64, rewriter.getI64IntegerAttr(op.getBytes()));
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_sim_set_db_size",
+                                rewriter.getFunctionType({i32, i64}, {}));
+    rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{dbC, szC});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// register a DB's highest referenced byte -> @scl_rt_sim_db_ref(db: i32, bytes: i64)
+struct AwlSetDbRefOpLowering : public OpConversionPattern<awl::SetDbRefOp> {
+  using OpConversionPattern<awl::SetDbRefOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::SetDbRefOp op, awl::SetDbRefOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i32 = rewriter.getI32Type();
+    auto i64 = rewriter.getI64Type();
+    Value dbC = rewriter.create<arith::ConstantOp>(
+        loc, i32, rewriter.getI32IntegerAttr(op.getDb()));
+    Value szC = rewriter.create<arith::ConstantOp>(
+        loc, i64, rewriter.getI64IntegerAttr(op.getBytes()));
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_sim_db_ref",
                                 rewriter.getFunctionType({i32, i64}, {}));
     rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{dbC, szC});
     rewriter.eraseOp(op);
@@ -3398,7 +3441,8 @@ void SclToStdLoweringPass::runOnOperation() {
       AwlIndirectOpLowering,
       AwlLoadBitIndirectOpLowering,
       AwlLoadIndirectOpLowering, AwlRealMathOpLowering, AwlSetDbOpLowering,
-      AwlSetDbvOpLowering, AwlSetDbSizeOpLowering, AwlSetDiOpLowering,
+      AwlSetDbvOpLowering, AwlSetDbSizeOpLowering, AwlSetDbRefOpLowering,
+      AwlSetDiOpLowering,
       AwlShiftOpLowering, AwlSleepOpLowering, AwlStoreIndirectOpLowering,
       AwlTimerResetLowering, AwlWriteBitIndirectOpLowering,
       AwlRloLowering<awl::RloAndOp, false>,

@@ -331,6 +331,15 @@ def SetDbSizeOp : AwlOp<"set_db_size"> {
   let assemblyFormat = "attr-dict $db `,` $bytes";
 }
 
+// Register the highest referenced byte offset of a DB (from the file's
+// DBn operands); used for ANY-pointer (SFC 21) bounds checks on DBs that
+// have no DATA_BLOCK declaration. Emitted into __scl_db_init.
+def SetDbRefOp : AwlOp<"set_db_ref"> {
+  let summary = "register the highest referenced byte of a DB";
+  let arguments = (ins I32Attr:$db, I32Attr:$bytes);
+  let assemblyFormat = "attr-dict $db `,` $bytes";
+}
+
 // DBLG/DBNO/DILG/DINO pseudo operands: DB info from the runtime.
 // kind: 0 = DBLG (DB size in bytes), 1 = DBNO (DB number), 2 = DILG
 // (instance DB size), 3 = DINO (instance DB number). db = 0 = current DB.

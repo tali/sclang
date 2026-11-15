@@ -67,9 +67,9 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 - AWL compile: **109/116 pass (94%)**
 - SCL single file: **15/15 pass (100%)**
 - SCL per project: **16/17 pass (94%)**
-- JIT smoke (files with OB 1, full pipeline + execution): **61/77 pass (79%)**
+- JIT smoke (files with OB 1, full pipeline + execution): **63/77 pass (82%)**
 - Oracle (`__ASSERT` files with OB 1, value-level, exit code must be 0):
-  **24/53 pass (45%)** — see "Oracle tier" below
+  **27/53 pass (51%)** — see "Oracle tier" below
 
 ## Remaining failures = documented gaps
 
@@ -95,7 +95,7 @@ references when a file is compiled alone:
 
 ## Oracle tier: what passes and what the failures mean
 
-24 of 53 `__ASSERT` files pass all their executed oracles (was 18). Block
+27 of 53 `__ASSERT` files pass all their executed oracles (was 24). Block
 calls are now fully modeled: FC params are frame-relative with
 param_in/param_out copies (recursion works — factorial passes), RET_VAL is an
 implicit interface member, indirect `UC FC [MW x]` dispatches over the
@@ -106,7 +106,15 @@ R > LOAD > edge precedence per awlsim) and SFB3-5 timers (TP/TON/TOF with
 STATE/STIME/ATIME in the instance DB, ATIME only updated while running,
 PT==0 resets IN) — all six `sfb*.awl` oracles pass, plus `sfb/basic.awl`
 (`CALL SFB -1` is a no-op, BIE stays 1). `insn_CALL` and
-`insn_CALL_multiinstance` pass all oracles.
+`insn_CALL_multiinstance` pass all oracles. SFC 21 (FILL, full ANY-pointer
+semantics incl. error codes 0x8124/0x8325/0x8122/0x8323/0x813A/0x833A/
+0x8128/0x8329 and BVAL wrap-around), SFC 47 (WAIT, WT in us) and SFC 64
+(TIME_TCK) run in the runtime (`scl_rt_sfc`); their params are staged as
+full ANY headers / scalars in the marker area at kLocalBase by the frontend
+(`CALL SFC` param parsing). ANY is 10 bytes and POINTER 6 bytes in layouts;
+symbolic members of undeclared DBs (DB1.VAR0) are auto-assigned offsets in
+order of first use, and every DB's referenced extent is registered via
+`awl.set_db_ref` in `__scl_db_init` for ANY-pointer bounds checks.
 
 Remaining oracle failures map to known gaps (each message names the line and
 actual/expected):
@@ -120,8 +128,8 @@ actual/expected):
   ACCU at OB start not provided);
 - `insn_SI`/`insn_Z`: timer/counter NUMBER indirection through interface
   words; `insn_MISC`: BCD/INV edge cases; `latin1`: char literal encoding;
-- SFCs (`sfc21`, `sfc47`, `sfc64`) and IEC library FCs (`fc4_delete`,
-  `fc9_eq_dt`, `fc12_ge_dt`, `fc21_len`): still host stubs;
+- IEC library FCs (`fc4_delete`, `fc9_eq_dt`, `fc12_ge_dt`, `fc21_len`):
+  still host stubs;
 - `stw_operators`: STW bit tracking (A0/A1/OV/OS) beyond the skipped
   `__STW` asserts.
 
