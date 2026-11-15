@@ -1,0 +1,30 @@
+// RUN: sclang --emit=jit --dump-areas %s 2>&1 | FileCheck %s --check-prefix=SCL
+// RUN: sclang-gen --emit=awl %s | sclang -x awl --emit=jit --dump-areas - 2>&1 | FileCheck %s --check-prefix=SCL
+// CHECK-NOT: failed
+// String literal as an FC call argument, cross-checked SCL->AWL->JIT:
+// FC1 returns s[0]+s[1]+n = 65+66+3 = 134 = 0x86 (%MW0: M[1]=134).
+// SCL: M:
+// SCL: M[1]=134
+// SCL: clock=0ms
+function FC1 : int
+var_input
+  s : string[8];
+  n : int;
+end_var
+begin
+  FC1 := s[0] + s[1] + n;
+end_function
+
+function OB1 : int
+var_temp
+  r : int;
+end_var
+begin
+  r := FC1(s := 'AB', n := 3);
+  %MW0 := r;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

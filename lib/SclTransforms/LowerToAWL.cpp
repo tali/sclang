@@ -363,6 +363,33 @@ struct FuncConverter {
           if (it != paramIndex.end())
             idx = it->second;
         }
+        // String/array argument: copy the buffer byte-wise into the
+        // parameter window slot (AWL has no whole-buffer transfer).
+        if (auto at = argVal.getType().dyn_cast<scl::ArrayType>()) {
+          auto ld = argVal.getDefiningOp<scl::LoadOp>();
+          if (!ld || widthOf(at.getElementType()) != 8) {
+            emitError(call.getLoc()) << "array argument type not representable "
+                                        "in AWL (only strings/byte arrays)";
+            return nullptr;
+          }
+          scl::DirectType src = directOf(ld.getAddress());
+          if (!src)
+            return nullptr;
+          int64_t count = 1;
+          for (auto &dim : at.getDimensions())
+            count *= dim.second - dim.first + 1;
+          auto i8 = IntegerType::get(ctx, 8);
+          for (int64_t i = 0; i < count; ++i) {
+            auto srcDt = scl::DirectType::get(ctx, src.getArea(), src.getDb(),
+                                               src.getByte() + (int32_t)i, 0, 8);
+            auto dstDt = scl::DirectType::get(ctx, scl::DirectArea::Marker, 0,
+                                               paramSlot((int)idx) + (int32_t)i,
+                                               0, 8);
+            auto v = b.create<awl::LoadOp>(loc, i8, directValue(srcDt));
+            b.create<awl::StoreOp>(loc, v, directValue(dstDt));
+          }
+          continue;
+        }
         Type vt = awlValueType(ctx, argVal.getType());
         if (!vt) {
           emitError(call.getLoc()) << "argument type not representable in AWL";
@@ -404,6 +431,10 @@ struct FuncConverter {
     }
     Value r = nullptr;
     Type rt = awlValueType(ctx, v.getType());
+    // S7 AWL has no byte arithmetic/comparison mnemonic: promote char (i8)
+    // values to int (i16), like the S7 compiler does.
+    if (rt && rt.isInteger(8))
+      rt = IntegerType::get(ctx, 16);
     if (!rt) {
       emitError(def->getLoc()) << "type not representable in AWL output: "
                                << v.getType();
@@ -478,6 +509,8 @@ struct FuncConverter {
         r = boolCompare(def);
       } else {
         Type ot = awlValueType(ctx, def->getOperand(0).getType());
+        if (ot && ot.isInteger(8))
+          ot = IntegerType::get(ctx, 16);
         a = castTo(a, ot);
         b2 = castTo(b2, ot);
         Type i1 = IntegerType::get(ctx, 1);

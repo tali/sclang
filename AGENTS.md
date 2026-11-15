@@ -115,7 +115,7 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 106 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 107 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
   (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
   timer/timer_lower/call_fb/cc, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
@@ -283,6 +283,10 @@ has no `\b` — use python3 for regex edits.
   getindex/getelement with constant indices fold into DB/M byte offsets
   (`widthOf` covers arrays/structs; `AwlFbMember` keeps the declared type;
   `declaredTypeOf` resolves it; verified by jit_awl_backend_fb_array).
+  FC string arguments are copied byte-wise into the M param window slot
+  (emitCallFc), and char (i8) values are promoted to i16 for
+  arithmetic/comparison because S7 AWL has no byte mnemonic
+  (jit_awl_backend_fc_string).
   (CALL FB n, DB m, CC, timers, FC params and cross-width assignment via
   awl.cast are done — see below.)
 - **FC parameters in the SCL->AWL backend (implemented)**: passed through a
