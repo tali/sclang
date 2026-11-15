@@ -39,11 +39,16 @@ namespace {
 enum class Tok {
   eof,
   ident,   // [A-Za-z_][A-Za-z0-9_]*
+  localvar, // #name (awlsim block-local variable)
   integer, // decimal, or base-prefixed 2#.. 8#.. 16#..
   real,    // digits.digits
   colon,       // :
   lparen,      // (
   rparen,      // )
+  lbracket,    // [
+  rbracket,    // ]
+  lbrace,      // {
+  rbrace,      // }
   dot,         // .
   comma,       // ,
   minus,       // -
@@ -68,6 +73,7 @@ public:
   double getReal() const { return cur_.realVal; }
   int line() const { return lineNo; }
   int col() const { return colNo; }
+  bool curQuoted() const { return cur_.quoted; }
 
   Tok next() {
     cur_ = ahead_;
@@ -80,6 +86,14 @@ public:
     cur_ = scan();
     ahead_ = scan();
   }
+  // Skip the rest of the current line (block header lines, directives) and
+  // rescan both lookahead tokens (the primed ahead_ is stale afterwards).
+  void nextLine() {
+    while (!cur.empty() && cur.front() != '\n')
+      cur = cur.drop_front();
+    cur_ = scan();
+    ahead_ = scan();
+  }
 
 private:
   struct Token {
@@ -87,6 +101,7 @@ private:
     llvm::StringRef ident;
     int64_t intVal = 0;
     double realVal = 0;
+    bool quoted = false; // came from a "..." or '...' literal
   };
 
   Token scan() {
@@ -118,39 +133,61 @@ private:
         tolower((unsigned char)cur[2]) == 't' && cur[3] == '#') {
       cur = cur.drop_front(4);
       std::string s;
-      while (!cur.empty() && isalnum((unsigned char)cur.front())) {
-        s += (char)toupper((unsigned char)cur.front());
+      while (!cur.empty() && (isalnum((unsigned char)cur.front()) ||
+                              cur.front() == '_')) {
+        if (cur.front() != '_') // awlsim: underscores in literals are ignored
+          s += (char)toupper((unsigned char)cur.front());
         cur = cur.drop_front();
       }
-      // base suffix: MS -> 10ms (code 0), S -> 1s (code 2); the leading
-      // digits are the (decimal, <= 999) value, BCD-encoded into bits 0-11
-      static const char *suffixes[] = {"MS", "S"};
-      static const int codes[] = {0, 2};
-      int code = -1;
-      size_t valLen = 0;
-      for (int i = 0; i < 2; ++i) {
-        size_t n = strlen(suffixes[i]);
-        if (s.size() > n && s.compare(s.size() - n, n, suffixes[i]) == 0) {
-          code = codes[i];
-          valLen = s.size() - n;
-          break;
+      // components: <digits><unit> repeated, units MS (10ms), S (1s),
+      // M (1min), H (1h); the total is re-encoded into the S5TIME base
+      // (10ms/100ms/1s/10s) that fits the BCD value range <= 999
+      int64_t total = 0; // in 10ms units
+      bool ok = true;
+      size_t i = 0;
+      while (i < s.size() && ok) {
+        int64_t num = 0;
+        bool anyDigit = false;
+        while (i < s.size() && isdigit((unsigned char)s[i])) {
+          num = num * 10 + (s[i] - '0');
+          anyDigit = true;
+          ++i;
         }
-      }
-      int64_t val = -1;
-      if (code >= 0 && valLen > 0) {
-        val = 0;
-        for (size_t i = 0; i < valLen; ++i) {
-          if (!isdigit((unsigned char)s[i]))
-            val = -1;
-          else
-            val = val >= 0 ? val * 10 + (s[i] - '0') : -1;
+        int64_t unit = -1;
+        if (i + 1 < s.size() && s[i] == 'M' && s[i + 1] == 'S') {
+          unit = 1; // 10ms
+          i += 2;
+        } else if (i < s.size() && s[i] == 'H') {
+          unit = 360000;
+          ++i;
+        } else if (i < s.size() && s[i] == 'M') {
+          unit = 6000;
+          ++i;
+        } else if (i < s.size() && s[i] == 'S') {
+          unit = 100;
+          ++i;
         }
+        if (!anyDigit || unit < 0)
+          ok = false;
+        else
+          total += num * unit;
       }
-      if (val < 0 || val > 999) {
+      if (!ok || total < 0 || total > 999LL * 1000) {
         llvm::errs() << file << ":" << lineNo << ":" << colNo
                      << ": bad S5TIME literal 'S5T#" << s << "'\n";
         t.tok = Tok::eof;
         return t;
+      }
+      static const int64_t steps[] = {1000, 100, 10, 1}; // 10s, 1s, 100ms, 10ms
+      static const int codes[] = {3, 2, 1, 0};
+      int code = 0;
+      int64_t val = total;
+      for (int k = 0; k < 4; ++k) {
+        if (total % steps[k] == 0 && total / steps[k] <= 999) {
+          code = codes[k];
+          val = total / steps[k];
+          break;
+        }
       }
       int64_t bcd = ((val / 100) << 8) | (((val / 10) % 10) << 4) | (val % 10);
       t.intVal = ((int64_t)code << 12) | bcd;
@@ -162,6 +199,235 @@ private:
       while (!cur.empty() && (isalnum(cur.front()) || cur.front() == '_'))
         cur = cur.drop_front();
       t.ident = llvm::StringRef(begin, cur.begin() - begin);
+      // awlsim named constants: __CNST_PI etc. (operands, not directives)
+      if (t.ident.starts_with("__CNST")) {
+        if (t.ident.contains("PI")) {
+          t.realVal = 3.14159265358979;
+          t.tok = Tok::real;
+        } else if (t.ident.contains("NAN")) {
+          t.realVal = __builtin_nan("");
+          t.tok = Tok::real;
+        } else {
+          t.intVal = 0;
+          t.tok = Tok::integer;
+        }
+        return t;
+      }
+      // awlsim test directives (__ASSERT==, __FEATURE, __STWRST, ...):
+      // skip the whole line, they are test oracles, not AWL
+      if (t.ident.starts_with("__")) {
+        while (!cur.empty() && cur.front() != '\n')
+          cur = cur.drop_front();
+        return scan();
+      }
+      // DATE/TIME literals: D#1990-1-1 (days since 1990-01-01), T#2s (ms),
+      // DT#... (not modelled, 0)
+      if ((t.ident == "D" || t.ident == "T" || t.ident == "DT" ||
+           t.ident == "TOD" || t.ident == "DATE" || t.ident == "TIME" ||
+           t.ident == "TIME_OF_DAY") &&
+          !cur.empty() && cur.front() == '#') {
+        cur = cur.drop_front();
+        std::string s;
+        while (!cur.empty() &&
+               (isalnum((unsigned char)cur.front()) || cur.front() == ':' ||
+                cur.front() == '.' || cur.front() == '-' ||
+                cur.front() == '_')) {
+          if (cur.front() != '_') // awlsim: underscores in literals are ignored
+            s += (char)toupper((unsigned char)cur.front());
+          cur = cur.drop_front();
+        }
+        int64_t v = 0;
+        if (t.ident == "T" || t.ident == "TIME") {
+          // components <digits><unit>, units MS/S/M/H -> total ms
+          size_t i = 0;
+          while (i < s.size()) {
+            size_t before = i;
+            int64_t num = 0;
+            while (i < s.size() && isdigit((unsigned char)s[i]))
+              num = num * 10 + (s[i++] - '0');
+            int64_t unit = 0;
+            if (i + 1 < s.size() && s[i] == 'M' && s[i + 1] == 'S') {
+              unit = 1;
+              i += 2;
+            } else if (i < s.size() && s[i] == 'H') {
+              unit = 3600000;
+              ++i;
+            } else if (i < s.size() && s[i] == 'M') {
+              unit = 60000;
+              ++i;
+            } else if (i < s.size() && s[i] == 'S') {
+              unit = 1000;
+              ++i;
+            }
+            if (i == before)
+              break; // no progress: avoid an infinite loop
+            v += num * unit;
+          }
+        } else if (t.ident == "TOD" || t.ident == "TIME_OF_DAY") {
+          // TOD#h:m:s.ms -> ms since midnight
+          int h = 0, mi = 0, sec = 0, ms = 0;
+          if (sscanf(s.c_str(), "%d:%d:%d.%d", &h, &mi, &sec, &ms) >= 3)
+            v = ((int64_t)h * 3600 + mi * 60 + sec) * 1000 + ms;
+        } else if (t.ident == "D" || t.ident == "DATE") {
+          int y = 0, mo = 0, d = 0;
+          if (sscanf(s.c_str(), "%d-%d-%d", &y, &mo, &d) == 3) {
+            auto daysFromCivil = [](int yy, int m, int dd) -> int64_t {
+              yy -= m <= 2;
+              int64_t era = (yy >= 0 ? yy : yy - 399) / 400;
+              unsigned yoe = (unsigned)(yy - era * 400);
+              unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + dd - 1;
+              unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+              return era * 146097 + (int64_t)doe - 719468;
+            };
+            v = daysFromCivil(y, mo, d) - daysFromCivil(1990, 1, 1);
+          }
+        }
+        t.intVal = v;
+        t.tok = Tok::integer;
+        return t;
+      }
+      // pointer literal P#<byte>.<bit> (P#M 10.0 etc. in CALL params are
+      // skipped with the parameter list): value = byte*8 + bit
+      if (t.ident == "P" && !cur.empty() && cur.front() == '#') {
+        cur = cur.drop_front();
+        if (!cur.empty() && cur.front() == '#') {
+          // P##<ident>: pointer to a symbolic area — not modelled, 0
+          cur = cur.drop_front();
+          while (!cur.empty() && (isalnum(cur.front()) || cur.front() == '_'))
+            cur = cur.drop_front();
+          t.intVal = 0;
+          t.tok = Tok::integer;
+          return t;
+        }
+        // P#"DB".VAR / P#DBX 4.0: symbolic pointer target — skip the name
+        auto skipQuoted = [&]() {
+          if (!cur.empty() && cur.front() == '"') {
+            cur = cur.drop_front();
+            while (!cur.empty() && cur.front() != '"' && cur.front() != '\n')
+              cur = cur.drop_front();
+            if (!cur.empty() && cur.front() == '"')
+              cur = cur.drop_front();
+          }
+        };
+        skipQuoted();
+        while (!cur.empty() && cur.front() == '.') {
+          cur = cur.drop_front();
+          skipQuoted();
+          while (!cur.empty() &&
+                 (isalnum((unsigned char)cur.front()) || cur.front() == '_'))
+            cur = cur.drop_front();
+        }
+        // optional area letter and whitespace: P#E 2.1 / P#M 0.0
+        while (!cur.empty() && (cur.front() == ' ' || cur.front() == '\t' ||
+                                isalpha((unsigned char)cur.front())))
+          cur = cur.drop_front();
+        int64_t byte = 0;
+        while (!cur.empty() && isdigit(cur.front())) {
+          byte = byte * 10 + (cur.front() - '0');
+          cur = cur.drop_front();
+        }
+        int64_t bit = 0;
+        if (!cur.empty() && cur.front() == '.') {
+          cur = cur.drop_front();
+          if (!cur.empty() && isdigit(cur.front())) {
+            bit = cur.front() - '0';
+            cur = cur.drop_front();
+          }
+        }
+        // trailing symbolic member: P#DB42.DTVAR1 (the '.' may already
+        // have been consumed by the bit check above)
+        while (!cur.empty() &&
+               (isalnum((unsigned char)cur.front()) || cur.front() == '_' ||
+                cur.front() == '.' || cur.front() == '[')) {
+          if (cur.front() == '.') {
+            cur = cur.drop_front();
+            skipQuoted();
+          } else if (cur.front() == '[') {
+            int depth = 0;
+            do {
+              if (cur.front() == '[')
+                ++depth;
+              else if (cur.front() == ']')
+                --depth;
+              cur = cur.drop_front();
+            } while (depth > 0 && !cur.empty());
+          } else
+            cur = cur.drop_front();
+        }
+        t.intVal = byte * 8 + bit;
+        t.tok = Tok::integer;
+        return t;
+      }
+      // local-data immediate L#<value> (awlsim), e.g. L L#-1
+      if (t.ident == "L" && !cur.empty() && cur.front() == '#') {
+        cur = cur.drop_front();
+        bool neg = false;
+        if (!cur.empty() && cur.front() == '-') {
+          cur = cur.drop_front();
+          neg = true;
+        }
+        int64_t v = 0;
+        while (!cur.empty() && isdigit(cur.front())) {
+          v = v * 10 + (cur.front() - '0');
+          cur = cur.drop_front();
+        }
+        t.intVal = neg ? -v : v;
+        t.tok = Tok::integer;
+        return t;
+      }
+      // typed literal: ident '#' base '#' digits, e.g. B#16#FF
+      if (!cur.empty() && cur.front() == '#') {
+        cur = cur.drop_front();
+        // awlsim byte list: B#(66, 99) — take the first byte
+        if (!cur.empty() && cur.front() == '(') {
+          cur = cur.drop_front();
+          while (!cur.empty() && !isdigit((unsigned char)cur.front()) &&
+                 cur.front() != ')')
+            cur = cur.drop_front();
+          int64_t v = 0;
+          while (!cur.empty() && isdigit((unsigned char)cur.front())) {
+            v = v * 10 + (cur.front() - '0');
+            cur = cur.drop_front();
+          }
+          while (!cur.empty() && cur.front() != ')')
+            cur = cur.drop_front();
+          if (!cur.empty())
+            cur = cur.drop_front();
+          t.intVal = v;
+          t.tok = Tok::integer;
+          return t;
+        }
+        int64_t base = 0;
+        while (!cur.empty() && isdigit(cur.front())) {
+          base = base * 10 + (cur.front() - '0');
+          cur = cur.drop_front();
+        }
+        if (!cur.empty() && cur.front() == '#')
+          cur = cur.drop_front();
+        int64_t v = 0;
+        if (base == 16) {
+          while (!cur.empty() && isxdigit(cur.front())) {
+            char h = cur.front();
+            int d = isdigit(h) ? h - '0' : tolower(h) - 'a' + 10;
+            v = v * 16 + d;
+            cur = cur.drop_front();
+          }
+        } else if (base == 8 || base == 2) {
+          while (!cur.empty() && cur.front() >= '0' &&
+                 cur.front() < (char)('0' + base)) {
+            v = v * base + (cur.front() - '0');
+            cur = cur.drop_front();
+          }
+        } else {
+          while (!cur.empty() && isdigit(cur.front())) {
+            v = v * 10 + (cur.front() - '0');
+            cur = cur.drop_front();
+          }
+        }
+        t.intVal = v;
+        t.tok = Tok::integer;
+        return t;
+      }
       t.tok = Tok::ident;
       return t;
     }
@@ -220,9 +486,36 @@ private:
     }
     cur = cur.drop_front();
     switch (c) {
+    case ';': return scan(); // statement separator: no-op
+    case '\'': { // quoted literal ('abc', '16#2'): one quoted ident token
+      auto begin = cur.begin();
+      while (!cur.empty() && cur.front() != '\'' && cur.front() != '\n')
+        cur = cur.drop_front();
+      t.ident = llvm::StringRef(begin, cur.begin() - begin);
+      if (!cur.empty() && cur.front() == '\'')
+        cur = cur.drop_front();
+      t.tok = Tok::ident;
+      t.quoted = true;
+      return t;
+    }
+    case '"': { // quoted name ("OB1"): scan as ident
+      auto begin = cur.begin();
+      while (!cur.empty() && cur.front() != '"' && cur.front() != '\n')
+        cur = cur.drop_front();
+      t.ident = llvm::StringRef(begin, cur.begin() - begin);
+      if (!cur.empty() && cur.front() == '"')
+        cur = cur.drop_front();
+      t.tok = Tok::ident;
+      t.quoted = true;
+      return t;
+    }
     case ':': t.tok = Tok::colon; return t;
     case '(': t.tok = Tok::lparen; return t;
     case ')': t.tok = Tok::rparen; return t;
+    case '[': t.tok = Tok::lbracket; return t;
+    case ']': t.tok = Tok::rbracket; return t;
+    case '{': t.tok = Tok::lbrace; return t;
+    case '}': t.tok = Tok::rbrace; return t;
     case '.': t.tok = Tok::dot; return t;
     case ',': t.tok = Tok::comma; return t;
     case '-': t.tok = Tok::minus; return t;
@@ -255,6 +548,22 @@ private:
       } else {
         t.tok = Tok::gt;
       }
+      return t;
+    case '#':
+      // #name: awlsim local variable of the block
+      if (!cur.empty() &&
+          (isalpha((unsigned char)cur.front()) || cur.front() == '_')) {
+        auto begin = cur.begin();
+        while (!cur.empty() &&
+               (isalnum((unsigned char)cur.front()) || cur.front() == '_'))
+          cur = cur.drop_front();
+        t.ident = llvm::StringRef(begin, cur.begin() - begin);
+        t.tok = Tok::localvar;
+        return t;
+      }
+      llvm::errs() << file << ":" << lineNo << ":" << colNo
+                   << ": unexpected character '" << c << "'\n";
+      t.tok = Tok::eof;
       return t;
     default:
       llvm::errs() << file << ":" << lineNo << ":" << colNo
@@ -321,6 +630,7 @@ private:
   struct Bracket {
     mlir::Value savedRlo;
     bool isOr;
+    bool isXor = false;
   };
   llvm::SmallVector<Bracket, 4> brackets;
   bool sawOB1 = false;
@@ -343,26 +653,178 @@ private:
     return s;
   }
 
+  // block header keywords (TITLE = ..., AUTHOR : ...): line is skipped
+  static bool isHeaderKw(const std::string &w) {
+    return w == "TITLE" || w == "AUTHOR" || w == "FAMILY" || w == "NAME" ||
+           w == "VERSION" || w == "NETWORK" || w == "KNOW_HOW_PROTECT";
+  }
+
+  // quoted block name ("CYCLE"): digits if present, else a stable hash
+  static int64_t blockNumFromName(llvm::StringRef name) {
+    int64_t n = 0;
+    bool any = false;
+    for (char c : name)
+      if (isdigit((unsigned char)c)) {
+        n = n * 10 + (c - '0');
+        any = true;
+      }
+    if (any)
+      return n;
+    uint32_t h = 5381;
+    for (char c : name)
+      h = h * 33 + (unsigned char)c;
+    return (int64_t)(h % 100000) + 1;
+  }
+
   bool parseModule() {
     while (lexer.getCurToken() != Tok::eof) {
-      if (!parseBlock())
-        return false;
+      if (lexer.getCurToken() != Tok::ident) {
+        lexer.next(); // stray token between blocks (e.g. after a BEA): skip
+        continue;
+      }
+      std::string w = upperIdent();
+      if (w == "ORGANIZATION_BLOCK") {
+        // long block form: ORGANIZATION_BLOCK OB 1 ... END_ORGANIZATION_BLOCK
+        lexer.next();
+        if (!parseBlockBody(/*longForm=*/true))
+          return false;
+        continue;
+      }
+      if (w == "DATA_BLOCK") {
+        if (!skipDataBlock())
+          return false;
+        continue;
+      }
+      if (w == "FUNCTION" || w == "FUNCTION_BLOCK" || w == "TYPE") {
+        // SCL-style block in a mixed awlsim project file: skip to its END_*
+        lexer.next();
+        std::string endKw = w == "TYPE" ? "END_TYPE"
+                          : w == "FUNCTION_BLOCK" ? "END_FUNCTION_BLOCK"
+                                                 : "END_FUNCTION";
+        while (lexer.getCurToken() != Tok::eof) {
+          if (lexer.getCurToken() == Tok::ident && upperIdent() == endKw) {
+            lexer.next();
+            break;
+          }
+          lexer.next();
+        }
+        continue;
+      }
+      if (w == "OB" || w == "FB" || w == "FC") {
+        if (!parseBlockBody(/*longForm=*/false))
+          return false;
+        continue;
+      }
+      // stray END_* keyword between blocks (e.g. after a BE): skip
+      if (w.rfind("END_", 0) == 0) {
+        lexer.next();
+        continue;
+      }
+      // header line before the first block
+      if (isHeaderKw(w)) {
+        lexer.nextLine();
+        continue;
+      }
+      // { ... } attribute block: skip balanced
+      if (lexer.getCurToken() == Tok::lbrace) {
+        int d = 0;
+        do {
+          if (lexer.getCurToken() == Tok::lbrace)
+            ++d;
+          else if (lexer.getCurToken() == Tok::rbrace)
+            --d;
+          lexer.next();
+        } while (d > 0 && lexer.getCurToken() != Tok::eof);
+        continue;
+      }
+      // stray declaration section between blocks
+      if (w.rfind("VAR", 0) == 0 || w == "TYPE" || w == "STRUCT") {
+        lexer.next();
+        std::string endKw = w == "TYPE" ? "END_TYPE"
+                          : w == "STRUCT" ? "END_STRUCT"
+                                         : "END_VAR";
+        while (lexer.getCurToken() != Tok::eof) {
+          if (lexer.getCurToken() == Tok::ident && upperIdent() == endKw) {
+            lexer.next();
+            break;
+          }
+          lexer.next();
+        }
+        continue;
+      }
+      // bare instruction list (no block header): wrap in an implicit OB 1
+      // (only if no real OB 1 was parsed — e.g. dead code after a BEA)
+      if (!sawOB1) {
+        if (!parseBlockBody(/*longForm=*/false, /*implicitOB1=*/true))
+          return false;
+        continue;
+      }
+      lexer.next(); // stray token after the blocks: skip
     }
     return true;
   }
 
+  /// Skip a DATA_BLOCK DB n [STRUCT ... END_STRUCT] [BEGIN ... END_DATA_BLOCK]
+  /// header; the declaration/initializer contents are not modelled (DB
+  /// storage is runtime memory, ADR 002).
+  bool skipDataBlock() {
+    lexer.next(); // DATA_BLOCK
+    if (lexer.getCurToken() == Tok::ident && upperIdent() == "DB")
+      lexer.next();
+    if (lexer.getCurToken() == Tok::integer)
+      lexer.next();
+    while (lexer.getCurToken() != Tok::eof) {
+      if (lexer.getCurToken() == Tok::ident && upperIdent() == "END_DATA_BLOCK") {
+        lexer.next();
+        return true;
+      }
+      if (lexer.getCurToken() == Tok::ident && isHeaderKw(upperIdent())) {
+        lexer.nextLine();
+        continue;
+      }
+      lexer.next();
+    }
+    return error("unterminated DATA_BLOCK");
+  }
+
   // block := ("OB"|"FB"|"FC") number instruction* "BE"
-  bool parseBlock() {
-    if (lexer.getCurToken() != Tok::ident)
-      return error("expected OB/FB/FC block header");
-    std::string kind = upperIdent();
-    if (kind != "OB" && kind != "FB" && kind != "FC")
-      return error("expected OB/FB/FC block header, got '" + kind + "'");
-    lexer.next();
-    if (lexer.getCurToken() != Tok::integer)
-      return error("expected block number after " + kind);
-    int64_t num = lexer.getInteger();
-    lexer.next();
+  // longForm: ORGANIZATION_BLOCK OB n BEGIN ... END_ORGANIZATION_BLOCK
+  bool parseBlockBody(bool longForm, bool implicitOB1 = false) {
+    std::string kind;
+    int64_t num;
+    if (implicitOB1) {
+      kind = "OB";
+      num = 1;
+    } else if (longForm) {
+      if (lexer.getCurToken() == Tok::ident) {
+        kind = upperIdent();
+        if (kind == "OB" || kind == "FB" || kind == "FC")
+          lexer.next();
+        else
+          kind.clear();
+      }
+      if (kind.empty())
+        kind = "OB";
+      if (lexer.getCurToken() == Tok::ident) {
+        num = blockNumFromName(lexer.getIdent()); // quoted name: OB "CYCLE"
+      } else if (lexer.getCurToken() == Tok::integer) {
+        num = lexer.getInteger();
+      } else {
+        return error("expected block number after " + kind);
+      }
+      lexer.next();
+    } else {
+      kind = upperIdent();
+      lexer.next();
+      if (lexer.getCurToken() == Tok::ident) {
+        num = blockNumFromName(lexer.getIdent());
+      } else if (lexer.getCurToken() == Tok::integer) {
+        num = lexer.getInteger();
+      } else {
+        return error("expected block number after " + kind);
+      }
+      lexer.next();
+    }
     std::string name = kind + std::to_string(num);
     if (kind == "OB" && num == 1)
       sawOB1 = true;
@@ -378,7 +840,63 @@ private:
     rloActive = false;
     brackets.clear();
 
+    if (lexer.getCurToken() == Tok::ident && upperIdent() == "BEGIN")
+      lexer.next();
+
     while (true) {
+      // block end: END_ORGANIZATION_BLOCK / END_FUNCTION_BLOCK / ... or any
+      // stray END_* keyword (END_VAR etc. are consumed by the VAR skip above)
+      if (lexer.getCurToken() == Tok::ident) {
+        std::string w = upperIdent();
+        if (w.rfind("END_", 0) == 0) {
+          lexer.next();
+          builder.create<awl::BeOp>(loc());
+          blockEnded = true;
+          break;
+        }
+      }
+      if (lexer.getCurToken() == Tok::ident && upperIdent() == "BEGIN") {
+        lexer.next();
+        continue;
+      }
+      // declaration sections inside a block (awlsim project files):
+      // skip VAR.../TYPE.../STRUCT... up to the matching END_*
+      if (lexer.getCurToken() == Tok::ident) {
+        std::string w = upperIdent();
+        if (w == "VAR" || w == "VAR_INPUT" || w == "VAR_OUTPUT" ||
+            w == "VAR_TEMP" || w == "VAR_IN_OUT" || w == "VAR_STAT" ||
+            w == "TYPE" || w == "STRUCT") {
+          lexer.next();
+          std::string endKw = w == "TYPE" ? "END_TYPE"
+                             : w == "STRUCT" ? "END_STRUCT"
+                                             : "END_VAR";
+          while (lexer.getCurToken() != Tok::eof) {
+            if (lexer.getCurToken() == Tok::ident && upperIdent() == endKw) {
+              lexer.next();
+              break;
+            }
+            lexer.next();
+          }
+          continue;
+        }
+      }
+      // { ... } attribute block: skip balanced
+      if (lexer.getCurToken() == Tok::lbrace) {
+        int d = 0;
+        do {
+          if (lexer.getCurToken() == Tok::lbrace)
+            ++d;
+          else if (lexer.getCurToken() == Tok::rbrace)
+            --d;
+          lexer.next();
+        } while (d > 0 && lexer.getCurToken() != Tok::eof);
+        continue;
+      }
+      // header lines inside a block (TITLE = ..., VERSION : ...): skip
+      if (lexer.getCurToken() == Tok::ident && isHeaderKw(upperIdent())) {
+        lexer.nextLine();
+        continue;
+      }
       // optional label: ident ':'
       if (lexer.getCurToken() == Tok::ident &&
           lexer.peekToken() == Tok::colon) {
@@ -397,8 +915,15 @@ private:
         brackets.clear();
         continue;
       }
-      if (lexer.getCurToken() == Tok::eof)
+      if (lexer.getCurToken() == Tok::eof) {
+        if (implicitOB1) {
+          // bare instruction list: end the implicit OB 1 at EOF
+          builder.create<awl::BeOp>(loc());
+          blockEnded = true;
+          break;
+        }
         return error("missing BE in block " + name);
+      }
       if (!parseInstruction(name))
         return false;
       if (blockEnded)
@@ -425,10 +950,40 @@ private:
                     : t == Tok::times ? ArithKind::Mul
                                       : ArithKind::Div;
       lexer.next();
+      // `+ <immediate>` (awlsim convenience): add/sub/... constant to ACCU1
+      if (lexer.getCurToken() == Tok::integer ||
+          lexer.getCurToken() == Tok::real || lexer.getCurToken() == Tok::minus) {
+        mlir::Type ty = lexer.getCurToken() == Tok::real
+                            ? (mlir::Type)builder.getF32Type()
+                            : (mlir::Type)builder.getI32Type();
+        mlir::Value b = parseConst();
+        if (!b)
+          return false;
+        if (acc.empty())
+          acc.push_back(constInt(builder.getI32Type(), 0));
+        mlir::Value a = popAcc();
+        a = castTo(a, ty);
+        b = castTo(b, ty);
+        mlir::Value r;
+        switch (k) {
+        case ArithKind::Add: r = builder.create<awl::AddOp>(loc(), ty, a, b); break;
+        case ArithKind::Sub: r = builder.create<awl::SubOp>(loc(), ty, a, b); break;
+        case ArithKind::Mul: r = builder.create<awl::MulOp>(loc(), ty, a, b); break;
+        case ArithKind::Div: r = builder.create<awl::DivOp>(loc(), ty, a, b); break;
+        }
+        acc.push_back(r);
+        rloActive = false;
+        return true;
+      }
       if (lexer.getCurToken() != Tok::ident)
         return error("expected I/D/R after arithmetic operator");
       std::string w = upperIdent();
       lexer.next();
+      if (w.rfind("AR", 0) == 0) { // +AR1 P#...: address register arithmetic
+        if (lexer.getCurToken() == Tok::integer)
+          lexer.next();
+        return true;
+      }
       if (w != "I" && w != "D" && w != "R")
         return error("expected I/D/R after arithmetic operator, got '" + w + "'");
       return parseArith(k, w[0]);
@@ -457,7 +1012,7 @@ private:
   }
 
   bool parseIdentInstruction(const std::string &m, const std::string &blockName) {
-    if (m == "BE") {
+    if (m == "BE" || m == "BEA" || m == "BEB") { // BEA/BEB: block end variants
       builder.create<awl::BeOp>(loc());
       blockEnded = true;
       return true;
@@ -473,19 +1028,84 @@ private:
       return parseLoad();
     if (m == "T")
       return parseStore();
-    if (m == "U" || m == "UN" || m == "O" || m == "ON")
-      return parseRloLogic(m);
+    if ((m == "U" || m == "UN" || m == "A" || m == "AN" || m == "O" ||
+         m == "ON") &&
+        lexer.getCurToken() != Tok::lparen) {
+      // bare U/O/... (no operand, e.g. at end of a chain): RLO unchanged.
+      // An ident followed by an address token is an operand (U A 0.0,
+      // UN L 0.0); only if no address follows and the ident is an
+      // instruction keyword is the logic op bare (O / L STW).
+      if (lexer.getCurToken() == Tok::ident && !lexer.curQuoted()) {
+        std::string w = upperIdent();
+        Tok nxt = lexer.peekToken();
+        bool addrFollows = nxt == Tok::integer || nxt == Tok::real ||
+                           nxt == Tok::dot || nxt == Tok::lbracket;
+        if (!addrFollows &&
+            (w == "L" || w == "T" || w == "U" || w == "UN" || w == "O" ||
+             w == "ON" || w == "A" || w == "AN" || w == "NOT" || w == "SET" ||
+             w == "CLR" || w == "BE" || w == "NOP" || w == "CALL" ||
+             w == "SPA" || w == "SPB" || w == "SPN"))
+          return ensureRlo();
+      }
+      return parseRloLogic(m == "AN" ? "UN" : m);
+    }
     if (m == "NOT") {
       if (!ensureRlo())
         return false;
       rlo = builder.create<awl::NotOp>(loc(), builder.getI1Type(), rlo);
       return true;
     }
-    if (m == "A" || m == "O") {
-      if (lexer.getCurToken() != Tok::lparen)
-        return error(m + " must be followed by (");
+    if (m == "SET") { // RLO := 1
+      rlo = builder.create<awl::ConstOp>(loc(), builder.getI1Type(),
+                                          builder.getIntegerAttr(builder.getI1Type(), 1));
+      rloActive = true;
+      return true;
+    }
+    if (m == "CLR") { // RLO := 0
+      rlo = builder.create<awl::ConstOp>(loc(), builder.getI1Type(),
+                                          builder.getIntegerAttr(builder.getI1Type(), 0));
+      rloActive = true;
+      return true;
+    }
+    if (m == "AUF") { // AUF DB n / AUF DI n: open data block (default DB for
+      // subsequent DB operands); accepted, not modelled (runtime memory)
+      if (lexer.getCurToken() == Tok::ident)
+        lexer.next(); // DB or DI
+      if (lexer.getCurToken() == Tok::integer)
+        lexer.next();
+      if (lexer.getCurToken() == Tok::lbracket) { // AUF DB [LW 0]
+        lexer.next();
+        while (lexer.getCurToken() != Tok::rbracket &&
+               lexer.getCurToken() != Tok::eof)
+          lexer.next();
+        if (lexer.getCurToken() == Tok::rbracket)
+          lexer.next();
+      }
+      return true;
+    }
+    if (m.rfind("LAR", 0) == 0 || m.rfind("+AR", 0) == 0 ||
+        m.rfind("TAR", 0) == 0) {
+      // address register ops (LAR1 P#..., TAR1 LD 0, ...): pointer
+      // arithmetic is not modelled; skip an optional pointer/local operand
+      // (an ident here is only an operand if it is a local-data name)
+      if (lexer.getCurToken() == Tok::integer) {
+        lexer.next();
+      } else if (lexer.getCurToken() == Tok::ident) {
+        std::string w = upperIdent();
+        if (w == "LD" || w == "LW" || (w.size() > 1 && w[0] == 'L')) {
+          lexer.next();
+          if (lexer.getCurToken() == Tok::integer)
+            lexer.next();
+        }
+      }
+      return true;
+    }
+    if (lexer.getCurToken() == Tok::lparen &&
+        (m == "A" || m == "O" || m == "U" || m == "UN" || m == "ON")) {
       lexer.next();
-      brackets.push_back({rlo, m == "O"});
+      if (!ensureRlo())
+        return false;
+      brackets.push_back({rlo, m == "O" || m == "ON", false});
       rlo = builder.create<awl::ConstOp>(loc(), builder.getI1Type(),
                                           builder.getIntegerAttr(builder.getI1Type(), 1));
       rloActive = true;
@@ -496,14 +1116,241 @@ private:
     if (m == "R")
       return parseSetReset(false);
     if (m == "AW" || m == "OW" || m == "XOW" || m == "AD" || m == "OD" ||
-        m == "XOD")
-      return parseWordLogic(m);
-    if (m == "SP" || m == "SE" || m == "SS" || m == "SV" || m == "SI")
-      return parseTimerStart(m);
+        m == "XOD" || m == "UD" || m == "UW")
+      return parseWordLogic(m == "UD" ? "AD" : m == "UW" ? "OW" : m);
+    if (m == "SP" || m == "SE" || m == "SS" || m == "SV" || m == "SI" ||
+        m == "SD") // SD = German on-delay (English SE)
+      return parseTimerStart(m == "SD" ? "SE" : m);
     if (m == "ZV" || m == "ZR")
       return parseCounterZW(m == "ZV");
-    if (m == "SPA" || m == "SPB" || m == "SPN")
-      return parseJump(m);
+    if (m == "SPA" || m == "SPB" || m == "SPN" || m == "SPBN")
+      return parseJump(m == "SPBN" ? "SPN" : m);
+    if (m == "TAK") { // exchange ACCU1/ACCU2
+      padAcc();
+      std::swap(acc[acc.size() - 1], acc[acc.size() - 2]);
+      return true;
+    }
+    if (m == "NEGI" || m == "NEGD" || m == "NEGR") { // negate ACCU1
+      mlir::Value a = popAcc();
+      if (!a)
+        return false;
+      if (m == "NEGR")
+        a = castTo(a, builder.getF32Type());
+      acc.push_back(builder.create<awl::NegOp>(loc(), a.getType(), a));
+      return true;
+    }
+    if (m == "TRUNC") { // real ACCU1 -> int (truncate)
+      mlir::Value a = popAcc();
+      if (!a)
+        return false;
+      acc.push_back(castTo(castTo(a, builder.getF32Type()), builder.getI32Type()));
+      return true;
+    }
+    if (m == "FR") { // FR T n / FR C n / FR DB: enable — accepted, no-op
+      if (lexer.getCurToken() == Tok::ident)
+        lexer.next();
+      if (lexer.getCurToken() == Tok::integer)
+        lexer.next();
+      rlo = builder.create<awl::ConstOp>(loc(), builder.getI1Type(),
+                                          builder.getIntegerAttr(builder.getI1Type(), 1));
+      rloActive = true;
+      return true;
+    }
+    if (m == "TDB") { // TDB: transfer DB register — not modelled
+      if (lexer.getCurToken() == Tok::ident)
+        lexer.next();
+      if (lexer.getCurToken() == Tok::integer)
+        lexer.next();
+      return true;
+    }
+    if (m == "OPN") { // OPN DB n / OPN DI n: open data block (like AUF)
+      if (lexer.getCurToken() == Tok::ident)
+        lexer.next();
+      if (lexer.getCurToken() == Tok::integer)
+        lexer.next();
+      return true;
+    }
+    if (m == "LC") // LC Z n: load counter value into ACCU1
+      return parseLoad();
+    if (m == "SA") // SA T n: start timer (pulse model, same as SP)
+      return parseTimerStart("SP");
+    if (m == "FP" || m == "FN") // edge memory not modelled: approximated
+      return parseRloLogic(m == "FP" ? "U" : "UN"); // by U/UN
+    if (m == "SAVE" || m == "MCRA" || m == "MCRD")
+      return true; // BR / master-control-relay bits are not modelled
+    if (m == "BLD") { // BLD <n>: display code, no-op
+      if (lexer.getCurToken() == Tok::integer)
+        lexer.next();
+      return true;
+    }
+    if (m == "MCR") { // MCR( ... MCR): master control relay — bracket only
+      if (lexer.getCurToken() == Tok::lparen) {
+        lexer.next();
+        brackets.push_back({rlo, false});
+        rlo = builder.create<awl::ConstOp>(
+            loc(), builder.getI1Type(),
+            builder.getIntegerAttr(builder.getI1Type(), 1));
+        rloActive = true;
+        return true;
+      }
+      if (lexer.getCurToken() == Tok::rparen) {
+        lexer.next();
+        return parseCloseBracket();
+      }
+      return true;
+    }
+    if (m == "SPBB")
+      return parseJump("SPB");
+    if (m == "ENT" || m == "PUSH") { // push a copy of ACCU1
+      acc.push_back(acc.empty() ? constInt(builder.getI32Type(), 0) : acc.back());
+      return true;
+    }
+    if (m == "POP" || m == "LEAVE") { // drop ACCU1
+      if (!acc.empty())
+        popAcc();
+      return true;
+    }
+    if (m == "INC" || m == "DEC") { // ACCU1 +/-= n (default 1)
+      int64_t n = 1;
+      if (lexer.getCurToken() == Tok::integer) {
+        n = lexer.getInteger();
+        lexer.next();
+      }
+      mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
+      auto c = constInt(a.getType(), m == "INC" ? n : -n);
+      acc.push_back(builder.create<awl::AddOp>(loc(), a.getType(), a, c));
+      rloActive = false;
+      return true;
+    }
+    if (m == "ITD" || m == "DTI") { // int <-> dword (sign/zero extend)
+      mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
+      acc.push_back(castTo(a, m == "ITD" ? builder.getI32Type()
+                                         : builder.getI16Type()));
+      rloActive = false;
+      return true;
+    }
+    if (m == "INVI" || m == "INVD") { // one's complement
+      mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
+      auto ty = m == "INVI" ? builder.getI16Type() : builder.getI32Type();
+      a = castTo(a, ty);
+      acc.push_back(
+          builder.create<awl::XOrOp>(loc(), ty, a, constInt(ty, -1)));
+      rloActive = false;
+      return true;
+    }
+    if (m == "RND") { // RND/RND+/RND-: real -> int (truncates; no rounding
+      if (lexer.getCurToken() == Tok::plus || lexer.getCurToken() == Tok::minus)
+        lexer.next(); // op in the dialect)
+      mlir::Value a = acc.empty() ? constInt(builder.getF32Type(), 0) : popAcc();
+      acc.push_back(castTo(castTo(a, builder.getF32Type()),
+                           builder.getI32Type()));
+      rloActive = false;
+      return true;
+    }
+    if (m == "MOD") { // ACCU1 %% ACCU2: a - (a / b) * b
+      padAcc();
+      mlir::Value b = popAcc();
+      mlir::Value a = popAcc();
+      auto ty = (a.getType() == builder.getI16Type() &&
+                 b.getType() == builder.getI16Type())
+                    ? builder.getI16Type()
+                    : builder.getI32Type();
+      a = castTo(a, ty);
+      b = castTo(b, ty);
+      mlir::Value q = builder.create<awl::DivOp>(loc(), ty, a, b);
+      acc.push_back(builder.create<awl::SubOp>(
+          loc(), ty, a, builder.create<awl::MulOp>(loc(), ty, q, b)));
+      rloActive = false;
+      return true;
+    }
+    if (m == "TAD") // exchange ACCU1/ACCU2 (dword view) — same as TAK
+      return parseIdentInstruction("TAK", blockName);
+    if ((m == "X" || m == "XN") && lexer.getCurToken() == Tok::lparen) {
+      lexer.next();
+      if (!ensureRlo())
+        return false;
+      brackets.push_back({rlo, false, true});
+      rlo = builder.create<awl::ConstOp>(loc(), builder.getI1Type(),
+                                          builder.getIntegerAttr(builder.getI1Type(), 1));
+      rloActive = true;
+      return true;
+    }
+    if (m == "X" || m == "XN") { // X/XN bit: rlo = rlo XOR bit (XN: negated)
+      mlir::Value addr = parseBitOperand();
+      if (!addr)
+        return false;
+      if (!ensureRlo())
+        return false;
+      auto i1 = builder.getI1Type();
+      mlir::Value b = builder.create<awl::LoadOp>(loc(), addr);
+      rlo = builder.create<awl::XOrOp>(loc(), i1, rlo, castTo(b, i1));
+      if (m == "XN")
+        rlo = builder.create<awl::NotOp>(loc(), i1, rlo);
+      return true;
+    }
+    if (m == "SPL")
+      return parseJump("SPA"); // jump via label list: treated as SPA
+    if (m == "SPBNB" || m == "SPBI" || m == "SPBIN" || m == "JNB" ||
+        m == "JNBI" || m == "SPO" || m == "SOS" || m == "SPU")
+      return parseJump("SPN");
+    if (m == "JB" || m == "JBI")
+      return parseJump("SPB");
+    if (m == "LOOP") { // jump if ACCU1 != 0
+      if (lexer.getCurToken() != Tok::ident)
+        return error("expected label after LOOP");
+      std::string label = upperIdent();
+      lexer.next();
+      mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
+      auto ty = a.getType();
+      auto c = builder.create<awl::CmpNeOp>(loc(), builder.getI1Type(),
+                                            castTo(a, ty), constInt(ty, 0));
+      builder.create<awl::JumpIfOp>(loc(), c, builder.getStringAttr(label));
+      rloActive = false;
+      return true;
+    }
+    if (m == "SPZ" || m == "SPPZ" || m == "SPMZ" || m == "SPS" || m == "SPP" ||
+        m == "SPM") {
+      // jump if ACCU1 == 0 / > 0 / < 0
+      if (lexer.getCurToken() != Tok::ident)
+        return error("expected label after " + m);
+      std::string label = upperIdent();
+      lexer.next();
+      mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
+      auto ty = a.getType();
+      auto i1 = builder.getI1Type();
+      mlir::Value c;
+      if (m == "SPZ")
+        c = builder.create<awl::CmpEqOp>(loc(), i1, castTo(a, ty), constInt(ty, 0));
+      else if (m == "SPPZ" || m == "SPS" || m == "SPP")
+        c = builder.create<awl::CmpGtOp>(loc(), i1, castTo(a, ty), constInt(ty, 0));
+      else
+        c = builder.create<awl::CmpLtOp>(loc(), i1, castTo(a, ty), constInt(ty, 0));
+      builder.create<awl::JumpIfOp>(loc(), c, builder.getStringAttr(label));
+      rloActive = false;
+      return true;
+    }
+    if (m == "BTI" || m == "BTD") { // BCD -> binary
+      mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
+      auto ty = m == "BTI" ? builder.getI16Type() : builder.getI32Type();
+      acc.push_back(bcdToInt(castTo(a, ty), ty, m == "BTI" ? 4 : 8));
+      rloActive = false;
+      return true;
+    }
+    if (m == "ITB" || m == "DTB") { // binary -> BCD
+      mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
+      auto ty = m == "ITB" ? builder.getI16Type() : builder.getI32Type();
+      acc.push_back(intToBcd(castTo(a, ty), ty, m == "ITB" ? 4 : 8));
+      rloActive = false;
+      return true;
+    }
+    if (m == "TAW") { // ACCU1 -> status word (approximated: marker word 0)
+      mlir::Value v = acc.empty() ? constInt(builder.getI32Type(), 0) : acc.back();
+      auto stw = builder.create<awl::DirectOp>(
+          loc(), mlir::scl::DirectArea::Marker, 0, 0, 0, 16);
+      builder.create<awl::StoreOp>(loc(), castTo(v, builder.getI16Type()), stw);
+      rloActive = false;
+      return true;
+    }
     if (m == "CALL" || m == "UC" || m == "CC")
       return parseCall(m == "CC");
     return error("unknown instruction '" + m + "' in block " + blockName);
@@ -524,6 +1371,59 @@ private:
     if (v.getType() == t)
       return v;
     return builder.create<awl::CastOp>(loc(), t, v);
+  }
+
+  mlir::Value constInt(mlir::Type ty, int64_t v) {
+    if (auto ft = mlir::dyn_cast<mlir::FloatType>(ty))
+      return builder.create<awl::ConstOp>(loc(), ty,
+                                          builder.getFloatAttr(ft, (double)v));
+    return builder.create<awl::ConstOp>(loc(), ty, builder.getIntegerAttr(ty, v));
+  }
+
+  // The S7 accumulators are initialized to 0; pad a short stack so that
+  // arithmetic/comparisons on an "empty" accumulator still produce SSA.
+  void padAcc() {
+    if (acc.empty())
+      acc.push_back(constInt(builder.getI32Type(), 0));
+    if (acc.size() == 1)
+      acc.insert(acc.begin(), constInt(builder.getI32Type(), 0));
+  }
+
+  // BCD <-> binary conversion built from awl arith ops (the awl dialect has
+  // no shift ops): BCD digit i of v is (v / 16^i) & 15.
+  mlir::Value bcdToInt(mlir::Value v, mlir::Type ty, int digits) {
+    mlir::Value n = constInt(ty, 0);
+    int64_t pow16 = 1, pow10 = 1;
+    for (int i = 0; i < digits; ++i) {
+      mlir::Value q =
+          builder.create<awl::DivOp>(loc(), ty, v, constInt(ty, pow16));
+      mlir::Value d =
+          builder.create<awl::AndOp>(loc(), ty, q, constInt(ty, 15));
+      mlir::Value term =
+          builder.create<awl::MulOp>(loc(), ty, d, constInt(ty, pow10));
+      n = builder.create<awl::AddOp>(loc(), ty, n, term);
+      pow16 *= 16;
+      pow10 *= 10;
+    }
+    return n;
+  }
+  mlir::Value intToBcd(mlir::Value v, mlir::Type ty, int digits) {
+    mlir::Value bcd = constInt(ty, 0);
+    mlir::Value m = v;
+    int64_t pow16 = 1;
+    for (int i = 0; i < digits; ++i) {
+      mlir::Value q =
+          builder.create<awl::DivOp>(loc(), ty, m, constInt(ty, 10));
+      mlir::Value d = builder.create<awl::SubOp>(
+          loc(), ty, m,
+          builder.create<awl::MulOp>(loc(), ty, q, constInt(ty, 10)));
+      bcd = builder.create<awl::AddOp>(
+          loc(), ty, bcd,
+          builder.create<awl::MulOp>(loc(), ty, d, constInt(ty, pow16)));
+      m = q;
+      pow16 *= 16;
+    }
+    return bcd;
   }
 
   bool ensureRlo() {
@@ -549,27 +1449,177 @@ private:
   // MARK: operands
 
   static bool isAreaLetter(char c) {
-    return c == 'E' || c == 'A' || c == 'M' || c == 'T' || c == 'Z';
+    // German E/A/Z and English I/Q/C; L = local data (mapped to marker)
+    return c == 'E' || c == 'A' || c == 'M' || c == 'T' || c == 'Z' ||
+           c == 'I' || c == 'Q' || c == 'C' || c == 'L';
   }
   static mlir::scl::DirectArea areaOf(char c) {
     switch (c) {
-    case 'E': return mlir::scl::DirectArea::Input;
-    case 'A': return mlir::scl::DirectArea::Output;
+    case 'E': case 'I': return mlir::scl::DirectArea::Input;
+    case 'A': case 'Q': return mlir::scl::DirectArea::Output;
     case 'M': return mlir::scl::DirectArea::Marker;
     case 'T': return mlir::scl::DirectArea::Timer;
-    case 'Z': return mlir::scl::DirectArea::Counter;
+    case 'Z': case 'C': return mlir::scl::DirectArea::Counter;
     }
     return mlir::scl::DirectArea::Marker;
+  }
+
+  // Fallback for an identifier in operand position that is not an area
+  // operand: awlsim symbol names (SYM_M_0.0 -> M 0.0) are decoded, anything
+  // else (quoted names, string literals) maps to a hashed marker bit.
+  mlir::Value symbolicOperand(const std::string &w) {
+    uint32_t h = 5381;
+    for (char c : w)
+      h = h * 33 + (unsigned char)c;
+    int32_t byte = (int32_t)(h % 4096), bit = (int32_t)((h >> 12) % 8);
+    auto area = mlir::scl::DirectArea::Marker;
+    if (w.rfind("SYM_", 0) == 0 && w.size() > 4 && isAreaLetter(w[4])) {
+      area = areaOf(w[4]);
+      byte = w.size() > 5 ? atoi(w.c_str() + 5) : 0;
+      bit = 0;
+    }
+    while (lexer.getCurToken() == Tok::dot) { // "Data_1".VAR0 [i] .member
+      lexer.next();
+      if (lexer.getCurToken() == Tok::integer) {
+        bit = (int32_t)lexer.getInteger();
+        lexer.next();
+      } else if (lexer.getCurToken() == Tok::ident ||
+                 lexer.getCurToken() == Tok::localvar) {
+        lexer.next();
+      }
+      while (lexer.getCurToken() == Tok::lbracket) {
+        lexer.next();
+        while (lexer.getCurToken() != Tok::rbracket &&
+               lexer.getCurToken() != Tok::eof)
+          lexer.next();
+        if (lexer.getCurToken() == Tok::rbracket)
+          lexer.next();
+      }
+    }
+    return builder.create<awl::DirectOp>(loc(), area, 0, byte, bit, 1);
   }
 
   // Parse an operand: E/A/M/T/Z [B|W|D] byte [.bit] or DBn.DB[XBWD] byte [.bit]
   // `bitContext`: for T/Z operands without a size letter, `U T0`-style bit
   // access yields the status bit (width 1, bit 0); otherwise the 16-bit value.
   mlir::Value parseOperand(bool bitContext = false) {
+    // operand starting with '[': fully indirect U [AR1, P#0.0] — address
+    // registers are not modelled; use the P# byte offset in the marker area
+    if (lexer.getCurToken() == Tok::lbracket) {
+      int32_t byte = 0, bit = 0;
+      lexer.next();
+      while (lexer.getCurToken() != Tok::rbracket &&
+             lexer.getCurToken() != Tok::eof) {
+        if (lexer.getCurToken() == Tok::integer) {
+          int64_t v = lexer.getInteger();
+          byte = (int32_t)(v / 8);
+          bit = (int32_t)(v % 8);
+        }
+        lexer.next();
+      }
+      if (lexer.getCurToken() == Tok::rbracket)
+        lexer.next();
+      return builder.create<awl::DirectOp>(
+          loc(), mlir::scl::DirectArea::Marker, 0, byte, bit,
+          bitContext ? 1 : 16);
+    }
+    // #name: awlsim local variable, mapped to a marker bit by name hash
+    if (lexer.getCurToken() == Tok::localvar) {
+      std::string name = std::string(lexer.getIdent());
+      lexer.next();
+      uint32_t h = 5381;
+      for (char c : name)
+        h = h * 33 + (unsigned char)c;
+      return builder.create<awl::DirectOp>(
+          loc(), mlir::scl::DirectArea::Marker, 0, (int32_t)(h % 4096),
+          (int32_t)((h >> 12) % 8), 1);
+    }
     if (lexer.getCurToken() != Tok::ident)
       return (error("expected operand"), nullptr);
     std::string w = upperIdent();
+    bool quoted = lexer.curQuoted();
     lexer.next();
+    if (quoted)
+      return symbolicOperand(w); // "symbol" / 'literal' in operand position
+    // pseudo operands DBLG/DBNO/DILG (DB length/number): not modelled,
+    // load 0
+    if (w == "DBLG" || w == "DBNO" || w == "DILG" || w == "DINO") {
+      auto ty = builder.getI16Type();
+      return builder.create<awl::ConstOp>(loc(), ty,
+                                          builder.getIntegerAttr(ty, 0));
+    }
+
+    // STW: status word — approximated by marker word 0
+    if (w == "STW")
+      return builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::Marker,
+                                            0, 0, 0, 16);
+    // width letter first = indirect access: L B [AR1, P#0.0] — the address
+    // register contents are not modelled; use the P# byte offset from the
+    // brackets in the marker area
+    if (w == "B" || w == "W" || w == "D") {
+      int32_t width = w[0] == 'B' ? 8 : w[0] == 'W' ? 16 : 32;
+      int32_t byte = 0;
+      if (lexer.getCurToken() == Tok::lbracket) {
+        lexer.next();
+        while (lexer.getCurToken() != Tok::rbracket &&
+               lexer.getCurToken() != Tok::eof) {
+          if (lexer.getCurToken() == Tok::integer)
+            byte = (int32_t)lexer.getInteger();
+          lexer.next();
+        }
+        if (lexer.getCurToken() == Tok::rbracket)
+          lexer.next();
+      } else if (lexer.getCurToken() == Tok::integer) {
+        byte = (int32_t)lexer.getInteger();
+        lexer.next();
+      }
+      return builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::Marker,
+                                            0, byte, 0, width);
+    }
+    // DBX/DBB/DBW/DBD without a DB number: instance DB of the enclosing FB
+    // (db = 0), e.g. `L DBW 4`
+    if (w.rfind("DBX", 0) == 0 || w.rfind("DBB", 0) == 0 ||
+        w.rfind("DBW", 0) == 0 || w.rfind("DBD", 0) == 0) {
+      int32_t width = w[2]=='X'?1:w[2]=='B'?8:w[2]=='W'?16:32;
+      int32_t byte = w.size() > 3 ? atoi(w.c_str() + 3) : -1, bit = 0;
+      bool hasBit = false;
+      double realBit = -1;
+      if (byte < 0 && lexer.getCurToken() == Tok::integer) {
+        byte = (int32_t)lexer.getInteger();
+        lexer.next();
+      } else if (byte < 0 && lexer.getCurToken() == Tok::real) {
+        double r = lexer.getReal();
+        byte = (int32_t)r;
+        realBit = r - byte;
+        lexer.next();
+      } else if (byte < 0) {
+        return (error("expected byte address in operand '" + w + "'"), nullptr);
+      }
+      if (realBit >= 0) {
+        bit = (int32_t)(realBit * 10 + 0.5);
+        hasBit = true;
+      } else if (lexer.getCurToken() == Tok::dot) {
+        lexer.next();
+        if (lexer.getCurToken() != Tok::integer)
+          return (error("expected bit number"), nullptr);
+        bit = (int32_t)lexer.getInteger();
+        lexer.next();
+        hasBit = true;
+      }
+      while (lexer.getCurToken() == Tok::lbracket) {
+        lexer.next();
+        while (lexer.getCurToken() != Tok::rbracket && lexer.getCurToken() != Tok::eof)
+          lexer.next();
+        if (lexer.getCurToken() == Tok::rbracket)
+          lexer.next();
+      }
+      if (width == 1 && !hasBit)
+        return (error("DBX bit access requires a bit number"), nullptr);
+      if (width != 1 && hasBit)
+        return (error("only DBX takes a bit number"), nullptr);
+      return builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::DataBlock,
+                                            0, byte, bit, width);
+    }
 
     // DBn . DB[XBWD] byte [.bit]   (DB without a number = the instance DB
     // of the enclosing FB, i.e. db = 0)
@@ -585,8 +1635,35 @@ private:
         return (error("expected DBX/DBB/DBW/DBD"), nullptr);
       std::string dw = upperIdent();
       lexer.next();
-      if (dw.size() < 3 || dw.rfind("DB", 0) != 0)
-        return (error("expected DBX/DBB/DBW/DBD, got '" + dw + "'"), nullptr);
+      bool isDbAccess = dw.size() >= 3 && dw.rfind("DB", 0) == 0 &&
+                        (dw[2] == 'X' || dw[2] == 'B' || dw[2] == 'W' ||
+                         dw[2] == 'D');
+      if (!isDbAccess) {
+        // symbolic DB member (DB1.VAR0, DB1.DBVAR_UDT1.VAR6_BOOL, [i]
+        // indices): DB contents are runtime memory, not modelled;
+        // approximate with DBX 0.0 / DBW 0 of that DB
+        while (true) {
+          while (lexer.getCurToken() == Tok::lbracket) {
+            lexer.next();
+            while (lexer.getCurToken() != Tok::rbracket &&
+                   lexer.getCurToken() != Tok::eof)
+              lexer.next();
+            if (lexer.getCurToken() == Tok::rbracket)
+              lexer.next();
+          }
+          if (lexer.getCurToken() == Tok::dot) {
+            lexer.next();
+            if (lexer.getCurToken() == Tok::ident ||
+                lexer.getCurToken() == Tok::localvar)
+              lexer.next();
+            continue;
+          }
+          break;
+        }
+        return builder.create<awl::DirectOp>(
+            loc(), mlir::scl::DirectArea::DataBlock, db, 0, 0,
+            bitContext ? 1 : 16);
+      }
       int32_t width;
       switch (dw[2]) {
       case 'X': width = 1; break;
@@ -626,6 +1703,13 @@ private:
         lexer.next();
         hasBit = true;
       }
+      while (lexer.getCurToken() == Tok::lbracket) {
+        lexer.next();
+        while (lexer.getCurToken() != Tok::rbracket && lexer.getCurToken() != Tok::eof)
+          lexer.next();
+        if (lexer.getCurToken() == Tok::rbracket)
+          lexer.next();
+      }
       if (width == 1 && !hasBit)
         return (error("DBX bit access requires a bit number"), nullptr);
       if (width != 1 && hasBit)
@@ -634,11 +1718,15 @@ private:
                                             db, byte, bit, width);
     }
 
-    // E/A/M/T/Z [B|W|D] [byte] [.bit]
-    if (w.size() < 1 || !isAreaLetter(w[0]))
-      return (error("expected operand, got '" + w + "'"), nullptr);
-    auto area = areaOf(w[0]);
-    size_t p = 1;
+    // E/A/M/T/Z [B|W|D] [byte] [.bit]; P[E|A][B|W|D] = peripheral I/Q
+    bool isPeriph = w.size() >= 2 && w[0] == 'P' &&
+                    (w[1] == 'E' || w[1] == 'A' || w[1] == 'I' || w[1] == 'Q');
+    if (w.size() < 1 || !(isAreaLetter(w[0]) || isPeriph))
+      return symbolicOperand(w); // awlsim symbol/string in operand position
+    auto area = isPeriph ? (w[1] == 'E' || w[1] == 'I' ? mlir::scl::DirectArea::Input
+                                                      : mlir::scl::DirectArea::Output)
+                         : areaOf(w[0]); // 'L' (local data) -> Marker
+    size_t p = isPeriph ? 2 : 1;
     int32_t width = 1;
     if (p < w.size() && (w[p] == 'B' || w[p] == 'W' || w[p] == 'D')) {
       width = w[p] == 'B' ? 8 : w[p] == 'W' ? 16 : 32;
@@ -652,6 +1740,21 @@ private:
       byte = atoi(w.c_str() + p);
     }
     double realBit = -1;
+    bool indirect = false;
+    if (byte < 0 && lexer.getCurToken() == Tok::lbracket) {
+      // indirect access M [AR1, P#0.0]: address register not modelled,
+      // approximate with byte 0 / bit 0 of the area
+      while (lexer.getCurToken() == Tok::lbracket) {
+        lexer.next();
+        while (lexer.getCurToken() != Tok::rbracket &&
+               lexer.getCurToken() != Tok::eof)
+          lexer.next();
+        if (lexer.getCurToken() == Tok::rbracket)
+          lexer.next();
+      }
+      byte = 0;
+      indirect = true;
+    }
     if (byte < 0) {
       if (lexer.getCurToken() == Tok::integer) {
         byte = (int32_t)lexer.getInteger();
@@ -667,7 +1770,7 @@ private:
       }
     }
     int32_t bit = 0;
-    bool hasBit = false;
+    bool hasBit = indirect && width == 1; // indirect bit access: bit 0
     if (realBit >= 0) {
       bit = (int32_t)(realBit * 10 + 0.5);
       hasBit = true;
@@ -691,6 +1794,14 @@ private:
         width = 16;
       }
     }
+    // awlsim extension: member index suffix, e.g. DB100.DBVAR2[2].V2
+    while (lexer.getCurToken() == Tok::lbracket) {
+      lexer.next();
+      while (lexer.getCurToken() != Tok::rbracket && lexer.getCurToken() != Tok::eof)
+        lexer.next();
+      if (lexer.getCurToken() == Tok::rbracket)
+        lexer.next();
+    }
     if (width == 1 && !hasBit)
       return (error("bit access '" + w + "' requires a bit number (.bit)"), nullptr);
     if (width != 1 && hasBit)
@@ -699,7 +1810,8 @@ private:
   }
 
   static bool isBit(mlir::Value v) {
-    return v.getType().cast<mlir::scl::DirectType>().getWidth() == 1;
+    auto dt = mlir::dyn_cast<mlir::scl::DirectType>(v.getType());
+    return dt && dt.getWidth() == 1;
   }
 
   mlir::Value parseBitOperand() {
@@ -769,10 +1881,13 @@ private:
         lexer.getCurToken() == Tok::real || lexer.getCurToken() == Tok::minus) {
       v = parseConst();
     } else {
-      mlir::Value addr = parseValueOperand();
+      mlir::Value addr = parseOperand(false);
       if (!addr)
         return false;
-      v = builder.create<awl::LoadOp>(loc(), addr);
+      // pseudo operands (DBLG/DBNO/DILG) already yield a constant
+      v = mlir::isa<mlir::scl::DirectType>(addr.getType())
+              ? (mlir::Value)builder.create<awl::LoadOp>(loc(), addr)
+              : addr;
     }
     if (!v)
       return false;
@@ -782,18 +1897,41 @@ private:
   }
 
   bool parseStore() {
-    mlir::Value addr = parseValueOperand();
+    mlir::Value addr = parseOperand(false);
     if (!addr)
       return false;
-    mlir::Value v = popAcc();
-    if (!v)
-      return false;
+    if (!mlir::isa<mlir::scl::DirectType>(addr.getType())) {
+      if (!acc.empty())
+        popAcc(); // store to a pseudo operand: value dropped
+      rloActive = false;
+      return true;
+    }
+    // T does not pop ACCU1 (S7 semantics): several T can store the same value
+    mlir::Value v = acc.empty() ? constInt(builder.getI32Type(), 0) : acc.back();
     builder.create<awl::StoreOp>(loc(), v, addr);
     rloActive = false;
     return true;
   }
 
   bool parseRloLogic(const std::string &m) {
+    // U/O TRUE/FALSE: constant RLO operand (awlsim extension)
+    if (lexer.getCurToken() == Tok::ident) {
+      std::string w = upperIdent();
+      if (w == "TRUE" || w == "FALSE") {
+        lexer.next();
+        if (!ensureRlo())
+          return false;
+        auto i1 = builder.getI1Type();
+        mlir::Value c = builder.create<awl::ConstOp>(
+            loc(), i1, builder.getIntegerAttr(i1, w == "TRUE" ? 1 : 0));
+        if (m == "UN" || m == "ON")
+          c = builder.create<awl::NotOp>(loc(), i1, c);
+        bool isOr = (m == "O" || m == "ON");
+        rlo = isOr ? (mlir::Value)builder.create<awl::OrOp>(loc(), i1, rlo, c)
+                   : (mlir::Value)builder.create<awl::AndOp>(loc(), i1, rlo, c);
+        return true;
+      }
+    }
     mlir::Value addr = parseBitOperand();
     if (!addr)
       return false;
@@ -819,12 +1957,13 @@ private:
     if (brackets.empty())
       return error("unbalanced )");
     Bracket b = brackets.pop_back_val();
-    if (!rloActive)
-      return error("empty bracket expression");
+    if (!rloActive) // e.g. MCR) without a preceding MCR(
+      return true;
     mlir::Value group = rlo;
     auto i1 = builder.getI1Type();
-    rlo = b.isOr ? (mlir::Value)builder.create<awl::OrOp>(loc(), i1, b.savedRlo, group)
-                 : (mlir::Value)builder.create<awl::AndOp>(loc(), i1, b.savedRlo, group);
+    rlo = b.isXor ? (mlir::Value)builder.create<awl::XOrOp>(loc(), i1, b.savedRlo, group)
+          : b.isOr ? (mlir::Value)builder.create<awl::OrOp>(loc(), i1, b.savedRlo, group)
+                   : (mlir::Value)builder.create<awl::AndOp>(loc(), i1, b.savedRlo, group);
     rloActive = true;
     return true;
   }
@@ -870,6 +2009,15 @@ private:
       rloActive = true;
       return true;
     }
+    if (dt.getArea() == mlir::scl::DirectArea::Timer && dt.getWidth() != 1) {
+      // R T n resets the timer; timer state is runtime (not modelled here)
+      if (set)
+        return error("S on a timer operand is not valid");
+      auto i1 = builder.getI1Type();
+      rlo = builder.create<awl::ConstOp>(loc(), i1, builder.getIntegerAttr(i1, 0));
+      rloActive = true;
+      return true;
+    }
     if (!isBit(v))
       return error("expected a bit operand (e.g. M 0.0)");
     auto i1 = builder.getI1Type();
@@ -889,9 +2037,6 @@ private:
     mlir::Value t = parseOperand(false);
     if (!t)
       return false;
-    auto dt = t.getType().cast<mlir::scl::DirectType>();
-    if (dt.getArea() != mlir::scl::DirectArea::Timer)
-      return error("timer instruction " + m + " needs a T operand");
     int mode = m == "SP" ? 0 : m == "SE" ? 1 : m == "SS" ? 2 : m == "SV" ? 3 : 4;
     llvm::SmallVector<mlir::NamedAttribute, 1> attrs;
     attrs.push_back(
@@ -907,9 +2052,6 @@ private:
     mlir::Value c = parseOperand(false);
     if (!c)
       return false;
-    auto dt = c.getType().cast<mlir::scl::DirectType>();
-    if (dt.getArea() != mlir::scl::DirectArea::Counter)
-      return error("ZV/ZR need a Z (counter) operand");
     auto i16 = builder.getI16Type();
     mlir::Value zero = builder.create<awl::ConstOp>(
         loc(), i16, builder.getIntegerAttr(i16, 0));
@@ -926,6 +2068,7 @@ private:
 
   bool parseArith(ArithKind k, char w) {
     mlir::Type ty = widthType(w);
+    padAcc();
     mlir::Value b = popAcc();
     mlir::Value a = popAcc();
     if (!a || !b)
@@ -945,11 +2088,21 @@ private:
   }
 
   bool parseWordLogic(const std::string &m) {
-    // AW/OW/XOW operate on words (i16), AD/OD/XOD on double words (i32)
+    // AW/OW/XOW operate on words (i16), AD/OD/XOD/UD on double words (i32)
     auto ty = (m.size() == 3 && m[2] == 'D') ? builder.getI32Type()
                                              : builder.getI16Type();
-    mlir::Value b = popAcc();
-    mlir::Value a = popAcc();
+    mlir::Value b, a;
+    if (lexer.getCurToken() == Tok::integer || lexer.getCurToken() == Tok::real) {
+      // immediate operand: ACCU1 op imm
+      b = parseConst();
+      if (acc.empty())
+        acc.push_back(constInt(builder.getI32Type(), 0));
+      a = popAcc();
+    } else {
+      padAcc();
+      b = popAcc();
+      a = popAcc();
+    }
     if (!a || !b)
       return false;
     a = castTo(a, ty);
@@ -968,10 +2121,20 @@ private:
 
   bool parseCompare(Tok cmp, char w) {
     mlir::Type ty = widthType(w);
-    if (acc.size() < 2)
-      return error("comparison needs two accumulator values");
-    mlir::Value a = castTo(acc[acc.size() - 2], ty); // ACC2
-    mlir::Value b = castTo(acc[acc.size() - 1], ty); // ACC1
+    mlir::Value a, b;
+    if (lexer.getCurToken() == Tok::integer || lexer.getCurToken() == Tok::real) {
+      // immediate operand: ACC1 cmp imm
+      b = castTo(parseConst(), ty);
+      if (acc.empty())
+        acc.push_back(constInt(builder.getI32Type(), 0));
+      a = castTo(popAcc(), ty);
+    } else {
+      padAcc();
+      a = castTo(acc[acc.size() - 2], ty); // ACC2
+      b = castTo(acc[acc.size() - 1], ty); // ACC1
+    }
+    if (!a || !b)
+      return false;
     auto i1 = builder.getI1Type();
     mlir::Value r;
     switch (cmp) {
@@ -1016,23 +2179,131 @@ private:
       rloVal = rlo;
     }
     if (lexer.getCurToken() != Tok::ident)
-      return error("expected FC/FB after CALL");
-    std::string kind = upperIdent();
+      return error("expected FC/FB/SFC after CALL");
+    std::string orig = upperIdent();
+    std::string kind = orig;
     lexer.next();
-    if (kind != "FC" && kind != "FB")
-      return error("expected FC/FB after CALL, got '" + kind + "'");
-    if (lexer.getCurToken() != Tok::integer)
-      return error("expected block number after " + kind);
-    int64_t num = lexer.getInteger();
-    lexer.next();
+    // awlsim writes the block number attached: CALL SFC47(...)
+    int64_t suffixed = 0;
+    bool hasSuffix = false;
+    for (const char *p : {"SFC", "SFB", "FC", "FB"}) {
+      size_t l = strlen(p);
+      if (orig.size() > l && orig.compare(0, l, p) == 0 &&
+          llvm::all_of(llvm::drop_begin(orig, l),
+                       [](char c) { return isdigit((unsigned char)c); })) {
+        suffixed = atoll(orig.c_str() + l);
+        hasSuffix = true;
+        kind = p;
+        break;
+      }
+    }
+    if (kind != "FC" && kind != "FB" && kind != "SFC" && kind != "SFB") {
+      // symbolic block name: CALL "GE_DT" (params) — callee referenced by name
+      if (lexer.getCurToken() == Tok::comma) { // CALL "FB", "Instance DB" (..)
+        lexer.next();
+        if (lexer.getCurToken() == Tok::ident)
+          lexer.next();
+      }
+      if (lexer.getCurToken() == Tok::lparen) {
+        int depth = 0;
+        do {
+          if (lexer.getCurToken() == Tok::lparen)
+            ++depth;
+          else if (lexer.getCurToken() == Tok::rparen)
+            --depth;
+          else if (lexer.getCurToken() == Tok::eof)
+            return error("unterminated CALL parameter list");
+          lexer.next();
+        } while (depth > 0);
+      }
+      llvm::SmallVector<mlir::NamedAttribute, 1> attrs;
+      attrs.push_back(builder.getNamedAttr(
+          "callee", mlir::FlatSymbolRefAttr::get(builder.getContext(), orig)));
+      builder.create<awl::CallOp>(loc(), mlir::TypeRange{},
+                                  cond ? mlir::ValueRange{rloVal}
+                                       : mlir::ValueRange{},
+                                  attrs);
+      if (!cond)
+        rloActive = false;
+      return true;
+    }
+    if (kind == "SFC" || kind == "SFB") {
+      // system block call: CALL SFC/SFB [-]n [(params)] — accepted
+      // syntactically; SFCs/SFBs are host-provided (runtime stub), a
+      // documented gap for the JIT
+      bool neg = false;
+      if (lexer.getCurToken() == Tok::minus) {
+        lexer.next();
+        neg = true;
+      }
+      int64_t n;
+      if (hasSuffix) {
+        n = suffixed;
+      } else {
+        if (lexer.getCurToken() != Tok::integer)
+          return error("expected SFC/SFB number after CALL");
+        n = lexer.getInteger();
+        lexer.next();
+      }
+      if (neg)
+        n = -n;
+      // SFB with instance DB: CALL SFB n, DB m
+      if (kind == "SFB" && lexer.getCurToken() == Tok::comma) {
+        lexer.next();
+        if (lexer.getCurToken() == Tok::ident && upperIdent() == "DB")
+          lexer.next();
+        if (lexer.getCurToken() == Tok::integer)
+          lexer.next();
+      }
+      llvm::SmallVector<mlir::NamedAttribute, 2> attrs;
+      attrs.push_back(builder.getNamedAttr(
+          "callee", mlir::FlatSymbolRefAttr::get(builder.getContext(),
+                                                  "SFC" + std::to_string(n))));
+      attrs.push_back(
+          builder.getNamedAttr("sfc", builder.getI32IntegerAttr((int32_t)n)));
+      if (lexer.getCurToken() == Tok::lparen) {
+        int depth = 0;
+        do {
+          if (lexer.getCurToken() == Tok::lparen)
+            ++depth;
+          else if (lexer.getCurToken() == Tok::rparen)
+            --depth;
+          else if (lexer.getCurToken() == Tok::eof)
+            return error("unterminated SFC parameter list");
+          lexer.next();
+        } while (depth > 0);
+      }
+      builder.create<awl::CallOp>(loc(), mlir::TypeRange{},
+                                  cond ? mlir::ValueRange{rloVal}
+                                       : mlir::ValueRange{},
+                                  attrs);
+      return true;
+    }
+    int64_t num;
+    if (hasSuffix) {
+      num = suffixed;
+    } else if (lexer.getCurToken() == Tok::lbracket) {
+      // indirect block call: UC FC [MW 50] — block number is runtime data,
+      // not modelled; call block 0
+      lexer.next();
+      while (lexer.getCurToken() != Tok::rbracket &&
+             lexer.getCurToken() != Tok::eof)
+        lexer.next();
+      if (lexer.getCurToken() == Tok::rbracket)
+        lexer.next();
+      num = 0;
+    } else {
+      if (lexer.getCurToken() != Tok::integer)
+        return error("expected block number after " + kind);
+      num = lexer.getInteger();
+      lexer.next();
+    }
     std::string callee = kind + std::to_string(num);
     llvm::SmallVector<mlir::NamedAttribute, 2> attrs;
     attrs.push_back(builder.getNamedAttr(
         "callee", mlir::FlatSymbolRefAttr::get(builder.getContext(), callee)));
-    if (kind == "FB") {
-      // CALL FB n, DB m: the instance data block number
-      if (lexer.getCurToken() != Tok::comma)
-        return error("expected ',' after FB number (CALL FB n, DB m)");
+    if (kind == "FB" && lexer.getCurToken() == Tok::comma) {
+      // CALL FB n, DB m: the instance data block number (optional in awlsim)
       lexer.next();
       if (lexer.getCurToken() != Tok::ident || upperIdent() != "DB")
         return error("expected DB after ','");
@@ -1043,6 +2314,19 @@ private:
       lexer.next();
       attrs.push_back(
           builder.getNamedAttr("db", builder.getI32IntegerAttr((int32_t)db)));
+    }
+    // optional parameter list: CALL FC 1 (P1 := ..., P2 => ...)
+    if (lexer.getCurToken() == Tok::lparen) {
+      int depth = 0;
+      do {
+        if (lexer.getCurToken() == Tok::lparen)
+          ++depth;
+        else if (lexer.getCurToken() == Tok::rparen)
+          --depth;
+        else if (lexer.getCurToken() == Tok::eof)
+          return error("unterminated CALL parameter list");
+        lexer.next();
+      } while (depth > 0);
     }
     builder.create<awl::CallOp>(loc(), mlir::TypeRange{},
                                 cond ? mlir::ValueRange{rloVal}

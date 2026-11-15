@@ -1,0 +1,46 @@
+// RUN: sclang-gen -x awl --emit=mlir %s | FileCheck %s
+// AWL frontend: awlsim/TIA export extensions (see docs/design/awl-frontend.md
+// and docs/conformance.md): header lines, S5TIME components, local data,
+// #locals, immediates, BCD, indirect addressing, symbolic calls.
+// CHECK-LABEL: awl.block "OB1"
+ORGANIZATION_BLOCK OB 1
+TITLE = "test"
+VERSION : 0.1
+BEGIN
+	L		S5T#1M30S
+	// CHECK: awl.const 12297 : i16
+	L		123
+	T		LD 0		// local data -> marker area
+	// CHECK: awl.store %{{.*}}, %{{.*}} : i16, !scl.direct<M, 0, 0, 0, 32>
+	UN	L 0.0
+	// CHECK: awl.rlo_and %{{.*}}, %{{.*}} negate : i1, !scl.direct<M, 0, 0, 0, 1> -> i1
+	U	TRUE
+	// CHECK: awl.and %{{.*}} : i1, %{{.*}} : i1 -> i1
+	=	#loc		// #local -> hashed marker bit
+	INC		1
+	L		W#16#8123
+	BTI
+	// CHECK: awl.div %{{.*}} : i16, %{{.*}} : i16 -> i16
+	ITB
+	X		M 0.0
+	// CHECK: awl.xor %{{.*}} : i1, %{{.*}} : i1 -> i1
+	XN		M 0.1
+	L		P#E 2.1
+	// CHECK: awl.const 17 : i16
+	L		MD [AR1, P#4.0]	// indirect -> marker dword
+	// CHECK: awl.load %{{.*}} : !scl.direct<M, 0, 0, 0, 32> -> i32
+	L		1
+	MOD
+	SPZ		lbl
+	// CHECK: awl.cmpeq %{{.*}} : i32, %{{.*}} : i32 -> i1
+	// CHECK: awl.jump_if %{{.*}}, "LBL" : i1
+	LOOP	lbl
+	CALL	SFC47(WT:=0)
+	// CHECK: awl.call {sfc = 47 : i32} @SFC47
+	CALL	"GE_DT"
+	// CHECK: awl.call @GE_DT
+	OPN	DI 1
+	L		DB1.DBVAR0.VAR1_INT	// symbolic DB member -> DBW 0 of DB1
+	// CHECK: awl.load %{{.*}} : !scl.direct<DB, 1, 0, 0, 16> -> i16
+lbl:	BE
+END_ORGANIZATION_BLOCK
