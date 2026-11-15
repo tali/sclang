@@ -623,6 +623,33 @@ private:
 
   /// The declared array type of an expression if it is an array/string
   /// variable (local, parameter, output or FB member), without codegen.
+  /// Size of an SCL type in bytes (flat buffer layout).
+  int64_t byteSizeOf(mlir::Type t) {
+    if (auto it = t.dyn_cast<IntegerType>())
+      return (it.getWidth() + 7) / 8;
+    if (auto lt = t.dyn_cast<LogicalType>())
+      return (lt.getWidth() + 7) / 8;
+    if (t.isa<RealType>())
+      return 4;
+    if (t.isa<S5TimeType, DateType>())
+      return 2;
+    if (t.isa<TimeType, DateAndTimeType>())
+      return t.isa<TimeType>() ? 4 : 8;
+    if (auto at = t.dyn_cast<ArrayType>()) {
+      int64_t n = 1;
+      for (auto d : at.getDimensions())
+        n *= d.second - d.first + 1;
+      return n * byteSizeOf(at.getElementType());
+    }
+    if (auto st = t.dyn_cast<StructType>()) {
+      int64_t sz = 0;
+      for (auto e : st.getElementTypes())
+        sz += byteSizeOf(e);
+      return sz;
+    }
+    return -1;
+  }
+
   ArrayType arrayTypeOfAST(const ExpressionAST *expr) {
     auto *var = llvm::dyn_cast<SimpleVariableAST>(expr);
     if (!var || var->isSymbol())
@@ -827,21 +854,30 @@ private:
     // elements one by one (the buffers are flat byte/element buffers).
     if (ArrayType lhsArr = arrayTypeOfAddress(lhs)) {
       ArrayType rhsArr = arrayTypeOfAST(expr->getRhs());
-      if (rhsArr && rhsArr.getElementType().isa<IntegerType>() &&
-          lhsArr.getElementType() == rhsArr.getElementType() &&
+      if (rhsArr && lhsArr.getElementType() == rhsArr.getElementType() &&
           lhsArr.getDimensions() == rhsArr.getDimensions()) {
         mlir::Value rhsAddr = mlirGen(expr->getRhs());
         if (!rhsAddr)
           return mlir::failure();
-        auto elemTy = lhsArr.getElementType();
         auto dims = lhsArr.getDimensions();
         int64_t count = dims[0].second - dims[0].first + 1;
-        mlir::TypeAttr attr = mlir::TypeAttr::get(lhsArr);
+        // Composite elements (struct/array): copy the flat byte buffer
+        // through a char-array view of the same size.
+        mlir::Type elemTy = lhsArr.getElementType();
+        ArrayType copyTy = lhsArr;
+        int64_t elemBytes = byteSizeOf(elemTy);
+        if (elemBytes <= 0)
+          return mlir::failure();
+        if (!elemTy.isa<IntegerType>()) {
+          auto i8 = IntegerType::get(builder.getContext(), 8);
+          copyTy = ArrayType::get({{0, count * elemBytes - 1}}, i8);
+          elemTy = i8;
+          count *= elemBytes;
+        }
+        mlir::TypeAttr attr = mlir::TypeAttr::get(copyTy);
         for (int64_t i = 0; i < count; ++i) {
-          mlir::Value dst =
-              arrayElemAddr(location, lhs, lhsArr, i, attr);
-          mlir::Value src =
-              arrayElemAddr(location, rhsAddr, rhsArr, i, attr);
+          mlir::Value dst = arrayElemAddr(location, lhs, copyTy, i, attr);
+          mlir::Value src = arrayElemAddr(location, rhsAddr, copyTy, i, attr);
           mlir::Value v = builder.create<LoadOp>(location, elemTy, src);
           builder.create<StoreOp>(location, dst, v);
         }

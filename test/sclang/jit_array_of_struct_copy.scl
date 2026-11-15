@@ -1,0 +1,32 @@
+// RUN: sclang --opt --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// Whole-array copy of an array-of-struct: b := a copies both elements,
+// r = b[0].x + b[1].y = 11 + 22 = 33 = 0x21 (big-endian low byte of %MW0 at M[1]).
+// CHECK: M:
+// CHECK: M[1]=33
+// CHECK: clock=0ms
+type point_t
+  struct
+    x : int;
+    y : int;
+  end_struct
+end_type
+
+function OB1 : int
+var_temp
+  a : array[0..1] of point_t;
+  b : array[0..1] of point_t;
+  r : int;
+end_var
+begin
+  a[0].x := 11;
+  a[1].y := 22;
+  b := a;
+  r := b[0].x + b[1].y;
+  %MW0 := r;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

@@ -115,7 +115,7 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 99 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 100 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
   (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
   timer/timer_lower/call_fb/cc, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
@@ -389,9 +389,9 @@ Remaining technical gaps:
   genuinely non-constant initializers are still ignored (zeroed).
 - CASE on real/bool selectors works (see above).
 - `goto` following another terminator is a compile error by design.
-- Whole-array var-to-var assignment now works for 1-d arrays with scalar
-  element types (element-wise copy in MLIRGen); array-of-struct elements are
-  still not copied.
+- Whole-array var-to-var assignment works for 1-d arrays, including
+  array-of-struct elements (copied through a char-array view of the flat i8
+  buffer in MLIRGen; see `byteSizeOf`).
 
 ## Repo hygiene
 
