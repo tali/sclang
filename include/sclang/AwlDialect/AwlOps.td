@@ -248,6 +248,16 @@ def CallOp : AwlOp<"call", [DeclareOpInterfaceMethods<CallOpInterface>]> {
   let assemblyFormat = "attr-dict $callee (`,` `rlo` $rlo^ `:` type($rlo))? (`,` `db` $db^)?";
 }
 
+// Pack an internal packed pointer (area<<56 | byte<<16 | bit<<8) with a
+// RUNTIME byte offset — used for dynamic T/C access through TIMER/COUNTER
+// typed variables (the member stores the timer/counter number).
+def PackAreaOp : AwlOp<"pack_area", [Pure]> {
+  let summary = "pack a dynamic-area pointer: area, runtime byte, bit";
+  let arguments = (ins I32Attr:$area, I32:$byte, I32Attr:$bit);
+  let results = (outs I64:$result);
+  let assemblyFormat = "attr-dict $area `,` $byte `:` type($byte) `,` $bit `->` type($result)";
+}
+
 // MARK: timers (SP/SE/SS/SV/SI T n) and counters (ZV/ZR/S/R C n)
 
 // Timer instruction: the S5TIME-encoded duration comes from ACC1 (`dur`),
@@ -255,7 +265,7 @@ def CallOp : AwlOp<"call", [DeclareOpInterfaceMethods<CallOpInterface>]> {
 // SclRtTimerMode (SP=0, SE=1, SS=2, SV=3, SI=4, SA=5).
 def TimerStartOp : AwlOp<"timer_start"> {
   let summary = "SP/SE/SS/SV/SI/SA: timer instruction with ACC1 = S5TIME duration, RLO = input";
-  let arguments = (ins I32Attr:$mode, AnyType:$dur, Awl_Direct:$timer,
+  let arguments = (ins I32Attr:$mode, AnyType:$dur, AnyType:$timer,
                        Optional<Awl_Bool>:$in);
   let assemblyFormat = "attr-dict $mode `,` $dur `:` type($dur) `,` $timer `:` type($timer) (`,` `in` $in^ `:` type($in))?";
 }
@@ -263,7 +273,7 @@ def TimerStartOp : AwlOp<"timer_start"> {
 // R T n: reset the timer (running = 0, Q = 0, remaining = 0).
 def TimerResetOp : AwlOp<"timer_reset"> {
   let summary = "R T n: reset timer";
-  let arguments = (ins Awl_Direct:$timer);
+  let arguments = (ins AnyType:$timer);
   let assemblyFormat = "attr-dict $timer `:` type($timer)";
 }
 
@@ -272,7 +282,7 @@ def TimerResetOp : AwlOp<"timer_reset"> {
 // RLO input (edge-detected per counter and operation).
 def CounterOp : AwlOp<"counter"> {
   let summary = "ZV/ZR/S/R: counter operation on C n with RLO input";
-  let arguments = (ins I32Attr:$op, AnyType:$value, Awl_Direct:$counter,
+  let arguments = (ins I32Attr:$op, AnyType:$value, AnyType:$counter,
                        Optional<Awl_Bool>:$in);
   let assemblyFormat = "attr-dict $op `,` $value `:` type($value) `,` $counter `:` type($counter) (`,` `in` $in^ `:` type($in))?";
 }
@@ -281,7 +291,7 @@ def CounterOp : AwlOp<"counter"> {
 // of the addressed timer/counter (does not modify the RLO).
 def FrOp : AwlOp<"fr"> {
   let summary = "FR T n / FR C n: reset timer/counter edge memory";
-  let arguments = (ins Awl_Direct:$operand, Optional<Awl_Bool>:$in);
+  let arguments = (ins AnyType:$operand, Optional<Awl_Bool>:$in);
   let assemblyFormat = "attr-dict $operand `:` type($operand) (`,` `in` $in^ `:` type($in))?";
 }
 

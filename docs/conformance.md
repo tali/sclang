@@ -67,9 +67,9 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 - AWL compile: **116/116 pass (100%)**
 - SCL single file: **15/15 pass (100%)**
 - SCL per project: **16/17 pass (94%)**
-- JIT smoke (files with OB 1, full pipeline + execution): **72/77 pass (94%)**
+- JIT smoke (files with OB 1, full pipeline + execution): **74/77 pass (96%)**
 - Oracle (`__ASSERT` files with OB 1, value-level, exit code must be 0):
-  **34/53 pass (64%)** — see "Oracle tier" below
+  **35/53 pass (66%)** — see "Oracle tier" below
 
 ## Remaining failures = documented gaps
 
@@ -95,7 +95,7 @@ references when a file is compiled alone:
 
 ## Oracle tier: what passes and what the failures mean
 
-34 of 53 `__ASSERT` files pass all their executed oracles (was 32). Block
+35 of 53 `__ASSERT` files pass all their executed oracles (was 34). Block
 calls are now fully modeled: FC params are frame-relative with
 param_in/param_out copies (recursion works — factorial passes), RET_VAL is an
 implicit interface member, indirect `UC FC [MW x]` dispatches over the
@@ -126,6 +126,9 @@ BOOL RET_VAL occupies a full byte. ANY is 10 bytes and POINTER 6 bytes in layout
 symbolic members of undeclared DBs (DB1.VAR0) are auto-assigned offsets in
 order of first use, and every DB's referenced extent is registered via
 `awl.set_db_ref` in `__scl_db_init` for ANY-pointer bounds checks.
+TIMER/COUNTER-typed block variables hold the timer/counter NUMBER and
+indirect through the T/C area at it (`awl.pack_area` + `scl_rt_*_ptr`), so
+`insn_Z` and `acme-005/006` pass all oracles.
 
 Remaining oracle failures map to known gaps (each message names the line and
 actual/expected):

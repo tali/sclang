@@ -177,6 +177,17 @@ typedef struct SclRtVTable {
   /* Appended for IEC library FCs called by name (v6): LEN 21, EQ_DT 9,
      GE_DT 12, DELETE 4 (params staged at the marker area, like SFCs). */
   void (*iec)(uint32_t n);
+  /* Appended for dynamic T/C access through TIMER/COUNTER-typed block
+     variables (v7): the variable stores the timer/counter NUMBER; the
+     frontend packs a dynamic pointer (area 'T'/'C', runtime byte = the
+     number) with pack_area and the ops below decode it back. */
+  uint64_t (*pack_area)(uint8_t area, uint32_t byte, uint8_t bit);
+  void (*counter_op_ptr)(uint64_t ptr, uint8_t op, uint64_t value,
+                         uint8_t in);
+  void (*timer_start_ptr)(uint64_t ptr, uint8_t mode, uint64_t durS5,
+                          uint8_t in);
+  void (*timer_reset_ptr)(uint64_t ptr);
+  void (*fr_ptr)(uint64_t ptr, uint8_t in);
 } SclRtVTable;
 
 /// Register a host vtable; all subsequent ABI calls forward through it.
@@ -236,6 +247,17 @@ void scl_rt_sfc(uint32_t n);
 /// marker area at kParamBase, like the SFCs. Sim-only; hosts may override
 /// via the vtable.
 void scl_rt_iec(uint32_t n);
+/// Pack an internal packed pointer with a runtime byte offset (dynamic T/C
+/// access through TIMER/COUNTER-typed variables). Sim-only.
+uint64_t scl_rt_pack_area(uint8_t area, uint32_t byte, uint8_t bit);
+/// Counter/timer operations through a dynamic packed pointer (the byte
+/// field holds the timer/counter number). Sim-only.
+void scl_rt_counter_op_ptr(uint64_t ptr, uint8_t op, uint64_t value,
+                           uint8_t in);
+void scl_rt_timer_start_ptr(uint64_t ptr, uint8_t mode, uint64_t durS5,
+                            uint8_t in);
+void scl_rt_timer_reset_ptr(uint64_t ptr);
+void scl_rt_fr_ptr(uint64_t ptr, uint8_t in);
 /// Write the S7 OB-temp preset header (EV_CLASS/SCAN/PRIORITY/OB_NUMBR/
 /// cycle times/DATE_TIME) into the current L frame at OB entry
 /// (awlsim obtemp.OB1TempPresets; only OB 1 has presets). Sim-only.

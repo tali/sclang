@@ -216,6 +216,15 @@ has no `\b` — use python3 for regex edits.
   - `UC/CC FC [MW x]` (indirect call) builds a jump-table dispatch over all
     FC/FB blocks known in the file (`__ind<n>_...` labels + `awl.call` per
     case), like SPL.
+  - TIMER/COUNTER-typed block variables store the timer/counter NUMBER in
+    the member's storage (FB: instance DB at mi->byte, db=-1; FC: L frame at
+    kLocalBase+mi->byte). Accesses indirect through the T/C area at that
+    number: parseOperand loads the number and returns an `awl.pack_area`
+    dynamic i64 pointer (area 'T'/'C', byte = number); `L #cv` ->
+    load_indirect, `U/X #cv` -> load_bit_indirect, ZV/ZR/S/R/FR/SP.. #tv ->
+    CounterOp/TimerStartOp/TimerResetOp/FrOp with the i64 operand, lowered
+    to `scl_rt_*_ptr` runtime fns (vtable v7). Note: awl.direct ops lower
+    to packed i64 too, so the _ptr variants are used uniformly for T/C.
   - `P##name` pointers: FB interface -> area 0x85 (DI), FC interface -> 0x87
     (VL, parent L frame, at kLocalBase+byte), TEMP -> 0x86 (own frame).
     `P#DBX` lexes as area 0x85. REAL-typed locals load as f32 (bitcast in

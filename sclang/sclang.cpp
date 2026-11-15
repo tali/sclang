@@ -332,6 +332,11 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_sfb", (void *)&scl_rt_sfb);
     add("scl_rt_sfc", (void *)&scl_rt_sfc);
     add("scl_rt_iec", (void *)&scl_rt_iec);
+    add("scl_rt_pack_area", (void *)&scl_rt_pack_area);
+    add("scl_rt_counter_op_ptr", (void *)&scl_rt_counter_op_ptr);
+    add("scl_rt_timer_start_ptr", (void *)&scl_rt_timer_start_ptr);
+    add("scl_rt_timer_reset_ptr", (void *)&scl_rt_timer_reset_ptr);
+    add("scl_rt_fr_ptr", (void *)&scl_rt_fr_ptr);
     add("scl_rt_ob_start", (void *)&scl_rt_ob_start);
     add("scl_rt_feature", (void *)&scl_rt_feature);
     add("scl_rt_timer_fb", (void *)&scl_rt_timer_fb);

@@ -1343,6 +1343,59 @@ void scl_rt_iec(uint32_t n) {
   }
 }
 
+// MARK: dynamic T/C access (TIMER/COUNTER-typed block variables store the
+// timer/counter NUMBER; the frontend packs area 'T'/'C' with the runtime
+// number as the byte field via scl_rt_pack_area)
+uint64_t scl_rt_pack_area(uint8_t area, uint32_t byte, uint8_t bit) {
+  auto &s = state();
+  if (s.vtable && s.vtable->pack_area)
+    return s.vtable->pack_area(area, byte, bit);
+  return packPtr(area, 0, byte, bit, 0);
+}
+
+void scl_rt_counter_op_ptr(uint64_t ptr, uint8_t op, uint64_t value,
+                           uint8_t in) {
+  auto &s = state();
+  if (s.vtable && s.vtable->counter_op_ptr) {
+    s.vtable->counter_op_ptr(ptr, op, value, in);
+    return;
+  }
+  scl_rt_counter_op(ptrByte(rawToPacked(ptr)), op, value, in);
+}
+
+void scl_rt_timer_start_ptr(uint64_t ptr, uint8_t mode, uint64_t durS5,
+                            uint8_t in) {
+  auto &s = state();
+  if (s.vtable && s.vtable->timer_start_ptr) {
+    s.vtable->timer_start_ptr(ptr, mode, durS5, in);
+    return;
+  }
+  scl_rt_timer_start(ptrByte(rawToPacked(ptr)), mode, durS5, in);
+}
+
+void scl_rt_timer_reset_ptr(uint64_t ptr) {
+  auto &s = state();
+  if (s.vtable && s.vtable->timer_reset_ptr) {
+    s.vtable->timer_reset_ptr(ptr);
+    return;
+  }
+  scl_rt_timer_reset(ptrByte(rawToPacked(ptr)));
+}
+
+void scl_rt_fr_ptr(uint64_t ptr, uint8_t in) {
+  auto &s = state();
+  if (s.vtable && s.vtable->fr_ptr) {
+    s.vtable->fr_ptr(ptr, in);
+    return;
+  }
+  uint64_t p = rawToPacked(ptr);
+  uint32_t n = ptrByte(p);
+  if (ptrArea(p) == SCL_RT_AREA_T)
+    scl_rt_timer_fr(n, in);
+  else
+    scl_rt_counter_op(n, SCL_RT_COUNTER_FR, 0, in);
+}
+
 // MARK: OB-temp presets (awlsim obtemp.OB1TempPresets; only OB 1 has them)
 void scl_rt_ob_start(uint32_t obNum) {
   auto &s = state();

@@ -1,12 +1,14 @@
 // RUN: sclang-gen -x awl --emit=mlir-std %s | FileCheck %s
 // Timer/counter lowering: awl.timer_start -> @scl_rt_timer_start(i32, i8, i64),
 // awl.counter -> @scl_rt_counter_op(i32, i8, i64), `U T1.0` -> scl_rt_read_bit.
-// CHECK-DAG: func.func private @scl_rt_timer_start(i32, i8, i64, i8)
-// CHECK-DAG: func.func private @scl_rt_counter_op(i32, i8, i64, i8)
-// CHECK: call @scl_rt_timer_start(%c0_i32, %c2_i8, %{{.*}}, %{{.*}}) : (i32, i8, i64, i8) -> ()
+// (direct T/C operands lower to packed i64 pointers, so the _ptr runtime
+// variants are used uniformly)
+// CHECK-DAG: func.func private @scl_rt_timer_start_ptr(i64, i8, i64, i8)
+// CHECK-DAG: func.func private @scl_rt_counter_op_ptr(i64, i8, i64, i8)
+// CHECK: call @scl_rt_timer_start_ptr(%{{.*}}, %c2_i8, %{{.*}}, %{{.*}}) : (i64, i8, i64, i8) -> ()
 // CHECK: call @scl_rt_read_bit(%c84_i8, %{{.*}}, %c1_i32, %c0_i8) : (i8, i32, i32, i8) -> i1
-// CHECK: call @scl_rt_counter_op(%c5_i32, %c2_i8, %{{.*}}, %{{.*}}) : (i32, i8, i64, i8) -> ()
-// CHECK: call @scl_rt_counter_op(%c5_i32, %c0_i8, %{{.*}}, %{{.*}}) : (i32, i8, i64, i8) -> ()
+// CHECK: call @scl_rt_counter_op_ptr(%{{.*}}, %c2_i8, %{{.*}}, %{{.*}}) : (i64, i8, i64, i8) -> ()
+// CHECK: call @scl_rt_counter_op_ptr(%{{.*}}, %c0_i8, %{{.*}}, %{{.*}}) : (i64, i8, i64, i8) -> ()
 OB 1
   L S5T#1S
   SS T0

@@ -2731,6 +2731,26 @@ struct AwlTimerStartLowering : public OpConversionPattern<awl::TimerStartOp> {
   LogicalResult
   matchAndRewrite(awl::TimerStartOp op, awl::TimerStartOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (adaptor.getTimer().getType().isInteger(64)) {
+      // dynamic T pointer (TIMER-typed variable holding the number)
+      auto loc = op.getLoc();
+      ModuleOp module = op->getParentOfType<ModuleOp>();
+      auto i8 = rewriter.getI8Type();
+      auto i64 = rewriter.getI64Type();
+      auto modeC = rewriter.create<arith::ConstantOp>(
+          loc, i8, rewriter.getI8IntegerAttr(op.getMode()));
+      Value durC = convertScalarTo(rewriter, loc, adaptor.getDur(), i64);
+      Value inC = rewriter.create<arith::ConstantOp>(loc, i8,
+                                                     rewriter.getI8IntegerAttr(1));
+      if (adaptor.getIn())
+        inC = rewriter.create<arith::ExtUIOp>(loc, i8, adaptor.getIn());
+      auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_timer_start_ptr",
+                                  rewriter.getFunctionType({i64, i8, i64, i8}, {}));
+      rewriter.create<func::CallOp>(loc, fn, TypeRange{},
+                                    ValueRange{adaptor.getTimer(), modeC, durC, inC});
+      rewriter.eraseOp(op);
+      return success();
+    }
     auto dt = op.getTimer().getType().dyn_cast<scl::DirectType>();
     if (!dt)
       return rewriter.notifyMatchFailure(op, "timer_start needs a direct operand");
@@ -2763,6 +2783,16 @@ struct AwlTimerResetLowering : public OpConversionPattern<awl::TimerResetOp> {
   LogicalResult
   matchAndRewrite(awl::TimerResetOp op, awl::TimerResetOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (adaptor.getTimer().getType().isInteger(64)) {
+      auto loc = op.getLoc();
+      ModuleOp module = op->getParentOfType<ModuleOp>();
+      auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_timer_reset_ptr",
+                                  rewriter.getFunctionType({rewriter.getI64Type()}, {}));
+      rewriter.create<func::CallOp>(loc, fn, TypeRange{},
+                                    ValueRange{adaptor.getTimer()});
+      rewriter.eraseOp(op);
+      return success();
+    }
     auto dt = op.getTimer().getType().dyn_cast<scl::DirectType>();
     if (!dt)
       return rewriter.notifyMatchFailure(op, "timer_reset needs a direct operand");
@@ -2785,6 +2815,21 @@ struct AwlFrOpLowering : public OpConversionPattern<awl::FrOp> {
   LogicalResult
   matchAndRewrite(awl::FrOp op, awl::FrOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (adaptor.getOperand().getType().isInteger(64)) {
+      auto loc = op.getLoc();
+      ModuleOp module = op->getParentOfType<ModuleOp>();
+      auto i8 = rewriter.getI8Type();
+      Value inC = rewriter.create<arith::ConstantOp>(loc, i8,
+                                                     rewriter.getI8IntegerAttr(1));
+      if (adaptor.getIn())
+        inC = rewriter.create<arith::ExtUIOp>(loc, i8, adaptor.getIn());
+      auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_fr_ptr",
+                                  rewriter.getFunctionType({rewriter.getI64Type(), i8}, {}));
+      rewriter.create<func::CallOp>(loc, fn, TypeRange{},
+                                    ValueRange{adaptor.getOperand(), inC});
+      rewriter.eraseOp(op);
+      return success();
+    }
     auto dt = op.getOperand().getType().dyn_cast<scl::DirectType>();
     if (!dt)
       return rewriter.notifyMatchFailure(op, "fr needs a direct operand");
@@ -2839,32 +2884,66 @@ struct AwlSleepOpLowering : public OpConversionPattern<awl::SleepOp> {
 };
 
 // ZV/ZR/S/R C n -> @scl_rt_counter_op(counter: i32, op: i8, value: i64, in: i8)
+// pack_area(area, byte, bit) -> @scl_rt_pack_area(area: i8, byte: i32, bit: i8) -> i64
+struct AwlPackAreaOpLowering : public OpConversionPattern<awl::PackAreaOp> {
+  using OpConversionPattern<awl::PackAreaOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::PackAreaOp op, awl::PackAreaOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i8 = rewriter.getI8Type();
+    auto i32 = rewriter.getI32Type();
+    auto areaC = rewriter.create<arith::ConstantOp>(
+        loc, i8, rewriter.getI8IntegerAttr(op.getArea()));
+    auto byteC = convertScalarTo(rewriter, loc, adaptor.getByte(), i32);
+    auto bitC = rewriter.create<arith::ConstantOp>(
+        loc, i8, rewriter.getI8IntegerAttr(op.getBit()));
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_pack_area",
+                                rewriter.getFunctionType({i8, i32, i8}, {rewriter.getI64Type()}));
+    rewriter.replaceOpWithNewOp<func::CallOp>(
+        op, fn, TypeRange{rewriter.getI64Type()},
+        ValueRange{areaC, byteC, bitC});
+    return success();
+  }
+};
+
 struct AwlCounterOpLowering : public OpConversionPattern<awl::CounterOp> {
   using OpConversionPattern<awl::CounterOp>::OpConversionPattern;
   LogicalResult
   matchAndRewrite(awl::CounterOp op, awl::CounterOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto dt = op.getCounter().getType().dyn_cast<scl::DirectType>();
-    if (!dt)
-      return rewriter.notifyMatchFailure(op, "counter needs a direct operand");
     auto loc = op.getLoc();
     ModuleOp module = op->template getParentOfType<ModuleOp>();
     auto i8 = rewriter.getI8Type();
     auto i32 = rewriter.getI32Type();
     auto i64 = rewriter.getI64Type();
+    auto opC0 = rewriter.create<arith::ConstantOp>(
+        loc, i8, rewriter.getI8IntegerAttr(op.getOp()));
+    Value val0 = convertScalarTo(rewriter, loc, adaptor.getValue(), i64);
+    Value inC0 = rewriter.create<arith::ConstantOp>(loc, i8,
+                                                    rewriter.getI8IntegerAttr(0));
+    if (adaptor.getIn())
+      inC0 = rewriter.create<arith::ExtUIOp>(loc, i8, adaptor.getIn());
+    if (adaptor.getCounter().getType().isInteger(64)) {
+      // dynamic T/C pointer (TIMER/COUNTER-typed variable holding the number)
+      auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_counter_op_ptr",
+                                  rewriter.getFunctionType({i64, i8, i64, i8}, {}));
+      rewriter.create<func::CallOp>(loc, fn, TypeRange{},
+                                    ValueRange{adaptor.getCounter(), opC0,
+                                               val0, inC0});
+      rewriter.eraseOp(op);
+      return success();
+    }
+    auto dt = op.getCounter().getType().dyn_cast<scl::DirectType>();
+    if (!dt)
+      return rewriter.notifyMatchFailure(op, "counter needs a direct operand");
     Value cntC = rewriter.create<arith::ConstantOp>(
         loc, i32, rewriter.getI32IntegerAttr(dt.getByte()));
-    Value opC = rewriter.create<arith::ConstantOp>(
-        loc, i8, rewriter.getI8IntegerAttr(op.getOp()));
-    Value val = convertScalarTo(rewriter, loc, adaptor.getValue(), i64);
-    Value inC = rewriter.create<arith::ConstantOp>(loc, i8,
-                                                   rewriter.getI8IntegerAttr(0));
-    if (adaptor.getIn())
-      inC = rewriter.create<arith::ExtUIOp>(loc, i8, adaptor.getIn());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_counter_op",
                                 rewriter.getFunctionType({i32, i8, i64, i8}, {}));
     rewriter.create<func::CallOp>(loc, fn, TypeRange{},
-                                  ValueRange{cntC, opC, val, inC});
+                                  ValueRange{cntC, opC0, val0, inC0});
     rewriter.eraseOp(op);
     return success();
   }
@@ -3488,7 +3567,8 @@ void SclToStdLoweringPass::runOnOperation() {
       AwlConstOpLowering, AwlCounterOpLowering, AwlDirectOpLowering,
       AwlDivLowering, AwlFrOpLowering, AwlLoadOpLowering, AwlMulLowering,
       AwlNegOpLowering,
-      AwlNopOpLowering, AwlNotOpLowering, AwlOrLowering, AwlPackPtrOpLowering,
+      AwlNopOpLowering, AwlNotOpLowering, AwlOrLowering, AwlPackAreaOpLowering,
+      AwlPackPtrOpLowering,
       AwlArGetOpLowering, AwlArSetOpLowering, AwlDbInfoOpLowering,
       AwlIndirectOpLowering,
       AwlLoadBitIndirectOpLowering,

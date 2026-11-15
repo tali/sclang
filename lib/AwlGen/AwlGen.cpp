@@ -2870,8 +2870,8 @@ private:
       mlir::Value v = parseOperand(false);
       if (!v)
         return false;
-      if (auto dt = mlir::dyn_cast<mlir::scl::DirectType>(v.getType()))
-        builder.create<awl::FrOp>(loc(), v, rloInput());
+      // Direct (T n / C n) or a dynamic i64 T/C pointer (#timer_var)
+      builder.create<awl::FrOp>(loc(), v, rloInput());
       return true;
     }
     if (m == "TDB") { // TDB [DB n]: transfer DB register — not modelled
@@ -3077,7 +3077,12 @@ private:
       if (!ensureRlo())
         return false;
       auto i1 = builder.getI1Type();
-      mlir::Value b = builder.create<awl::LoadOp>(loc(), addr);
+      mlir::Value b;
+      if (addr.getType().isInteger(64))
+        // X [AR1, P#x.y] / X #timer_var: indirect bit through the packed ptr
+        b = builder.create<awl::LoadBitIndirectOp>(loc(), i1, addr);
+      else
+        b = builder.create<awl::LoadOp>(loc(), addr);
       rlo = builder.create<awl::XOrOp>(loc(), i1, rlo, castTo(b, i1));
       if (m == "XN")
         rlo = builder.create<awl::NotOp>(loc(), i1, rlo);
@@ -3544,8 +3549,22 @@ private:
         }
       }
       if (mi) {
-        // TIMER/COUNTER typed variables live in the T/C areas (the member
-        // offset is the timer/counter number)
+        // TIMER/COUNTER typed variables store the timer/counter NUMBER in
+        // the member's storage; accesses indirect through the T/C area at
+        // that number: load the number and pack a dynamic T/C pointer (i64)
+        if (mi->type == "TIMER" || mi->type == "COUNTER") {
+          mlir::scl::DirectArea storeArea = area;
+          int32_t storeDb =
+              storeArea == mlir::scl::DirectArea::DataBlock ? -1 : 0;
+          auto numAddr = mkDirect(storeArea, storeDb, byte, 0, 16);
+          mlir::Value num = builder.create<awl::LoadOp>(loc(), numAddr);
+          lastOperandType = mi->type;
+          return builder.create<awl::PackAreaOp>(
+              loc(), builder.getI64Type(),
+              builder.getI32IntegerAttr(mi->type == "TIMER" ? 'T' : 'C'),
+              castTo(num, builder.getI32Type()),
+              builder.getI32IntegerAttr(0));
+        }
         if (mi->type == "TIMER")
           area = mlir::scl::DirectArea::Timer;
         else if (mi->type == "COUNTER")
@@ -4064,8 +4083,11 @@ private:
         // pseudo operands (DBLG/DBNO/DILG/DINO) already yield a value
         v = addr;
       } else if (addr.getType().isInteger(64)) {
-        // indirect load L/LC [AR1, P#x.y] through the packed pointer
+        // indirect load L/LC [AR1, P#x.y] through the packed pointer (also
+        // dynamic T/C pointers from TIMER/COUNTER vars: L #counter_var)
         int32_t w = lastIndirectWidth;
+        if (w != 1 && w != 8 && w != 16 && w != 32)
+          w = 16; // not from a [ARn, ...] operand: default word load
         if (w == 1) {
           v = builder.create<awl::LoadBitIndirectOp>(
               loc(), builder.getI1Type(), addr);
@@ -4202,6 +4224,28 @@ private:
       return false;
     auto dt = v.getType().dyn_cast<mlir::scl::DirectType>();
     if (!dt && v.getType().isInteger(64)) {
+      if (lastOperandType == "COUNTER") {
+        // S/R #counter_var: counter op through the dynamic pointer
+        mlir::Value val;
+        int op;
+        if (set) {
+          val = acc.empty() ? constInt(builder.getI32Type(), 0) : acc.back();
+          op = 2; // SCL_RT_COUNTER_SET
+        } else {
+          auto i16 = builder.getI16Type();
+          val = builder.create<awl::ConstOp>(
+              loc(), i16, builder.getIntegerAttr(i16, 0));
+          op = 3; // SCL_RT_COUNTER_RESET
+        }
+        builder.create<awl::CounterOp>(
+            loc(), mlir::TypeRange{}, mlir::ValueRange{val, v, rloInput()},
+            builder.getNamedAttr("op", builder.getI32IntegerAttr(op)));
+        return true;
+      }
+      if (lastOperandType == "TIMER" && !set) {
+        builder.create<awl::TimerResetOp>(loc(), v);
+        return true;
+      }
       // S/R [AR1, P#x.y]: indirect bit store
       auto i1 = builder.getI1Type();
       builder.create<awl::WriteBitIndirectOp>(
@@ -4303,14 +4347,17 @@ private:
     mlir::Value t = parseOperand(false);
     if (!t)
       return false;
-    // symbolic/indirect operands: coerce to a valid timer index
-    if (auto dt = mlir::dyn_cast<mlir::scl::DirectType>(t.getType())) {
-      if (dt.getArea() != mlir::scl::DirectArea::Timer)
+    // symbolic/indirect operands: coerce to a valid timer index (a dynamic
+    // i64 T pointer from a TIMER-typed variable is passed through)
+    if (!t.getType().isInteger(64)) {
+      if (auto dt = mlir::dyn_cast<mlir::scl::DirectType>(t.getType())) {
+        if (dt.getArea() != mlir::scl::DirectArea::Timer)
+          t = builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::Timer,
+                                            0, 0, 0, 16);
+      } else {
         t = builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::Timer,
                                           0, 0, 0, 16);
-    } else {
-      t = builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::Timer,
-                                        0, 0, 0, 16);
+      }
     }
     // SclRtTimerMode: SP=0, SE=1, SS=2, SV=3, SI=4, SA=5
     int mode = m == "SP" ? 0 : m == "SE" ? 1 : m == "SS" ? 2
@@ -4326,14 +4373,17 @@ private:
     mlir::Value c = parseOperand(false);
     if (!c)
       return false;
-    // symbolic/indirect operands: coerce to a valid counter index
-    if (auto dt = mlir::dyn_cast<mlir::scl::DirectType>(c.getType())) {
-      if (dt.getArea() != mlir::scl::DirectArea::Counter)
+    // symbolic/indirect operands: coerce to a valid counter index (a dynamic
+    // i64 T/C pointer from a COUNTER-typed variable is passed through)
+    if (!c.getType().isInteger(64)) {
+      if (auto dt = mlir::dyn_cast<mlir::scl::DirectType>(c.getType())) {
+        if (dt.getArea() != mlir::scl::DirectArea::Counter)
+          c = builder.create<awl::DirectOp>(
+              loc(), mlir::scl::DirectArea::Counter, 0, 0, 0, 16);
+      } else {
         c = builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::Counter,
                                           0, 0, 0, 16);
-    } else {
-      c = builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::Counter,
-                                        0, 0, 0, 16);
+      }
     }
     auto i16 = builder.getI16Type();
     mlir::Value zero = builder.create<awl::ConstOp>(
