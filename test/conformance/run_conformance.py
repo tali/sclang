@@ -58,6 +58,11 @@ SCL_RE = re.compile(
 OB1_RE = re.compile(r'^[ \t]*(ORGANIZATION_BLOCK[ \t]+)?OB[ \t]+1([ \t]|$)', re.M)
 
 
+def read_text(p):
+    with open(p, 'r', errors='replace') as fh:
+        return fh.read().lstrip('\ufeff')
+
+
 def sniff(text):
     if AWL_RE.search(text):
         return '-x=awl'
@@ -103,6 +108,18 @@ def main():
             elif f.endswith('.awl'):
                 awl_files.append(p)
 
+    # Files of a multi-file project (more than one .scl in the directory)
+    # reference symbols from their sibling files, so they cannot compile
+    # standalone in any compiler (TIA neither); they are covered by the
+    # per-project tier below, so skip them in the single-file tier (but keep
+    # them for the project tier).
+    all_scl_files = scl_files
+    scl_dir_counts = {}
+    for p in scl_files:
+        d = os.path.dirname(p)
+        scl_dir_counts[d] = scl_dir_counts.get(d, 0) + 1
+    scl_files = [p for p in scl_files if scl_dir_counts[os.path.dirname(p)] == 1]
+
     lines = []
 
     def record(ok, path, xflag, err):
@@ -114,8 +131,7 @@ def main():
     # --- compile tier, AWL (and awlsim files that are actually SCL) ---
     awl_ok = 0
     for p in awl_files:
-        with open(p, 'r', errors='replace') as fh:
-            xflag = sniff(fh.read())
+        xflag = sniff(read_text(p))
         rc, err = run_one(args.sclang, p, xflag)
         awl_ok += record(rc == 0, p, xflag, err)
     awl_total = len(awl_files)
@@ -136,8 +152,7 @@ def main():
     oracle_ok = 0
     oracle_total = 0
     for p in awl_files + scl_files:
-        with open(p, 'r', errors='replace') as fh:
-            text = fh.read()
+        text = read_text(p)
         if not OB1_RE.search(text):
             continue
         xflag = sniff(text)
@@ -154,11 +169,11 @@ def main():
             oracle_ok += record(rc == 0, p, xflag + ' oracle', err)
 
     # --- compile tier, SCL per-project: concatenate all .scl files of a dir ---
-    dirs = sorted(set(os.path.dirname(p) for p in scl_files))
+    dirs = sorted(set(os.path.dirname(p) for p in all_scl_files))
     proj_ok = 0
     proj_total = 0
     for d in dirs:
-        files = sorted(p for p in scl_files if os.path.dirname(p) == d)
+        files = sorted(p for p in all_scl_files if os.path.dirname(p) == d)
         if not files:
             continue
         proj_total += 1
@@ -167,8 +182,7 @@ def main():
             for i, p in enumerate(files):
                 if i:
                     out.write('\n')
-                with open(p, 'r', errors='replace') as fh:
-                    out.write(fh.read())
+                out.write(read_text(p))
         rc, err = run_one(args.sclang, tmp, '-x=scl')
         proj_ok += record(rc == 0, d + ' (project)', '-x=scl', err)
 

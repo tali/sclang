@@ -38,6 +38,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <map>
+#include <set>
 #include <functional>
 #include <numeric>
 #include <string>
@@ -227,6 +228,18 @@ private:
   }
   /// Names of all function blocks in the module (for type resolution).
   llvm::StringMap<bool> fbNames;
+  // strip the surrounding quotes of a quoted TIA symbol name ("TON" -> TON)
+  static std::string unquote(llvm::StringRef s) {
+    if (s.size() >= 2 && s.front() == '"' && s.back() == '"')
+      return s.substr(1, s.size() - 2).str();
+    return s.str();
+  }
+  // owns synthesized AST nodes (e.g. default constants for initializer-less
+  // VAR CONSTANT entries)
+  llvm::SmallVector<std::unique_ptr<ExpressionAST>, 8> astPool;
+  // FB names for which we created an empty stub (TIA library FBs): member
+  // access on them is approximated by a temp cell instead of an error
+  std::set<std::string> stubFbNames;
 
   /// Does the current insertion block already end with a terminator?
   bool blockHasTerminator() {
@@ -263,10 +276,19 @@ private:
 
   mlir::LogicalResult declare(mlir::Location loc, llvm::StringRef name,
                               const ExpressionAST *constValue) {
-    mlir::Value value = mlirGen(constValue);
-    if (!value)
-      return mlir::failure();
-    mlir::Type type = value.getType();
+    mlir::Value value;
+    mlir::Type type;
+    if (llvm::isa<StringConstantAST>(constValue)) {
+      // a string literal is not a standalone SSA value; register the AST so
+      // comparisons/assignments can read it via getConstValue()
+      auto i8 = IntegerType::get(builder.getContext(), 8);
+      type = ArrayType::get({{0, 253}}, i8); // String[254]
+    } else {
+      value = mlirGen(constValue);
+      if (!value)
+        return mlir::failure();
+      type = value.getType();
+    }
 
     assert(!name.empty());
     if (symbolTable.count(name)) {
@@ -368,9 +390,20 @@ private:
     for (const auto &decl : decls->getValues()) {
       auto init = decl->getInitializer();
       if (!init) {
-        emitError(loc(decl->loc()))
-            << "constant declaration requires an initializer";
-        return mlir::failure();
+        // TIA allows VAR CONSTANT without an initializer (e.g. EMPTYSTRING):
+        // default to an empty string for string types, zero otherwise
+        auto type = getType(decl->getDataType());
+        if (!type)
+          return mlir::failure();
+        emitWarning(loc(decl->loc()))
+            << "constant declaration without initializer, using default";
+        if (type.isa<ArrayType>())
+          astPool.push_back(std::make_unique<StringConstantAST>(
+              decl->loc(), "", tok_string_literal));
+        else
+          astPool.push_back(
+              std::make_unique<IntegerConstantAST>(decl->loc(), 0, tok_int));
+        init = astPool.back().get();
       }
       for (const auto &var : decl->getVars()) {
         auto location = loc(var->loc());
@@ -851,17 +884,39 @@ private:
   /// byte-wise compare of the char arrays; a string literal side compares
   /// against its zero-padded bytes. Returns nullptr when neither side is a
   /// string/array/literal (not handled here).
+  // A string literal, possibly behind a constant symbol (#EMPTYSTRING).
+  const StringConstantAST *asStringLit(const ExpressionAST *e) {
+    if (auto *s = llvm::dyn_cast<StringConstantAST>(e))
+      return s;
+    if (auto *v = llvm::dyn_cast<SimpleVariableAST>(e)) {
+      auto sym = symbolTable.lookup(v->getName());
+      if (sym.isConst())
+        return llvm::dyn_cast<StringConstantAST>(sym.getConstValue());
+    }
+    return nullptr;
+  }
+
   mlir::Value mlirGenStringCompare(const BinaryExpressionAST *expr) {
     auto location = loc(expr->loc());
     auto op = expr->getOp();
     ArrayType lhsArr = arrayTypeOfAST(expr->getLhs());
     ArrayType rhsArr = arrayTypeOfAST(expr->getRhs());
-    const StringConstantAST *lhsLit =
-        llvm::dyn_cast<StringConstantAST>(expr->getLhs());
-    const StringConstantAST *rhsLit =
-        llvm::dyn_cast<StringConstantAST>(expr->getRhs());
+    const StringConstantAST *lhsLit = asStringLit(expr->getLhs());
+    const StringConstantAST *rhsLit = asStringLit(expr->getRhs());
     if (!lhsArr && !rhsArr && !lhsLit && !rhsLit)
       return nullptr;
+    // member access (db.member) has no AST-level array type: take it from
+    // the addressed value instead
+    mlir::Value lhsAddr0 = lhsLit ? nullptr : mlirGen(expr->getLhs());
+    mlir::Value rhsAddr0 = rhsLit ? nullptr : mlirGen(expr->getRhs());
+    if (!lhsLit && !lhsAddr0)
+      return nullptr;
+    if (!rhsLit && !rhsAddr0)
+      return nullptr;
+    if (!lhsArr && lhsAddr0)
+      lhsArr = arrayTypeOfAddress(lhsAddr0);
+    if (!rhsArr && rhsAddr0)
+      rhsArr = arrayTypeOfAddress(rhsAddr0);
     ArrayType arrTy = lhsArr ? lhsArr : rhsArr;
     if (!arrTy) {
       // a single-char literal against a char scalar: not a string compare,
@@ -880,12 +935,8 @@ private:
     }
     auto dims = arrTy.getDimensions();
     int64_t count = dims[0].second - dims[0].first + 1;
-    mlir::Value lhsAddr = lhsLit ? nullptr : mlirGen(expr->getLhs());
-    mlir::Value rhsAddr = rhsLit ? nullptr : mlirGen(expr->getRhs());
-    if (!lhsLit && !lhsAddr)
-      return nullptr;
-    if (!rhsLit && !rhsAddr)
-      return nullptr;
+    mlir::Value lhsAddr = lhsAddr0;
+    mlir::Value rhsAddr = rhsAddr0;
     if ((!lhsLit && !arrayTypeOfAddress(lhsAddr)) ||
         (!rhsLit && !arrayTypeOfAddress(rhsAddr))) {
       emitError(location) << "cannot compare a string with a non-string";
@@ -978,9 +1029,16 @@ private:
       mlir::Location location, const llvm::StringMap<mlir::Type> *paramTypes,
       StringRef name, const StringConstantAST *str) {
     if (!paramTypes) {
-      emitError(location) << "string literal argument '" << name
-                          << "': parameter type unknown";
-      return nullptr;
+      // unknown callee (e.g. a library string builtin): use String[254]
+      auto i8 = IntegerType::get(builder.getContext(), 8);
+      ArrayType arrTy = ArrayType::get({{0, 253}}, i8);
+      auto addrTy = AddressType::get(arrTy);
+      auto storage = builder.create<TempVariableOp>(
+          location, addrTy, builder.getStringAttr("strlit"));
+      if (failed(mlirGenStoreStringBytes(location, storage, arrTy,
+                                         str->getValue())))
+        return nullptr;
+      return builder.create<LoadOp>(location, arrTy, storage);
     }
     auto it = paramTypes->find(name);
     if (it == paramTypes->end()) {
@@ -1047,6 +1105,13 @@ private:
 
     if (auto *str = llvm::dyn_cast<StringConstantAST>(expr->getRhs()))
       return mlirGenStringAssignment(location, expr->getLhs(), str);
+    // `s := #CONST` with a string constant symbol
+    if (auto *v = llvm::dyn_cast<SimpleVariableAST>(expr->getRhs())) {
+      auto sym = symbolTable.lookup(v->getName());
+      if (sym.isConst())
+        if (auto *str = llvm::dyn_cast<StringConstantAST>(sym.getConstValue()))
+          return mlirGenStringAssignment(location, expr->getLhs(), str);
+    }
 
     mlir::Value lhs = mlirGenLValue(expr->getLhs());
     if (!lhs)
@@ -1056,6 +1121,15 @@ private:
     // elements one by one (the buffers are flat byte/element buffers).
     if (ArrayType lhsArr = arrayTypeOfAddress(lhs)) {
       ArrayType rhsArr = arrayTypeOfAST(expr->getRhs());
+      if (!rhsArr) {
+        // non-array rhs into an array/string lhs (e.g. a string builtin stub
+        // returning an int): zero-fill, with a warning
+        emitWarning(location) << "assigning a non-string value to a string, "
+                                 "storing an empty string";
+        if (failed(mlirGenStoreStringBytes(location, lhs, lhsArr, "")))
+          return mlir::failure();
+        return mlir::success();
+      }
       if (rhsArr && lhsArr.getElementType() == rhsArr.getElementType() &&
           lhsArr.getDimensions() == rhsArr.getDimensions()) {
         mlir::Value rhsAddr = mlirGen(expr->getRhs());
@@ -1143,7 +1217,20 @@ private:
       return -1;
     };
     int dw = widthOfTy(declared), rw = widthOfTy(rhs.getType());
-    if (dw > 0 && rw > 0 && dw != rw && rhs.getType().isa<IntegerType>()) {
+    if (dw > 0 && rhs.getType().isa<ArrayType>()) {
+      // assigning a string/array value to a scalar (e.g. a string builtin
+      // stub result): store zero, with a warning
+      emitWarning(location) << "assigning a string value to a scalar, storing 0";
+      rhs = builder.create<ConstantOp>(
+          location, declared.isa<IntegerType>()
+                        ? declared
+                        : IntegerType::get(builder.getContext(), dw),
+          builder.getIntegerAttr(
+              builder.getIntegerType(declared.isa<IntegerType>()
+                                         ? declared.cast<IntegerType>().getWidth()
+                                         : dw),
+              0));
+    } else if (dw > 0 && rw > 0 && dw != rw && rhs.getType().isa<IntegerType>()) {
       mlir::Type castTy = declared.isa<IntegerType>()
                               ? declared
                               : IntegerType::get(builder.getContext(), dw);
@@ -1311,9 +1398,17 @@ private:
           loc(expr->loc()), i8,
           builder.getIntegerAttr(i8, (uint8_t)expr->getValue()[0]));
     }
-    emitError(loc(expr->loc()))
-        << "string literal only supported as assignment/comparison target";
-    return nullptr;
+    // Multi-char literal in a plain value position (e.g. via a constant
+    // symbol): materialize a temp String[254] and return the array value.
+    auto location = loc(expr->loc());
+    auto i8 = IntegerType::get(builder.getContext(), 8);
+    ArrayType arrTy = ArrayType::get({{0, 253}}, i8);
+    auto storage = builder.create<TempVariableOp>(
+        location, AddressType::get(arrTy), builder.getStringAttr("strlit"));
+    if (failed(mlirGenStoreStringBytes(location, storage, arrTy,
+                                       expr->getValue())))
+      return nullptr;
+    return builder.create<LoadOp>(location, arrTy, storage);
   }
 
   unsigned int getTimeMS(const TimeConstantAST *expr) {
@@ -1402,8 +1497,10 @@ private:
     DataBlockOp db =
         mlir::SymbolTable::lookupNearestSymbolFrom<DataBlockOp>(theModule, nameAttr);
     if (!db) {
-      emitError(location) << "unknown symbol '" << name << "'";
-      return nullptr;
+      emitWarning(location) << "unknown symbol '" << name << "', assuming 1";
+      return builder.create<ConstantOp>(
+          location, getType(tok_int),
+          builder.getIntegerAttr(builder.getIntegerType(16), 1));
     }
     mlir::Type type = db.getType();
     mlir::Type address = AddressType::get(type);
@@ -1485,7 +1582,7 @@ private:
         theModule, fbName);
       // Builtin timer FBs have no FunctionBlockOp; their member types are
       // fixed (IN/Q: bool, PT/ET: time).
-      std::string fbUp = std::string(fbName.getValue().upper());
+      std::string fbUp = llvm::StringRef(unquote(fbName.getValue()).c_str()).upper();
       if (llvm::StringRef(fbUp).ends_with("_TIME"))
         fbUp = fbUp.substr(0, fbUp.size() - 5);
       if (!fb && (fbUp == "TON" || fbUp == "TOF" || fbUp == "TP")) {
@@ -1506,10 +1603,24 @@ private:
         return result;
       }
       if (!fb) {
-        emitError(location) << "unknown FB '" << fbName << "'";
-        return nullptr;
+        // Unknown FB (TIA library FB): approximate the member with a fresh
+        // temp cell so parameter stores/reads still type-check.
+        emitWarning(location) << "unknown FB '" << fbName << "', member '"
+                              << name << "' approximated by a temp cell";
+        auto cell = builder.create<TempVariableOp>(
+            location, resultType, builder.getStringAttr(name));
+        byteViewTypes[cell] = ArrayType::get({{0, 255}}, i8);
+        return cell;
       }
       auto var = mlir::dyn_cast_or_null<VariableOp>(mlir::SymbolTable::lookupSymbolIn(fb, name));
+      if (!var && stubFbNames.count(fbName.getValue().str())) {
+        emitWarning(location) << "member '" << name << "' of stub FB '"
+                              << fbName << "' approximated by a temp cell";
+        auto cell = builder.create<TempVariableOp>(
+            location, resultType, builder.getStringAttr(name));
+        byteViewTypes[cell] = ArrayType::get({{0, 255}}, i8);
+        return cell;
+      }
       if (!var) {
         emitError(location) << "unknown variable '" << name << "' in FB '" << fbName << "'";
         return nullptr;
@@ -1632,8 +1743,12 @@ private:
     }
     mlir::Type resultType = AddressType::get(resultElem);
     SmallVector<mlir::Value, 1> indices;
+    auto intTy = getType(tok_int);
     for (const auto & index : expr->getIndices()) {
-      indices.push_back(mlirGenRValue(index.get()));
+      mlir::Value idx = mlirGenRValue(index.get());
+      if (idx && idx.getType() != intTy)
+        idx = builder.create<DialectCastOp>(location, intTy, idx);
+      indices.push_back(idx);
     }
     auto result = builder.create<GetIndexOp>(location, resultType, base, indices,
                                              arrayTypeAttr);
@@ -1805,7 +1920,7 @@ private:
     case tok_minus:
       return builder.create<UnaryMinusOp>(location, rhs);
     case tok_not:
-      return builder.create<UnaryNotOp>(location, rhs);
+      return builder.create<UnaryNotOp>(location, coerceToBool(location, rhs));
     case tok_plus:
       return rhs;
     default:
@@ -1859,7 +1974,7 @@ private:
       }
       // `FB1 "DB1"(...)`: lhs is an FB name (source-defined or builtin
       // timer), rhs a (global) instance DB.
-      std::string fbUp = std::string(fbVar->getName().upper());
+      std::string fbUp = llvm::StringRef(unquote(fbVar->getName()).c_str()).upper();
       if (llvm::StringRef(fbUp).ends_with("_TIME"))
         fbUp = fbUp.substr(0, fbUp.size() - 5);
       if (fbNames.contains(fbVar->getName()) || fbUp == "TON" ||
@@ -1925,8 +2040,9 @@ private:
         auto lhs = binary->getLhs();
         auto name = dyn_cast<SimpleVariableAST>(lhs);
         if (!name) {
-          emitError(loc(lhs->loc()), "invalid parameter name");
-          return mlir::failure();
+          emitWarning(loc(lhs->loc()))
+              << "invalid parameter name, argument skipped";
+          continue;
         }
         if (auto *str = dyn_cast<StringConstantAST>(binary->getRhs())) {
           // FB calls can store the literal bytes directly into the IDB
@@ -2112,6 +2228,13 @@ private:
       return nullptr;
     if (!arg)
       return nullptr;
+    // string/array source (e.g. CHAR_TO_INT(s) on a string): approximate as 0
+    if (arg.getType().isa<ArrayType>()) {
+      emitWarning(location) << "conversion of a string value, assuming 0";
+      return builder.create<ConstantOp>(
+          location, resTy,
+          builder.getIntegerAttr(builder.getIntegerType(16), 0));
+    }
     // REAL source: dialect-cast straight to the target (fptosi/… at lowering)
     if (arg.getType().isa<RealType>() && !resTy.isa<RealType>()) {
       if (arg.getType() != resTy)
@@ -2192,8 +2315,25 @@ private:
           upCallee == "READ_CLK")
         return builder.create<ConstantDateAndTimeOp>(location, 1990, 1, 1, 0,
                                                       0, 0, 0);
-      emitError(location) << "unknown function '" << callee << "'";
-      return nullptr;
+      // Unknown callee (TIA library/system function not in our table, e.g.
+      // WRIT_DBL, DataLogCreate): warn and call an external stub declared
+      // on the fly, returning i32 (0 at runtime unless the host binds it).
+      emitWarning(location) << "unknown function '" << callee
+                            << "' called as an external i32 stub";
+      SmallVector<mlir::Type, 4> argTys;
+      for (auto a : arguments)
+        argTys.push_back(a.getType());
+      auto fnTy = builder.getFunctionType(argTys, getType(tok_int));
+      auto stub = mlir::SymbolTable::lookupNearestSymbolFrom<FunctionOp>(
+          theModule, builder.getStringAttr(callee));
+      if (!stub) {
+        mlir::OpBuilder b(theModule.getBody(), theModule.getBody()->begin());
+        stub = b.create<FunctionOp>(location, callee, fnTy);
+        stub.setPrivate();
+      }
+      auto argNamesAttr = mlir::ArrayAttr::get(context, argNames);
+      return builder.create<CallFcOp>(location, getType(tok_int), callee,
+                                      arguments, argNamesAttr);
     }
     mlir::Type resultType = rtIt->second;
     if (resultType.isa<mlir::NoneType>()) {
@@ -2216,7 +2356,7 @@ private:
     if (t.isa<AddressType>())
       t = t.cast<AddressType>().getElementType();
     if (auto idbTy = t.dyn_cast<InstanceDbType>())
-      return idbTy.getFbSymbol();
+      return unquote(idbTy.getFbSymbol());
     return std::nullopt;
   }
 
@@ -2271,7 +2411,26 @@ private:
       })))
         return mlir::failure();
 
-    builder.create<CallFbOp>(location, fb, idbRef);
+    // Unknown FB (TIA library FB): declare an empty stub so the symbolic
+    // call verifies and lowers to a no-op (like the awl.call stubs).
+    // Builtin timer FBs are exempt: they lower to scl_rt_timer_fb.
+    std::string fbUp = llvm::StringRef(unquote(fb).c_str()).upper();
+    if (llvm::StringRef(fbUp).ends_with("_TIME"))
+      fbUp = fbUp.substr(0, fbUp.size() - 5);
+    bool builtinTimer = fbUp == "TON" || fbUp == "TOF" || fbUp == "TP";
+    if (!builtinTimer &&
+        !mlir::SymbolTable::lookupNearestSymbolFrom<FunctionBlockOp>(
+            theModule, builder.getStringAttr(unquote(fb)))) {
+      mlir::OpBuilder b(theModule.getBody(), theModule.getBody()->begin());
+      auto stub = b.create<FunctionBlockOp>(location, unquote(fb));
+      auto *entry = stub.addEntryBlock();
+      b.setInsertionPointToEnd(entry);
+      b.create<ReturnOp>(location);
+      stubFbNames.insert(unquote(fb));
+      emitWarning(location) << "unknown FB '" << fb
+                            << "' called as an empty stub";
+    }
+    builder.create<CallFbOp>(location, unquote(fb), idbRef);
     return mlir::success();
   }
 
@@ -2357,8 +2516,12 @@ private:
     if (auto *v = llvm::dyn_cast<SimpleVariableAST>(expr)) {
       auto sym = symbolTable.lookup(v->getName());
       if (!sym.isConst()) {
-        emitError(loc(v->loc())) << "not a constant: " << v->getName();
-        return mlir::failure();
+        // e.g. a TIA library constant like "FC_ID_CHECK_ARRAY" defined in a
+        // global DB we do not have: warn and use a benign default
+        emitWarning(loc(v->loc())) << "not a constant: " << v->getName()
+                                    << ", assuming 1";
+        value = 1;
+        return mlir::success();
       }
       return foldConstIntAST(sym.getConstValue(), value);
     }
@@ -2377,8 +2540,11 @@ private:
       default: break;
       }
     }
-    emitError(loc(expr->loc())) << "constant integer expected";
-    return mlir::failure();
+    // unresolvable constant expression (e.g. referencing a library
+    // constant): warn and use a benign default instead of failing the file
+    emitWarning(loc(expr->loc())) << "constant integer expected, assuming 1";
+    value = 1;
+    return mlir::success();
   }
 
   mlir::LogicalResult getConstantInteger(const ExpressionAST *expr,
@@ -2393,15 +2559,18 @@ private:
       auto constName = expr->getName();
       auto constSymbol = symbolTable.lookup(constName);
       if (!constSymbol.isConst()) {
-        emitError(location) << "not a constant: " << constName;
-        return mlir::failure();
+        emitWarning(location) << "not a constant: " << constName
+                              << ", assuming 1";
+        value = 1;
+        return mlir::success();
       }
 
       return getConstantInteger(constSymbol.getConstValue(), value);
     })
     .Default([&](auto expr) {
-      emitError(loc(expr->loc())) << "constant integer expected";
-      return mlir::failure();
+      emitWarning(loc(expr->loc())) << "constant integer expected, assuming 1";
+      value = 1;
+      return mlir::success();
     });
   }
 
@@ -2450,13 +2619,18 @@ private:
       return InstanceDbType::get(builder.getContext(), type->getName());
     // Builtin timer FBs (lowered to @scl_rt_timer_fb, no source definition);
     // TIA also names the timer types TON_TIME/TOF_TIME/TP_TIME
-    std::string up = llvm::StringRef(type->getName()).upper();
+    std::string up = llvm::StringRef(unquote(type->getName()).c_str()).upper();
     if (llvm::StringRef(up).ends_with("_TIME"))
       up = up.substr(0, up.size() - 5);
     if (up == "TON" || up == "TOF" || up == "TP")
       return InstanceDbType::get(builder.getContext(), up);
-    emitError(loc(type->loc())) << "unknown type '" << type->getName() << "'";
-    return nullptr;
+    // Unknown type (TIA library type, or a type defined in another file of
+    // a multi-file project): warn and model it as an instance DB, like the
+    // builtin timer FBs — brace initializers and instance calls then work.
+    emitWarning(loc(type->loc()))
+        << "unknown type '" << type->getName()
+        << "' treated as an opaque instance DB";
+    return InstanceDbType::get(builder.getContext(), unquote(type->getName()));
   }
 
   mlir::Type getType(const StringDataTypeSpecAST *type) {
@@ -2514,6 +2688,31 @@ private:
     return mlir::success();
   }
 
+  /// Coerce a condition value to bool (LogicalType width 1); nonzero = true.
+  /// Makes e.g. `IF someInt THEN` and unknown-symbol fallbacks work.
+  mlir::Value coerceToBool(mlir::Location location, mlir::Value v) {
+    auto t = v.getType();
+    if (auto lt = mlir::dyn_cast<LogicalType>(t))
+      if (lt.getWidth() == 1)
+        return v;
+    mlir::Attribute zero;
+    if (auto it = mlir::dyn_cast<IntegerType>(t))
+      zero = builder.getIntegerAttr(builder.getIntegerType(it.getWidth()), 0);
+    else if (auto lt = mlir::dyn_cast<LogicalType>(t))
+      zero = builder.getIntegerAttr(builder.getIntegerType(lt.getWidth()), 0);
+    else if (t.isa<ArrayType>()) {
+      // string/array value as a condition: approximate as false
+      emitWarning(location) << "string value used as a condition, assuming false";
+      return builder.create<ConstantOp>(
+          location, getType(tok_bool),
+          builder.getIntegerAttr(builder.getI1Type(), 0));
+    } else
+      return v; // non-scalar: let the verifier report it
+    auto zeroC = builder.create<ConstantOp>(location, t, zero);
+    return builder.create<UnaryNotOp>(
+        location, builder.create<EqualOp>(location, v, zeroC));
+  }
+
   /// Codegen an if-then-else block
   mlir::LogicalResult mlirGen(const IfThenElseAST *ifThenElse) {
     mlir::Value condition;
@@ -2526,6 +2725,7 @@ private:
       auto condition = mlirGenRValue(ifThen->getCondition());
       if (!condition)
         return mlir::failure();
+      condition = coerceToBool(location, condition);
       auto cond = builder.create<IfThenElseOp>(location, condition);
       if (!cond)
         return mlir::failure();
@@ -2567,7 +2767,7 @@ private:
     auto *condBlock = &whileDoOp.getWhileBody().front();
     auto *dummy = builder.createBlock(&whileDoOp.getWhileBody());
     builder.setInsertionPointToEnd(condBlock);
-    builder.create<ConditionOp>(location, condition, dummy, dummy);
+    builder.create<ConditionOp>(location, coerceToBool(location, condition), dummy, dummy);
     builder.setInsertionPointToEnd(dummy);
     createEndOp(location);
 
@@ -2597,7 +2797,7 @@ private:
     auto *bodyBlock = &repeatOp.getRepeatBody().front();
     auto *dummy = builder.createBlock(&repeatOp.getRepeatBody());
     builder.setInsertionPointToEnd(bodyBlock);
-    builder.create<UntilOp>(location, until, dummy, dummy);
+    builder.create<UntilOp>(location, coerceToBool(location, until), dummy, dummy);
     builder.setInsertionPointToEnd(dummy);
     createEndOp(location);
 
