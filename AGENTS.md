@@ -115,7 +115,7 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 109 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 110 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT, conformance), incl. direct_address (Parse), direct (MLIR), direct + big_endian
   (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
   timer/timer_lower/call_fb/cc, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
