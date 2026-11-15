@@ -218,7 +218,12 @@ def DialectCastOp : SclOp<"mlir.cast", [DeclareOpInterfaceMethods<CastOpInterfac
 
 def IntegerCastOp : SclOp<"int.cast", [DeclareOpInterfaceMethods<CastOpInterface>, Pure]> {
   let summary = "Type cast between integers with different bitwidths";
-  let arguments = (ins Scl_IntegerType:$value);
+  // LogicalType (byte/word/dword/bool) is accepted as well: it converts to
+  // an IntegerType of the same width during lowering. The optional `zext`
+  // attribute requests zero-extension on widening (unsigned source, e.g.
+  // byte/word); the default is sign-extension (signed int/dint).
+  let arguments = (ins AnyTypeOf<[Scl_IntegerType, Scl_LogicalType]>:$value,
+                       OptionalAttr<UnitAttr>:$zext);
   let results = (outs Scl_IntegerType:$result);
   let assemblyFormat = "attr-dict $value `:` type($value) `to` type($result)";
 }

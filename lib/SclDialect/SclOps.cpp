@@ -843,13 +843,16 @@ void GetDirectOp::print(OpAsmPrinter &printer) {
 bool IntegerCastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
   if (inputs.size() != 1 || outputs.size() != 1)
     return false;
-  // must be a cast between two integer types
-  IntegerType input = inputs.front().dyn_cast<IntegerType>();
+  // must be a cast between two integer types; a LogicalType (byte/word/
+  // dword/bool) input is allowed as well — it converts to an IntegerType of
+  // the same width during lowering.
+  Type input = inputs.front();
+  if (!input.isa<IntegerType>() && !input.isa<LogicalType>())
+    return false;
   IntegerType output = outputs.front().dyn_cast<IntegerType>();
-  if (!input || !output)
+  if (!output)
     return false;
   return true;
-
 }
 
 // MARK: TempVarOp

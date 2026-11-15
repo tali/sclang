@@ -1,0 +1,31 @@
+// RUN: sclang --opt --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// Mixed-width arithmetic: char + int widens the char (signed), byte + int
+// widens the byte UNSIGNED (200 + 100 = 300, not -56 + 100). r = 65 + 3 =
+// 68, w = 300, branch taken: r = 68 + 300 = 368 = 0x0170 (%MW0: M[0]=1,
+// M[1]=112 big-endian).
+// CHECK: M:
+// CHECK: M[0]=1
+// CHECK: M[1]=112
+// CHECK: clock=0ms
+function OB1 : int
+var_temp
+  c : char;
+  r : int;
+  b : byte;
+  w : int;
+end_var
+begin
+  c := 'A';
+  b := 200;
+  r := c + 3;
+  w := b + 100;
+  if r = 68 and w = 300 then
+    r := r + w;
+  end_if;
+  %MW0 := r;
+end_function
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

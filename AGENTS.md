@@ -115,7 +115,7 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 103 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 104 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
   (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
   timer/timer_lower/call_fb/cc, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
@@ -202,6 +202,13 @@ has no `\b` — use python3 for regex edits.
   signature (pre-pass `functionResultTypes`), not hardcoded int.
   Boolean literals are i1 (`true`/`false`), and loop conditions go through
   `mlirGenRValue` so a bool variable condition is loaded, not passed as an address.
+- Binary expressions with mixed-width integer operands (e.g. char + int,
+  byte + word) now coerce both to an IntegerType of the wider width via
+  `scl.int.cast` (see jit_mixed_width). `scl.int.cast` accepts LogicalType
+  (byte/word/dword/bool) operands (ODS + areCastCompatible relaxed) and has
+  an optional `zext` unit attr: LogicalType sources widen with ExtUI
+  (unsigned — byte 200 + 100 = 300), IntegerType sources with ExtSI
+  (signed int/dint). Lowering: IntegerCastOpLowering in LowerToStd.cpp.
 - `string[n]` is an array of n chars; `s := 'lit'` stores the literal bytes
   zero-padded. String comparison (`s1 = s2`, `<>`, and lexicographic
   `</<=/>/>=`, also against a literal) is an unrolled byte-wise compare

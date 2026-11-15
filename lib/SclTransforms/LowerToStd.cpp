@@ -1971,9 +1971,16 @@ struct IntegerCastOpLowering : public OpConversionPattern<scl::IntegerCastOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto resTy = typeConverter->convertType(op.getType()).cast<IntegerType>();
     auto srcTy = adaptor.getValue().getType().cast<IntegerType>();
-    if (resTy.getWidth() > srcTy.getWidth())
-      rewriter.replaceOpWithNewOp<arith::ExtSIOp>(op, resTy, adaptor.getValue());
-    else if (resTy.getWidth() < srcTy.getWidth())
+    if (resTy.getWidth() > srcTy.getWidth()) {
+      // zext: zero-extend (unsigned source, e.g. byte/word); default is
+      // sign-extension (signed int/dint).
+      if (op.getZextAttr())
+        rewriter.replaceOpWithNewOp<arith::ExtUIOp>(op, resTy,
+                                                    adaptor.getValue());
+      else
+        rewriter.replaceOpWithNewOp<arith::ExtSIOp>(op, resTy,
+                                                    adaptor.getValue());
+    } else if (resTy.getWidth() < srcTy.getWidth())
       rewriter.replaceOpWithNewOp<arith::TruncIOp>(op, resTy,
                                                    adaptor.getValue());
     else

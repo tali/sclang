@@ -1448,6 +1448,37 @@ private:
     if (!rhs)
       return nullptr;
 
+    // Implicit integer widening for mixed-width operands (e.g. char + int,
+    // byte + word): normalize both operands to an IntegerType of the wider
+    // width, like SCL. LogicalType (byte/word/dword/bool) values are
+    // bitcast to the same-width IntegerType first (IntegerCastOp only
+    // accepts IntegerType).
+    auto widthOfTy = [](mlir::Type t) -> int {
+      if (auto it = t.dyn_cast<IntegerType>())
+        return it.getWidth();
+      if (auto lt = t.dyn_cast<LogicalType>())
+        return lt.getWidth();
+      return -1;
+    };
+    auto toIntOfWidth = [&](mlir::Value v, int w) -> mlir::Value {
+      int vw = widthOfTy(v.getType());
+      if (vw < 0 || (vw == w && v.getType().isa<IntegerType>()))
+        return v;
+      // LogicalType (byte/word/dword/bool) is unsigned: zero-extend.
+      bool zext = v.getType().isa<LogicalType>();
+      auto op = builder.create<IntegerCastOp>(
+          location, IntegerType::get(builder.getContext(), w), v);
+      if (zext)
+        op.setZextAttr(builder.getUnitAttr());
+      return op.getResult();
+    };
+    int lw = widthOfTy(lhs.getType()), rw = widthOfTy(rhs.getType());
+    if (lw > 0 && rw > 0 && lw != rw) {
+      int w = std::max(lw, rw);
+      lhs = toIntOfWidth(lhs, w);
+      rhs = toIntOfWidth(rhs, w);
+    }
+
     // Derive the operation name from the binary operator.
     switch (expr->getOp()) {
     default:
