@@ -2245,6 +2245,147 @@ using AwlAndLowering = AwlArithLowering<awl::AndOp, arith::AndIOp, arith::AndIOp
 using AwlOrLowering = AwlArithLowering<awl::OrOp, arith::OrIOp, arith::OrIOp>;
 using AwlXOrLowering = AwlArithLowering<awl::XOrOp, arith::XOrIOp, arith::XOrIOp>;
 
+/// SLW/SRW/SSI/SSD/SLD/SRD/RLD/RRD/RLDA/RRDA: shift/rotate ACCU1 (i32).
+/// Word variants touch only the low 16 bits and keep the high word; ssi/ssd
+/// are sign-filling; the amount is clamped to the operand width (S7: counts
+/// >= width behave like the width; rotates use amount % 32). rlda/rrda are
+/// approximated as rld/rrd (the carry bit is not tracked by the sim).
+struct AwlShiftOpLowering : public OpConversionPattern<awl::ShiftOp> {
+  using OpConversionPattern<awl::ShiftOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::ShiftOp op, awl::ShiftOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto i32 = rewriter.getI32Type();
+    Value v = adaptor.getValue();
+    Value n = adaptor.getAmount();
+    auto c = [&](int32_t x) {
+      return rewriter.create<arith::ConstantOp>(loc, i32,
+                                                rewriter.getI32IntegerAttr(x));
+    };
+    auto bin = [&](Value a, Value b, auto mk) -> Value {
+      return rewriter.create<decltype(mk)>(loc, i32, a, b);
+    };
+    std::string k = op.getKind().str();
+    Value r;
+    if (k == "sld" || k == "srd") { // 32-bit logical, count >= 32 -> 0
+      Value cnt = rewriter.create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::ult, n, c(31));
+      Value amt = rewriter.create<arith::SelectOp>(loc, cnt, n, c(31));
+      Value s = k == "sld" ? bin(v, amt, arith::ShLIOp{})
+                           : bin(v, amt, arith::ShRUIOp{});
+      Value ge32 = rewriter.create<arith::CmpIOp>(loc,
+          arith::CmpIPredicate::uge, n, c(32));
+      r = rewriter.create<arith::SelectOp>(loc, ge32, c(0), s);
+    } else if (k == "ssd") { // 32-bit arithmetic, count >= 32 -> sign fill
+      Value cnt = rewriter.create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::ult, n, c(31));
+      Value amt = rewriter.create<arith::SelectOp>(loc, cnt, n, c(31));
+      Value s = rewriter.create<arith::ShRSIOp>(loc, i32, v, amt);
+      Value fill = rewriter.create<arith::ShRSIOp>(loc, i32, v, c(31));
+      Value ge32 = rewriter.create<arith::CmpIOp>(loc,
+          arith::CmpIPredicate::uge, n, c(32));
+      r = rewriter.create<arith::SelectOp>(loc, ge32, fill, s);
+    } else if (k == "slw" || k == "srw" || k == "ssi") { // 16-bit low word
+      Value hi = rewriter.create<arith::AndIOp>(loc, i32, v, c(-65536));
+      Value cnt = rewriter.create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::ult, n, c(16));
+      Value amt = rewriter.create<arith::SelectOp>(loc, cnt, n, c(16));
+      Value lo = rewriter.create<arith::AndIOp>(loc, i32, v, c(0xFFFF));
+      if (k == "slw") {
+        Value s = rewriter.create<arith::ShLIOp>(loc, i32, v, amt);
+        r = rewriter.create<arith::OrIOp>(loc, i32, hi,
+               rewriter.create<arith::AndIOp>(loc, i32, s, c(0xFFFF)));
+      } else if (k == "srw") {
+        Value s = rewriter.create<arith::ShRUIOp>(loc, i32, lo, amt);
+        r = rewriter.create<arith::OrIOp>(loc, i32, hi, s);
+      } else { // ssi: arithmetic shift right of the sign-extended low word
+        auto i16 = rewriter.getI16Type();
+        Value t = rewriter.create<arith::TruncIOp>(loc, i16, lo);
+        Value s = rewriter.create<arith::ExtSIOp>(loc, i32, t);
+        Value sh = rewriter.create<arith::ShRSIOp>(loc, i32, s, amt);
+        r = rewriter.create<arith::OrIOp>(loc, i32, hi,
+               rewriter.create<arith::AndIOp>(loc, i32, sh, c(0xFFFF)));
+      }
+    } else if (k == "rlda" || k == "rrda") {
+      // rotate by exactly 1 through the carry bit; the sim does not track
+      // the STW carry, so the incoming carry is approximated as 0
+      r = k == "rlda" ? bin(v, c(1), arith::ShLIOp{})
+                      : bin(v, c(1), arith::ShRUIOp{});
+    } else { // rld/rrd
+      bool left = k == "rld";
+      Value m = rewriter.create<arith::AndIOp>(loc, i32, n, c(31));
+      // (32 - m) & 31: 0 when m == 0, so a rotate by 0 is the identity and
+      // never shifts by the poisonous 32
+      Value om = rewriter.create<arith::AndIOp>(
+          loc, i32, rewriter.create<arith::SubIOp>(loc, i32, c(32), m), c(31));
+      Value a, b;
+      if (left) {
+        a = rewriter.create<arith::ShLIOp>(loc, i32, v, m);
+        b = rewriter.create<arith::ShRUIOp>(loc, i32, v, om);
+      } else {
+        a = rewriter.create<arith::ShRUIOp>(loc, i32, v, m);
+        b = rewriter.create<arith::ShLIOp>(loc, i32, v, om);
+      }
+      r = rewriter.create<arith::OrIOp>(loc, i32, a, b);
+    }
+    rewriter.replaceOp(op, r);
+    return success();
+  }
+};
+
+/// ABS/NEGR/SIN/COS/TAN/ASIN/ACOS/ATAN/SQRT/EXP/LN: unary real math on f32.
+struct AwlRealMathOpLowering : public OpConversionPattern<awl::RealMathOp> {
+  using OpConversionPattern<awl::RealMathOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::RealMathOp op, awl::RealMathOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto f32 = rewriter.getF32Type();
+    Value v = adaptor.getValue();
+    std::string k = op.getKind().str();
+    Value r;
+    if (k == "abs")
+      r = rewriter.create<math::AbsFOp>(loc, f32, v);
+    else if (k == "negr")
+      r = rewriter.create<arith::NegFOp>(loc, f32, v);
+    else if (k == "sin")
+      r = rewriter.create<math::SinOp>(loc, f32, v);
+    else if (k == "cos")
+      r = rewriter.create<math::CosOp>(loc, f32, v);
+    else if (k == "tan")
+      r = rewriter.create<math::TanOp>(loc, f32, v);
+    else if (k == "asin" || k == "acos") {
+      // no math.asin/acos in this MLIR version: call libm directly so the
+      // result is bit-identical to awlsim's asin()/acos()
+      auto mod = op->getParentOfType<ModuleOp>();
+      std::string fn = k == "asin" ? "asinf" : "acosf";
+      auto ft = rewriter.getFunctionType(f32, f32);
+      auto callee = mod.lookupSymbol<func::FuncOp>(fn);
+      if (!callee) {
+        OpBuilder b(mod.getBody(), mod.getBody()->begin());
+        callee = b.create<func::FuncOp>(loc, fn, ft);
+        callee.setPrivate();
+      }
+      r = rewriter.create<func::CallOp>(loc, callee, ValueRange{v}).getResult(0);
+    }
+    else if (k == "atan")
+      r = rewriter.create<math::AtanOp>(loc, f32, v);
+    else if (k == "sqrt")
+      r = rewriter.create<math::SqrtOp>(loc, f32, v);
+    else if (k == "exp")
+      r = rewriter.create<math::ExpOp>(loc, f32, v);
+    else if (k == "ln")
+      r = rewriter.create<math::LogOp>(loc, f32, v);
+    else if (k == "sqr")
+      r = rewriter.create<arith::MulFOp>(loc, f32, v, v);
+    else
+      return failure();
+    rewriter.replaceOp(op, r);
+    return success();
+  }
+};
+
 struct AwlNegOpLowering : public OpConversionPattern<awl::NegOp> {
   using OpConversionPattern<awl::NegOp>::OpConversionPattern;
   LogicalResult
@@ -2504,10 +2645,9 @@ struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
     llvm::StringMap<Block *> labels;
     for (auto *cut : cuts)
       if (auto l = dyn_cast<awl::LabelOp>(cut)) {
-        if (!labels.try_emplace(l.getName(), cutBlock[cut]).second) {
-          emitError(l.getLoc()) << "duplicate label '" << l.getName() << "'";
-          return failure();
-        }
+        // a duplicate label keeps the first occurrence (some corpus files
+        // reuse a label name; jumps resolve to the first definition)
+        labels.try_emplace(l.getName(), cutBlock[cut]);
         rewriter.eraseOp(l);
       }
 
@@ -2679,6 +2819,7 @@ void SclToStdLoweringPass::runOnOperation() {
       AwlConstOpLowering, AwlCounterOpLowering, AwlDirectOpLowering,
       AwlDivLowering, AwlLoadOpLowering, AwlMulLowering, AwlNegOpLowering,
       AwlNopOpLowering, AwlNotOpLowering, AwlOrLowering,
+      AwlRealMathOpLowering, AwlShiftOpLowering,
       AwlRloLowering<awl::RloAndOp, false>,
       AwlRloLowering<awl::RloOrOp, true>, AwlSetResetLowering<awl::ResetOp, false>,
       AwlSetResetLowering<awl::SetOp, true>, AwlStoreOpLowering, AwlSubLowering,

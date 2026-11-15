@@ -45,6 +45,7 @@ enum class Tok {
   colon,       // :
   lparen,      // (
   rparen,      // )
+  semi,        // ; statement separator
   lbracket,    // [
   rbracket,    // ]
   lbrace,      // {
@@ -496,7 +497,7 @@ private:
     }
     cur = cur.drop_front();
     switch (c) {
-    case ';': return scan(); // statement separator: no-op
+    case ';': t.tok = Tok::semi; return t; // statement separator
     case '\'': { // quoted literal ('abc', '16#2'): one quoted ident token
       auto begin = cur.begin();
       while (!cur.empty() && cur.front() != '\'' && cur.front() != '\n')
@@ -646,12 +647,12 @@ private:
   bool sawOB1 = false;
 
   mlir::Location loc() {
-    return mlir::FileLineColLoc::get(builder.getStringAttr(file), lexer.line(),
+    return mlir::FileLineColLoc::get(builder.getStringAttr(file), lexer.curLine(),
                                      lexer.col());
   }
 
   bool error(const llvm::Twine &msg) {
-    llvm::errs() << file << ":" << lexer.line() << ":" << lexer.col() << ": "
+    llvm::errs() << file << ":" << lexer.curLine() << ":" << lexer.col() << ": "
                  << msg << "\n";
     return false;
   }
@@ -934,6 +935,10 @@ private:
         }
         return error("missing BE in block " + name);
       }
+      if (lexer.getCurToken() == Tok::semi) { // statement separator
+        lexer.next();
+        continue;
+      }
       if (!parseInstruction(name))
         return false;
       if (blockEnded)
@@ -947,6 +952,10 @@ private:
 
   bool parseInstruction(const std::string &blockName) {
     auto t = lexer.getCurToken();
+    if (t == Tok::semi) { // statement separator
+      lexer.next();
+      return true;
+    }
     if (t == Tok::ident) {
       std::string m = upperIdent();
       lexer.next();
@@ -1140,20 +1149,29 @@ private:
       std::swap(acc[acc.size() - 1], acc[acc.size() - 2]);
       return true;
     }
-    if (m == "NEGI" || m == "NEGD" || m == "NEGR") { // negate ACCU1
+    if (m == "NEGI" || m == "NEGD") { // negate ACCU1
       mlir::Value a = popAcc();
       if (!a)
         return false;
-      if (m == "NEGR")
-        a = castTo(a, builder.getF32Type());
       acc.push_back(builder.create<awl::NegOp>(loc(), a.getType(), a));
       return true;
     }
+    if (m == "SLW" || m == "SRW" || m == "SSI" || m == "SSD" ||
+        m == "SLD" || m == "SRD" || m == "RLD" || m == "RRD" ||
+        m == "RLDA" || m == "RRDA")
+      return parseShift(m);
+    if (m == "ABS" || m == "NEGR" || m == "SIN" || m == "COS" || m == "TAN" ||
+        m == "ASIN" || m == "ACOS" || m == "ATAN" || m == "SQRT" ||
+        m == "EXP" || m == "LN" || m == "SQR")
+      return parseRealMath(m);
     if (m == "TRUNC") { // real ACCU1 -> int (truncate)
       mlir::Value a = popAcc();
-      if (!a)
-        return false;
       acc.push_back(castTo(castTo(a, builder.getF32Type()), builder.getI32Type()));
+      return true;
+    }
+    if (m == "DTR") { // DWORD ACCU1 -> real
+      mlir::Value a = popAcc();
+      acc.push_back(castTo(a, builder.getF32Type()));
       return true;
     }
     if (m == "FR") { // FR T n / FR C n / FR DB: enable — accepted, no-op
@@ -1196,6 +1214,8 @@ private:
     if (m == "MCR") { // MCR( ... MCR): master control relay — bracket only
       if (lexer.getCurToken() == Tok::lparen) {
         lexer.next();
+        if (!ensureRlo())
+          return false;
         brackets.push_back({rlo, false});
         rlo = builder.create<awl::ConstOp>(
             loc(), builder.getI1Type(),
@@ -1286,6 +1306,21 @@ private:
       return true;
     }
     if (m == "X" || m == "XN") { // X/XN bit: rlo = rlo XOR bit (XN: negated)
+      if (lexer.getCurToken() == Tok::ident) {
+        std::string w = upperIdent();
+        if (w == "TRUE" || w == "FALSE") {
+          lexer.next();
+          if (!ensureRlo())
+            return false;
+          auto i1 = builder.getI1Type();
+          mlir::Value c = builder.create<awl::ConstOp>(
+              loc(), i1, builder.getIntegerAttr(i1, w == "TRUE" ? 1 : 0));
+          rlo = builder.create<awl::XOrOp>(loc(), i1, rlo, c);
+          if (m == "XN")
+            rlo = builder.create<awl::NotOp>(loc(), i1, rlo);
+          return true;
+        }
+      }
       mlir::Value addr = parseBitOperand();
       if (!addr)
         return false;
@@ -1448,11 +1483,11 @@ private:
     return true;
   }
 
+  // The four ACCU registers always hold a value (0 at block start), so an
+  // "empty" parse-time stack yields 0 instead of an underflow error.
   mlir::Value popAcc() {
-    if (acc.empty()) {
-      error("accumulator stack underflow");
-      return nullptr;
-    }
+    if (acc.empty())
+      return constInt(builder.getI32Type(), 0);
     mlir::Value v = acc.back();
     acc.pop_back();
     return v;
@@ -2041,6 +2076,47 @@ private:
     return true;
   }
 
+  // SLW/SRW/SSI/SSD/SLD/SRD/RLD/RRD/RLDA/RRDA [n]: shift/rotate ACCU1 by n
+  // (immediate, or ACCU1 if no immediate was given: `L val`, `L n`, `SLD`)
+  bool parseShift(const std::string &m) {
+    padAcc();
+    mlir::Value v = popAcc();
+    bool throughCarry = m == "RLDA" || m == "RRDA";
+    mlir::Value amount = constInt(builder.getI32Type(), 1);
+    if (!throughCarry) {
+      if (lexer.getCurToken() == Tok::integer) {
+        amount = constInt(builder.getI32Type(), (int64_t)lexer.getInteger());
+        lexer.next();
+      } else {
+        amount = popAcc(); // no immediate: shift count is in ACCU2
+        amount = castTo(amount, builder.getI32Type());
+      }
+    }
+    v = castTo(v, builder.getI32Type());
+    std::string kind = m;
+    for (auto &c : kind)
+      c = (char)tolower((unsigned char)c);
+    acc.push_back(builder.create<awl::ShiftOp>(
+        loc(), builder.getI32Type(), builder.getStringAttr(kind), v, amount));
+    rloActive = false;
+    return true;
+  }
+
+  // ABS/NEGR/SIN/COS/TAN/ASIN/ACOS/ATAN/SQRT/EXP/LN: unary real math on ACCU1
+  bool parseRealMath(const std::string &m) {
+    mlir::Value a = popAcc();
+    if (!a)
+      return false;
+    a = castTo(a, builder.getF32Type());
+    std::string kind = m;
+    for (auto &c : kind)
+      c = (char)tolower((unsigned char)c);
+    acc.push_back(builder.create<awl::RealMathOp>(
+        loc(), builder.getF32Type(), builder.getStringAttr(kind), a));
+    rloActive = false;
+    return true;
+  }
+
   // SP/SE/SS/SV/SI T n: start timer n with ACC1 = S5TIME duration
   bool parseTimerStart(const std::string &m) {
     mlir::Value dur = popAcc();
@@ -2277,6 +2353,16 @@ private:
       expected = (n >= 1 && (size_t)n <= acc.size())
                      ? acc[acc.size() - n]
                      : constInt(builder.getI32Type(), 0);
+    } else if (lexer.getCurToken() == Tok::ident) {
+      // memory operand rhs, e.g. __ASSERT== __ACCU 1, MD 8
+      mlir::Value addr = parseOperand(false);
+      if (!addr) {
+        lexer.nextLine();
+        return true;
+      }
+      expected = mlir::isa<mlir::scl::DirectType>(addr.getType())
+                     ? (mlir::Value)builder.create<awl::LoadOp>(loc(), addr)
+                     : addr;
     } else {
       mlir::Value c = parseConst();
       if (!c) {

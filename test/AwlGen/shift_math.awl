@@ -1,0 +1,27 @@
+// RUN: sclang-gen -x awl --emit=mlir %s | FileCheck %s
+// RUN: sclang -x awl --emit=jit --jit-cycles=1 %s
+// Shift/rotate (SLW SRW SSI SSD SLD SRD RLD RRD RLDA RRDA) lower to
+// awl.shift; real math (ABS NEGR SIN COS TAN ASIN ACOS ATAN SQRT EXP LN
+// SQR) lowers to awl.real_math; DTR converts DWORD->REAL. The JIT RUN
+// passes iff all __ASSERT oracles hold (exit code 0). Values are taken
+// from awlsim's tests/tc100_instructions/insn_SHIFT.awl / insn_ARITH_R.awl.
+// CHECK-LABEL: awl.block "OB1"
+// CHECK: awl.shift "rrd", %{{.*}} : i32, %{{.*}} : i32 -> i32
+// CHECK: awl.real_math "tan", %{{.*}} : f32 -> f32
+// CHECK: awl.real_math "abs", %{{.*}} : f32 -> f32
+ORGANIZATION_BLOCK OB 1
+BEGIN
+	L	DW#16#388830FC
+	RRD	3
+	__ASSERT==	__ACCU 1,	DW#16#8711061F
+	L	0.5
+	TAN
+	__ASSERT>=R	__ACCU 1,	0.5463
+	L	-3.5
+	ABS
+	__ASSERT==R	__ACCU 1,	3.5
+	L	1
+	DTR
+	__ASSERT==R	__ACCU 1,	1.0
+BE
+END_ORGANIZATION_BLOCK

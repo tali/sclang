@@ -170,6 +170,31 @@ def CastOp : AwlOp<"cast"> {
   let assemblyFormat = "attr-dict $value `:` type($value) `to` type($result)";
 }
 
+// MARK: shift/rotate (SLW SRW SSI SSD SLD SRD RLD RRD RLDA RRDA) and real math
+
+// Shift/rotate ACCU1. `kind` is the mnemonic in lowercase (slw, srw, ssi, ssd,
+// sld, srd, rld, rrd, rlda, rrda). Double-word variants operate on all 32
+// bits; word variants (slw/srw/ssi) only on the low 16 bits and keep the high
+// word. ssi/ssd are arithmetic (sign-filling) shifts. rlda/rrda rotate
+// through the carry bit (approximated as rld/rrd — the sim does not track
+// the STW carry). The amount is clamped to the operand width (S7 semantics:
+// counts >= width behave like the width).
+def ShiftOp : AwlOp<"shift"> {
+  let summary = "SLW/SRW/SSI/SSD/SLD/SRD/RLD/RRD/RLDA/RRDA: shift/rotate ACCU1";
+  let arguments = (ins StrAttr:$kind, I32:$value, I32:$amount);
+  let results = (outs I32:$result);
+  let assemblyFormat = "attr-dict $kind `,` $value `:` type($value) `,` $amount `:` type($amount) `->` type($result)";
+}
+
+// Unary real math on ACCU1 (f32): kind is abs, negr, sin, cos, tan, asin,
+// acos, atan, sqrt, exp, ln (lowercase mnemonic).
+def RealMathOp : AwlOp<"real_math"> {
+  let summary = "ABS/NEGR/SIN/COS/TAN/ASIN/ACOS/ATAN/SQRT/EXP/LN: unary real math";
+  let arguments = (ins StrAttr:$kind, F32:$value);
+  let results = (outs F32:$result);
+  let assemblyFormat = "attr-dict $kind `,` $value `:` type($value) `->` type($result)";
+}
+
 // MARK: comparisons (==I <>I >I <I >=I <=I, ==D ..., ==R ...): set RLO
 class AwlCmpOp<string mnemonic> : AwlOp<mnemonic> {
   let arguments = (ins AnyType:$lhs, AnyType:$rhs);
