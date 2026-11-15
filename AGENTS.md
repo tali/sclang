@@ -366,8 +366,10 @@ has no `\b` — use python3 for regex edits.
 
 ## Known gaps (parsed but not lowered / not code-generated)
 
-AWL known gaps (both directions): CALL DB m. (IEC timer instructions
-SP/SE/SS/SV/SI, counters ZV/ZR, CALL FB n / DB m with FB instance DBs, CC
+AWL known gaps (both directions): IEC timer instructions
+SP/SE/SS/SV/SI, counters ZV/ZR. CALL DB m is N/A — S7 AWL has no CALL DB
+instruction (DBs are opened with OPN, which our explicit `DBn.` operands
+make unnecessary). (CALL FB n / DB m with FB instance DBs, CC
 conditional calls, and FC params via the M param window are implemented —
 see the bullets above.)
 
