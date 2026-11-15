@@ -25,6 +25,7 @@ add_lit_testsuite(check-sclang "Running the Sclang regression tests"
   ${CMAKE_CURRENT_BINARY_DIR}/SclTransforms
   ${CMAKE_CURRENT_BINARY_DIR}/AwlGen
   ${CMAKE_CURRENT_BINARY_DIR}/sclang
+  ${CMAKE_CURRENT_BINARY_DIR}/conformance
   DEPENDS ${SCLANG_TEST_DEPENDS} sclang sclang-gen
   )
 set_target_properties(check-sclang PROPERTIES FOLDER "Sclang Tests")
