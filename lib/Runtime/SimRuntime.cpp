@@ -18,6 +18,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <algorithm>
 #include <map>
 #include <vector>
@@ -27,6 +28,9 @@ namespace {
 /// Default size of a simulated area (I/Q/M/T/C) in bytes; configurable via
 /// scl_rt_sim_set_area_size() (driver CLI `--area-size`).
 constexpr uint64_t kDefaultAreaSize = 65536;
+/// Default size of the L (local data) area: large enough for a deep FC call
+/// stack, since each frame reserves its parameter area at kParamBase.
+constexpr uint64_t kDefaultLAreaSize = 1u << 20;
 
 // Classic AWL timer, awlsim-compatible (awlsim/core/timers.py): edge-triggered
 // start on the RLO input, remaining time in units of the active time base,
@@ -81,6 +85,23 @@ struct SimState {
   // are relative to lBase (the base of the innermost frame).
   std::vector<uint64_t> lFrames;
   uint64_t lBase = 0;
+  // call-saved block-call state, saved/restored with the L frame (S7 restores
+  // the address registers and DB/DI registers when a block returns)
+  struct FrameSave {
+    uint64_t ar1, ar2;
+    uint32_t db, di;
+  };
+  std::vector<FrameSave> frameSaves;
+  // SFB3-5 timer state, keyed by (DI db << 32 | AR2 base byte)
+  struct SfbTimerState {
+    bool prevIn = false;
+    bool running = false;
+    uint64_t startMs = 0;
+    bool done = false;
+  };
+  std::map<uint64_t, SfbTimerState> sfbTimers;
+  // SFB0-2 previous LD bit, keyed by (DI db << 32 | AR2 base byte)
+  std::map<uint64_t, bool> sfbPrevLd;
 };
 
 /// Decode an S5TIME-encoded 16-bit value to milliseconds.
@@ -134,9 +155,20 @@ SimState &state() {
   return s;
 }
 
+/// Byte offset of the AR2 multi-instance base (awlsim adds the AR2 base to
+/// every DI-area access, see cpu.py getArea_DI/setArea_DI).
+static uint32_t ar2ByteOff() {
+  uint64_t p = state().ars[1];
+  if ((p >> 56) != 0)
+    return (uint32_t)((p >> 16) & 0xFFFF); // internal packed pointer
+  return (uint32_t)((p >> 3) & 0x1FFF);     // raw S7 pointer (area at 24-31)
+}
+
 /// Return the byte buffer for an access, growing DBs on demand and checking
 /// bounds of the fixed-size areas.
-std::vector<uint8_t> &bufferFor(uint8_t area, uint32_t db, uint32_t byteOff,
+// Returns the area buffer; `byteOff` is adjusted in place for frame-relative
+// areas (L), so callers must index the buffer with the adjusted byteOff.
+std::vector<uint8_t> &bufferFor(uint8_t area, uint32_t db, uint32_t &byteOff,
                                 uint32_t width) {
   auto &s = state();
   if (area == SCL_RT_AREA_DB) {
@@ -163,7 +195,9 @@ std::vector<uint8_t> &bufferFor(uint8_t area, uint32_t db, uint32_t byteOff,
     byteOff += (uint32_t)s.lBase; // L-area access is frame-relative
   auto &buf = s.areaBytes[area];
   if (buf.empty()) {
-    uint64_t size = s.areaSize[area] ? s.areaSize[area] : kDefaultAreaSize;
+    uint64_t size = s.areaSize[area] ? s.areaSize[area]
+                     : area == SCL_RT_AREA_L ? kDefaultLAreaSize
+                                              : kDefaultAreaSize;
     buf.resize(size, 0);
   }
   if ((uint64_t)byteOff + width > buf.size()) {
@@ -188,8 +222,10 @@ int64_t scl_rt_read(uint8_t area, uint32_t db, uint32_t byteOff,
     fprintf(stderr, "scl_rt_read: invalid width %u (area '%c' db %u byte %u)\n", widthBytes, area, db, byteOff);
     abort();
   }
-  if (area == SCL_RT_AREA_DB && db == 0xFFFF)
-    db = state().currentDi; // DI-area pointer: DB from the DI register
+  if (area == SCL_RT_AREA_DB && db == 0xFFFF) {
+    db = state().currentDi;  // DI-area pointer: DB from the DI register
+    byteOff += ar2ByteOff(); // multi-instance base offset from AR2
+  }
   if (area == SCL_RT_AREA_DB && db == 0 && state().currentDb != 0)
     db = state().currentDb; // DB 0 operand = current DB (AUF/OPN)
   // Timers/counters: the value is computed from the sim state (remaining
@@ -237,8 +273,10 @@ void scl_rt_write(uint8_t area, uint32_t db, uint32_t byteOff,
     fprintf(stderr, "scl_rt_write: invalid width %u\n", widthBytes);
     abort();
   }
-  if (area == SCL_RT_AREA_DB && db == 0xFFFF)
-    db = state().currentDi; // DI-area pointer: DB from the DI register
+  if (area == SCL_RT_AREA_DB && db == 0xFFFF) {
+    db = state().currentDi;  // DI-area pointer: DB from the DI register
+    byteOff += ar2ByteOff(); // multi-instance base offset from AR2
+  }
   if (area == SCL_RT_AREA_DB && db == 0 && state().currentDb != 0)
     db = state().currentDb; // DB 0 operand = current DB (AUF/OPN)
   // Writing a counter value (e.g. SCL `%Cn := v`) sets the count; writing a
@@ -274,8 +312,10 @@ bool scl_rt_read_bit(uint8_t area, uint32_t db, uint32_t byteOff,
     fprintf(stderr, "scl_rt_read_bit: invalid bit %u\n", bit);
     abort();
   }
-  if (area == SCL_RT_AREA_DB && db == 0xFFFF)
-    db = state().currentDi; // DI-area pointer: DB from the DI register
+  if (area == SCL_RT_AREA_DB && db == 0xFFFF) {
+    db = state().currentDi;  // DI-area pointer: DB from the DI register
+    byteOff += ar2ByteOff(); // multi-instance base offset from AR2
+  }
   if (area == SCL_RT_AREA_DB && db == 0 && state().currentDb != 0)
     db = state().currentDb; // DB 0 operand = current DB (AUF/OPN)
   // Timer/counter status bit (AWL `U T n` / `U Z n`).
@@ -299,8 +339,10 @@ void scl_rt_write_bit(uint8_t area, uint32_t db, uint32_t byteOff,
     fprintf(stderr, "scl_rt_write_bit: invalid bit %u\n", bit);
     abort();
   }
-  if (area == SCL_RT_AREA_DB && db == 0xFFFF)
-    db = state().currentDi; // DI-area pointer: DB from the DI register
+  if (area == SCL_RT_AREA_DB && db == 0xFFFF) {
+    db = state().currentDi;  // DI-area pointer: DB from the DI register
+    byteOff += ar2ByteOff(); // multi-instance base offset from AR2
+  }
   if (area == SCL_RT_AREA_DB && db == 0 && state().currentDb != 0)
     db = state().currentDb; // DB 0 operand = current DB (AUF/OPN)
   auto &buf = bufferFor(area, db, byteOff, 1);
@@ -473,7 +515,12 @@ uint64_t scl_rt_pack_s7(uint32_t area, uint32_t db, uint32_t byte,
 void scl_rt_l_push(uint32_t bytes) {
   auto &s = state();
   s.lFrames.push_back(s.lBase);
-  s.lBase += (bytes + 1) & ~uint64_t(1); // frames are even-aligned
+  s.frameSaves.push_back({s.ars[0], s.ars[1], s.currentDb, s.currentDi});
+  // frames are even-aligned and always advance by at least 2 bytes, so
+  // blocks without TEMP vars still get a separate L frame (a callee must
+  // not clobber the caller's LB/LW/LD local data)
+  uint64_t adv = (bytes + 1) & ~uint64_t(1);
+  s.lBase += adv < 2 ? 2 : adv;
 }
 
 void scl_rt_l_pop(void) {
@@ -481,7 +528,161 @@ void scl_rt_l_pop(void) {
   if (!s.lFrames.empty()) {
     s.lBase = s.lFrames.back();
     s.lFrames.pop_back();
+    if (!s.frameSaves.empty()) {
+      auto &f = s.frameSaves.back();
+      s.ars[0] = f.ar1;
+      s.ars[1] = f.ar2;
+      s.currentDb = f.db;
+      s.currentDi = f.di;
+      s.frameSaves.pop_back();
+    }
   }
+}
+
+// Base of the FC parameter area within an L frame; must match kLocalBase
+// in lib/AwlGen/AwlGen.cpp.
+static const uint32_t kParamBase = 8192;
+
+// Copy the FC parameter area between the absolute marker staging area
+// (where the call site stores the actual parameters) and the callee's own L
+// frame at kParamBase. param_in runs after the callee's scl_rt_l_push,
+// param_out before scl_rt_l_pop, so the callee's frame is current in both.
+static void paramCopy(uint32_t bytes, bool toCallee) {
+  auto &s = state();
+  auto &lbuf = s.areaBytes[SCL_RT_AREA_L];
+  if (lbuf.empty())
+    lbuf.resize(kDefaultLAreaSize, 0);
+  auto &mbuf = s.areaBytes[SCL_RT_AREA_M];
+  if (mbuf.empty())
+    mbuf.resize(kDefaultAreaSize, 0);
+  uint64_t lOff = s.lBase + kParamBase;   // callee frame parameter area
+  uint64_t mOff = kParamBase;             // marker staging area
+  uint64_t dst = toCallee ? lOff : mOff;
+  uint64_t src = toCallee ? mOff : lOff;
+  std::vector<uint8_t> &dstBuf = toCallee ? lbuf : mbuf;
+  std::vector<uint8_t> &srcBuf = toCallee ? mbuf : lbuf;
+  if (dst + bytes > dstBuf.size() || src + bytes > srcBuf.size()) {
+    fprintf(stderr, "scl_rt: FC parameter area out of bounds "
+                    "(need %llu bytes)\n",
+            (unsigned long long)(dst + bytes));
+    abort();
+  }
+  memcpy(dstBuf.data() + dst, srcBuf.data() + src, bytes);
+}
+
+void scl_rt_param_in(uint32_t bytes) { paramCopy(bytes, true); }
+
+void scl_rt_param_out(uint32_t bytes) { paramCopy(bytes, false); }
+
+// MARK: system function blocks (SFB 0-5)
+//
+// The instance area is in the DI-register DB at the AR2 base offset
+// (awlsim systemblocks; layout: counters CU/CD/R/LD @0.0-0.3, PV @2,
+// Q @4.0, CV @6, CUO/COD @8.0/8.1; timers IN @0.0, PT @2, Q @4.0, ET @6).
+void scl_rt_sfb(uint32_t n) {
+  auto &s = state();
+  if (s.vtable && s.vtable->sfb) {
+    s.vtable->sfb(n);
+    return;
+  }
+  uint32_t db = s.currentDi;
+  uint32_t base = ar2ByteOff();
+  auto rd = [&](uint32_t byte, uint8_t w) {
+    return scl_rt_read(SCL_RT_AREA_DB, db, base + byte, w);
+  };
+  auto wr = [&](uint32_t byte, uint8_t w, uint64_t v) {
+    scl_rt_write(SCL_RT_AREA_DB, db, base + byte, w, v);
+  };
+  auto rdb = [&](uint32_t byte, uint8_t bit) {
+    return scl_rt_read_bit(SCL_RT_AREA_DB, db, base + byte, bit);
+  };
+  auto wrb = [&](uint32_t byte, uint8_t bit, bool v) {
+    scl_rt_write_bit(SCL_RT_AREA_DB, db, base + byte, bit, v);
+  };
+  uint64_t key = ((uint64_t)db << 32) | base;
+  if (n <= 2) { // CTU / CTD / CTUD counters
+    int cv = (int16_t)(uint16_t)(rd(6, 2) & 0xFFFF);
+    int pv = (int16_t)(uint16_t)(rd(2, 2) & 0xFFFF);
+    bool r = rdb(0, 2);
+    bool ld = rdb(0, 3);
+    bool ldEdge = ld && !s.sfbPrevLd[key];
+    s.sfbPrevLd[key] = ld;
+    if (ldEdge)
+      cv = pv; // LD: load PV into CV
+    if (n == 0) { // CTU
+      bool cu = rdb(0, 0), cuo = rdb(8, 0);
+      bool edge = cu && !cuo;
+      wrb(8, 0, cu);
+      if (r)
+        cv = 0;
+      else if (edge && cv < 32767)
+        cv++;
+      wr(6, 2, (uint16_t)cv);
+      wrb(4, 0, cv >= pv);
+    } else if (n == 1) { // CTD
+      bool cd = rdb(0, 1), cod = rdb(8, 1);
+      bool edge = cd && !cod;
+      wrb(8, 1, cd);
+      if (r)
+        cv = 0;
+      else if (edge && cv > -32768)
+        cv--;
+      wr(6, 2, (uint16_t)cv);
+      wrb(4, 0, cv <= pv);
+    } else { // CTUD
+      bool cu = rdb(0, 0), cuo = rdb(8, 0);
+      bool cd = rdb(0, 1), cod = rdb(8, 1);
+      bool eu = cu && !cuo, ed = cd && !cod;
+      wrb(8, 0, cu);
+      wrb(8, 1, cd);
+      if (r)
+        cv = 0;
+      else if (eu && cv < 32767)
+        cv++;
+      else if (ed && cv > -32768)
+        cv--;
+      wr(6, 2, (uint16_t)cv);
+      wrb(4, 0, cv >= pv);
+    }
+    return;
+  }
+  // SFB3 TON / SFB4 TOF / SFB5 TP
+  uint64_t pt = s5timeToMs(rd(2, 2) & 0xFFFF);
+  bool in = rdb(0, 0);
+  auto &st = s.sfbTimers[key];
+  uint64_t now = s.clockMs;
+  if (n == 3) { // TON
+    if (in && !st.prevIn) {
+      st.running = true;
+      st.startMs = now;
+      st.done = false;
+    }
+    if (st.running && !st.done && now - st.startMs >= pt) {
+      st.running = false;
+      st.done = true;
+    }
+    wrb(4, 0, st.done);
+    wr(6, 2, st.done ? pt : (now - st.startMs));
+  } else if (n == 4) { // TOF
+    if (!in && st.prevIn) {
+      st.running = true;
+      st.startMs = now;
+    }
+    if (st.running && now - st.startMs >= pt)
+      st.running = false;
+    wrb(4, 0, in || st.running);
+    wr(6, 2, in ? 0 : (now - st.startMs > pt ? pt : now - st.startMs));
+  } else { // TP
+    if (in && !st.prevIn) {
+      st.running = true;
+      st.startMs = now;
+    }
+    if (st.running && now - st.startMs >= pt)
+      st.running = false;
+    wrb(4, 0, st.running);
+    wr(6, 2, st.running ? (now - st.startMs > pt ? pt : now - st.startMs) : 0);
+  }
+  st.prevIn = in;
 }
 
 void scl_rt_sleep(uint32_t ms) {

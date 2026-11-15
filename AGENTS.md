@@ -172,6 +172,46 @@ has no `\b` — use python3 for regex edits.
   labels, default = SPL operand); `BEB`/`BEC` lower to the new `awl.be_if`
   op (conditional block end); `BEU` = `BE`. S5T encoding picks the FINEST
   timebase covering the value (awlsim `Timer_seconds_to_s5t`), units in ms.
+- Block-call model (awlsim semantics, all in `lib/AwlGen/AwlGen.cpp` +
+  `lib/Runtime/SimRuntime.cpp` + `AwlCallOpLowering` in LowerToStd.cpp):
+  - Every `awl.block` pushes an L frame (`scl_rt_l_push`) at entry and pops
+    before every return. `bufferFor` adjusts `byteOff` IN PLACE for the L
+    area (callers must index with the adjusted offset — the old bug was
+    returning the buffer but indexing with the unadjusted offset). Frames
+    advance by >= 2 bytes even when empty, so TEMP-less blocks still get a
+    separate frame. l_push/l_pop also save/restore AR1/AR2 and the DB/DI
+    registers (S7 restores them on block return).
+  - FC interface params live in the block's own L frame at `kLocalBase`
+    (8192, = runtime `kParamBase`); the block's `lframe` attr covers
+    `kLocalBase + paramBytes`. `paramBytes` attr on `awl.block` triggers
+    `scl_rt_param_in` (after push) / `scl_rt_param_out` (before pop), which
+    copy the param area between the absolute MARKER staging area (call-site
+    stores/copy-backs, `kLocalBase` in M) and the callee frame. This makes
+    recursive FCs correct (factorial.awl) and VAR_IN_OUT by-reference work.
+    FC interface layout = canonical order VAR_INPUT, VAR_OUTPUT (+ implicit
+    RET_VAL right after OUT), VAR_IN_OUT, VAR — independent of source order
+    (awlsim `blockinterface.getAllFields`). The pre-scan runs TWICE
+    (`preScan()` clears and recollects) so FB/SFB-typed members
+    (multi-instance vars) get the right size via `gFbLayouts`/`sfbLayoutOf`.
+  - FB locals use DB-area directs with db = -1 (0xFFFF): the runtime maps
+    that to the DI register AND adds the AR2 byte offset (awlsim cpu.py
+    getArea_DI/setArea_DI). `CALL FB n, DB m` sets the DI register and,
+    via the `instdb` attr, AR2 := P#DBX 0.0 (saved/restored around the call).
+    `CALL #var` (multi-instance FB/SFB member) sets db = -1 + `ar2off` attr;
+    AR2 += ar2off (relative, nests correctly) and DBR := DI (awlsim
+    __call_MULTI_FB). SFB0-5 calls (`sfc` attr, callee SFBn) lower to
+    `scl_rt_sfb(n)` in the runtime (counters CTU/CTD/CTUD, timers TON/TOF/TP
+    at DI DB + AR2 base; layouts in `sfbLayoutOf`).
+  - `UC/CC FC [MW x]` (indirect call) builds a jump-table dispatch over all
+    FC/FB blocks known in the file (`__ind<n>_...` labels + `awl.call` per
+    case), like SPL.
+  - `P##name` pointers: FB interface -> area 0x85 (DI), FC interface -> 0x87
+    (VL, parent L frame, at kLocalBase+byte), TEMP -> 0x86 (own frame).
+    `P#DBX` lexes as area 0x85. REAL-typed locals load as f32 (bitcast in
+    `lowerDirectLoad`; `lastOperandType` tracks the member type).
+  - `awl.call` attrs: `callee`, optional `rlo` (CC), `db` (FB instance DB;
+    -1 = current DI for multi-instance), `instdb` (unit: explicit instance
+    DB -> AR2 set), `ar2off` (multi-instance base byte), `sfc` (SFB number).
 - UDT/inline-STRUCT handling: type names may contain a space (`TYPE UDT 1`);
   `parseStructBody` must compute `layout.size` even when it exits via an
   END keyword (goto done), must skip `STRUCT`/header-keyword lines, and

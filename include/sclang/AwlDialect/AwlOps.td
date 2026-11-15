@@ -37,7 +37,8 @@ def BlockOp : AwlTopLevelOp<"block", [Symbol]> {
         awl.be
       }
   }];
-  let arguments = (ins StrAttr:$sym_name, OptionalAttr<I32Attr>:$lframe);
+  let arguments = (ins StrAttr:$sym_name, OptionalAttr<I32Attr>:$lframe,
+                       OptionalAttr<I32Attr>:$paramBytes);
   let regions = (region AnyRegion:$body);
   let assemblyFormat = "$sym_name attr-dict-with-keyword $body";
   let hasVerifier = 1;
@@ -239,7 +240,8 @@ def CallOp : AwlOp<"call", [DeclareOpInterfaceMethods<CallOpInterface>]> {
   // FC parameters (a variadic argument list) are not supported yet; the
   // only operand is the optional RLO of CC.
   let arguments = (ins FlatSymbolRefAttr:$callee, Optional<Awl_Bool>:$rlo,
-                       OptionalAttr<I32Attr>:$db);
+                       OptionalAttr<I32Attr>:$db, OptionalAttr<UnitAttr>:$instdb,
+                       OptionalAttr<I32Attr>:$ar2off, OptionalAttr<I32Attr>:$sfc);
   let results = (outs);
   let assemblyFormat = "attr-dict $callee (`,` `rlo` $rlo^ `:` type($rlo))? (`,` `db` $db^)?";
 }

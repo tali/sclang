@@ -458,9 +458,15 @@ private:
             db = db * 10 + (cur.front() - '0');
             cur = cur.drop_front();
           }
-          // remaining letters of the area word (DBX/DBB/DBW/DBD)
-          while (!cur.empty() && isalpha((unsigned char)cur.front()))
+          // DBX = the instance DB (DI area, code 0x85); other remaining
+          // letters of the area word (DBB/DBW/DBD) are skipped
+          if (!cur.empty() && toupper((unsigned char)cur.front()) == 'X') {
+            area = 0x85;
             cur = cur.drop_front();
+          } else {
+            while (!cur.empty() && isalpha((unsigned char)cur.front()))
+              cur = cur.drop_front();
+          }
         } else if (!cur.empty() && isalpha((unsigned char)cur.front())) {
           char a = (char)toupper((unsigned char)cur.front());
           cur = cur.drop_front();
@@ -850,6 +856,54 @@ static std::string typeNameOf(Lexer &lx) {
 }
 
 
+// Registry of FB layouts, set during the pre-scan so that typeInfo can size
+// FB/SFB-typed members (multi-instance variables). The pre-scan runs twice:
+// the first pass collects all block layouts, the second recomputes member
+// offsets with the FB sizes known.
+static std::map<int32_t, Layout> *gFbLayouts = nullptr;
+
+// Standard instance-DB layout of a system function block (SFB 0-5:
+// CTU/CTD/CTUD counters, TON/TOF/TP timers)
+static Layout sfbLayoutOf(int32_t n) {
+  Layout L;
+  auto bit = [&](const char *name, int32_t byte, int32_t b) {
+    MemberInfo m;
+    m.type = "BOOL";
+    m.isBit = true;
+    m.widthBits = 1;
+    m.byte = byte;
+    m.bit = b;
+    L.members[name] = m;
+  };
+  auto word = [&](const char *name, int32_t byte, const char *ty, int32_t wb) {
+    MemberInfo m;
+    m.type = ty;
+    m.widthBits = wb;
+    m.byte = byte;
+    L.members[name] = m;
+  };
+  if (n <= 2) { // SFB0 CTU / SFB1 CTD / SFB2 CTUD
+    bit("CU", 0, 0);
+    bit("CD", 0, 1);
+    bit("R", 0, 2);
+    bit("LD", 0, 3);
+    word("PV", 2, "INT", 16);
+    bit("Q", 4, 0);
+    word("CV", 6, "INT", 16);
+    bit("CUO", 8, 0);
+    if (n == 2)
+      bit("COD", 8, 1);
+    L.size = 10;
+  } else { // SFB3 TON / SFB4 TOF / SFB5 TP
+    bit("IN", 0, 0);
+    word("PT", 2, "TIME", 16);
+    bit("Q", 4, 0);
+    word("ET", 6, "TIME", 16);
+    L.size = 8;
+  }
+  return L;
+}
+
 // size/alignment/width of a (non-array) type; BOOL is bit-packed (size 0)
 static void typeInfo(const std::string &ty, const std::map<std::string, Layout> &udts,
                      int32_t &size, int32_t &align, int32_t &widthBits,
@@ -877,6 +931,23 @@ static void typeInfo(const std::string &ty, const std::map<std::string, Layout> 
   auto it = udts.find(ty);
   if (it != udts.end()) {
     size = it->second.size;
+    align = size >= 2 ? 2 : 1;
+    widthBits = size * 8;
+    return;
+  }
+  if (ty.rfind("FB ", 0) == 0 && gFbLayouts) {
+    // multi-instance FB variable: occupies the referenced FB's instance size
+    auto fit = gFbLayouts->find(atoi(ty.c_str() + 3));
+    if (fit != gFbLayouts->end()) {
+      size = fit->second.size;
+      align = size >= 2 ? 2 : 1;
+      widthBits = size * 8;
+      return;
+    }
+  }
+  if (ty.rfind("SFB ", 0) == 0) {
+    Layout sl = sfbLayoutOf(atoi(ty.c_str() + 4));
+    size = sl.size;
     align = size >= 2 ? 2 : 1;
     widthBits = size * 8;
     return;
@@ -1077,6 +1148,8 @@ public:
   std::map<int32_t, Layout> dbLayouts;       // DATA_BLOCK DB n (STRUCT or FB ref)
   std::map<int32_t, Layout> fbLayouts;       // FUNCTION_BLOCK FB n interface
   std::map<int32_t, Layout> fcLayouts;       // FUNCTION FC n parameters
+  int indirectSeq = 0; // unique label prefix for indirect-call dispatch
+  std::map<int32_t, Layout> sfbCache; // SFB n instance layouts
   std::map<int32_t, int32_t> dbFbRef;        // DATA_BLOCK DB n -> "FB n" line
   std::map<std::string, Layout> tempLayouts; // VAR_TEMP of OB/FC/FB (L-stack)
   std::map<std::string, Layout> namedLayouts; // FUNCTION(_BLOCK) quoted names
@@ -1085,53 +1158,22 @@ public:
   const Layout *curTempLayout = nullptr;     // VAR_TEMP of the block being parsed
   bool curBlockFb = false;
   int32_t curBlockNum = 0;
-  static constexpr int32_t kLocalBase = 8192; // L-area base for FC params
-
-  /// Standard instance-DB layout of a system function block (SFB 0-5:
-  /// CTU/CTD/CTUD counters, TON/TOF/TP timers)
-  static Layout sfbLayout(int32_t n) {
-    Layout L;
-    auto bit = [&](const char *name, int32_t byte, int32_t b) {
-      MemberInfo m;
-      m.type = "BOOL";
-      m.isBit = true;
-      m.widthBits = 1;
-      m.byte = byte;
-      m.bit = b;
-      L.members[name] = m;
-    };
-    auto word = [&](const char *name, int32_t byte, const char *ty, int32_t wb) {
-      MemberInfo m;
-      m.type = ty;
-      m.widthBits = wb;
-      m.byte = byte;
-      L.members[name] = m;
-    };
-    if (n <= 2) { // SFB0 CTU / SFB1 CTD / SFB2 CTUD
-      bit("CU", 0, 0);
-      bit("CD", 0, 1);
-      bit("R", 0, 2);
-      bit("LD", 0, 3);
-      word("PV", 2, "INT", 16);
-      bit("Q", 4, 0);
-      word("CV", 6, "INT", 16);
-      bit("CUO", 8, 0);
-      if (n == 2)
-        bit("COD", 8, 1);
-      L.size = 10;
-    } else { // SFB3 TON / SFB4 TOF / SFB5 TP
-      bit("IN", 0, 0);
-      word("PT", 2, "TIME", 16);
-      bit("Q", 4, 0);
-      word("ET", 6, "TIME", 16);
-      L.size = 8;
-    }
-    return L;
-  }
+  // base of the FC parameter area within the block's L frame; must match
+  // kParamBase in lib/Runtime/SimRuntime.cpp (scl_rt_param_in/out)
+  static constexpr int32_t kLocalBase = 8192;
 
   /// Pre-scan the file for TYPE / FUNCTION_BLOCK / FUNCTION / DATA_BLOCK
   /// declarations and collect their member layouts (single forward pass).
   void preScan() {
+    // idempotent re-run: clear everything collected by a previous pass
+    udtLayouts.clear();
+    dbLayouts.clear();
+    fbLayouts.clear();
+    fcLayouts.clear();
+    tempLayouts.clear();
+    namedLayouts.clear();
+    dbFbRef.clear();
+    gFbLayouts = &fbLayouts;
     Lexer lx(sourceText, file);
     lx.start();
     while (lx.getCurToken() != Tok::eof) {
@@ -1216,8 +1258,20 @@ public:
           blockName = kind + std::to_string(num);
           Lptr = kind == "FC" ? &fcLayouts[num] : &fbLayouts[num];
         }
+        // FUNCTION FC n : <retType> — the return value is an implicit
+        // RET_VAL output parameter (awlsim adds it after VAR_OUTPUT)
+        std::string retType;
+        if (kind == "FC" && lx.getCurToken() == Tok::colon) {
+          lx.next();
+          retType = typeNameOf(lx);
+        }
         Layout &L = *Lptr;
-        // interface sections up to BEGIN
+        // Interface sections are collected per section and merged in the
+        // canonical S7 order VAR_INPUT, VAR_OUTPUT, VAR_IN_OUT, VAR —
+        // independent of the order the sections appear in the source
+        // (awlsim blockinterface.getAllFields uses the same order).
+        Layout secLayouts[5];
+        bool secSeen[5] = {false, false, false, false, false};
         while (lx.getCurToken() != Tok::eof) {
           if (lx.getCurToken() == Tok::ident) {
             std::string s = upperStr(lx.getIdent());
@@ -1231,8 +1285,10 @@ public:
                         : s == "VAR_IN_OUT" ? 2 : s == "VAR_TEMP" ? 4 : 3;
               // TEMP vars live in the block's L-stack frame, not in the
               // interface (param) address space
-              Layout &dst = sec == 4 ? tempLayouts[blockName] : L;
+              Layout &dst = sec == 4 ? tempLayouts[blockName] : secLayouts[sec];
               parseStructBody(lx, dst, udtLayouts, {"END_VAR"}, sec);
+              if (sec != 4)
+                secSeen[sec] = true;
               continue;
             }
             if (s == "BEGIN") {
@@ -1241,6 +1297,48 @@ public:
             }
           }
           lx.next();
+        }
+        bool retValAdded = false;
+        for (int sec : {0, 1, 2, 3}) {
+          if (secSeen[sec]) {
+            int32_t baseBit = L.bitCursor;
+            for (auto &kv : secLayouts[sec].members) {
+              MemberInfo m = kv.second;
+              int32_t absBit = baseBit + m.byte * 8 + m.bit;
+              m.byte = absBit / 8;
+              m.bit = absBit % 8;
+              L.members[kv.first] = m;
+            }
+            for (auto &kv : secLayouts[sec].memberInit)
+              L.memberInit[kv.first] = kv.second;
+            L.bitCursor += secLayouts[sec].bitCursor;
+          }
+          // the implicit RET_VAL of an FC goes right after VAR_OUTPUT
+          // (awlsim appends it to the OUT fields, even when empty)
+          if (sec == 1 && !retValAdded && kind == "FC" && !retType.empty() &&
+              retType != "VOID") {
+            int32_t sz, al, wb;
+            bool isb;
+            typeInfo(retType, udtLayouts, sz, al, wb, isb);
+            int32_t bit = (L.bitCursor + 7) & ~7;
+            if (sz >= 2)
+              bit = (bit + 15) & ~15;
+            MemberInfo m;
+            m.type = retType;
+            m.byte = bit / 8;
+            m.bit = 0;
+            m.widthBits = wb;
+            m.section = 1;
+            L.members["RET_VAL"] = m;
+            L.bitCursor = bit + sz * 8;
+            retValAdded = true;
+          }
+        }
+        {
+          int32_t off = (L.bitCursor + 7) / 8;
+          if (off % 2)
+            ++off;
+          L.size = off;
         }
         // skip the body up to END_FUNCTION*
         while (lx.getCurToken() != Tok::eof) {
@@ -1294,7 +1392,7 @@ public:
               if (s == "FB")
                 dbFbRef[db] = n;
               else if (s == "SFB")
-                dbLayouts[db] = sfbLayout(n);
+                dbLayouts[db] = sfbLayoutOf(n);
               continue;
             }
           }
@@ -1314,7 +1412,8 @@ public:
 
   mlir::OwningOpRef<mlir::ModuleOp> run() {
     module = mlir::ModuleOp::create(builder.getUnknownLoc());
-    preScan();
+    preScan();  // pass 1: collect all block layouts (FB sizes unknown yet)
+    preScan();  // pass 2: recompute member offsets with FB sizes known
     lexer.start();
     if (!parseModule())
       return nullptr;
@@ -1324,7 +1423,8 @@ public:
       auto wrapLoc = loc();
       builder.setInsertionPointToEnd(module.getBody());
       auto wrap = builder.create<awl::BlockOp>(
-          wrapLoc, builder.getStringAttr("_mlir_ciface_OB1"), mlir::IntegerAttr());
+          wrapLoc, builder.getStringAttr("_mlir_ciface_OB1"), mlir::IntegerAttr(),
+          mlir::IntegerAttr());
       auto *entry = builder.createBlock(&wrap.getBody());
       builder.setInsertionPointToStart(entry);
       SmallVector<mlir::NamedAttribute, 1> attrs;
@@ -1340,7 +1440,7 @@ public:
       builder.setInsertionPointToEnd(module.getBody());
       auto wrap = builder.create<awl::BlockOp>(
           wrapLoc, builder.getStringAttr("_mlir_ciface___scl_db_init"),
-          mlir::IntegerAttr());
+          mlir::IntegerAttr(), mlir::IntegerAttr());
       auto *entry = builder.createBlock(&wrap.getBody());
       builder.setInsertionPointToStart(entry);
       SmallVector<mlir::NamedAttribute, 1> attrs;
@@ -1378,6 +1478,9 @@ private:
   // awl.block "__scl_db_init" collecting DATA_BLOCK initial values, created
   // lazily; the JIT driver invokes it once before the first scan cycle.
   awl::BlockOp dbInitBlock = nullptr;
+  // resolved type name of the most recent parsed operand (e.g. REAL, so
+  // that `L #REALVAR` loads a float, matching the member's data type)
+  std::string lastOperandType;
   // width (bits) of the most recent indirect [ARn, P#x.y] operand
   int32_t lastIndirectWidth = 0;
   // DB number of the DATA_BLOCK currently being parsed (-1 = none): bare
@@ -1563,7 +1666,8 @@ private:
     if (!dbInitBlock) {
       builder.setInsertionPointToEnd(module.getBody());
       dbInitBlock = builder.create<awl::BlockOp>(
-          loc(), builder.getStringAttr("__scl_db_init"), mlir::IntegerAttr());
+          loc(), builder.getStringAttr("__scl_db_init"), mlir::IntegerAttr(),
+          mlir::IntegerAttr());
       builder.createBlock(&dbInitBlock.getBody());
     }
     OpBuilder::InsertionGuard guard(builder);
@@ -2006,10 +2110,19 @@ private:
     builder.setInsertionPointToEnd(module.getBody());
     auto blockOp =
         builder.create<awl::BlockOp>(blockLoc, builder.getStringAttr(name),
-                                     mlir::IntegerAttr());
-    if (curTempLayout && curTempLayout->size > 0)
-      blockOp->setAttr("lframe",
-                       builder.getI32IntegerAttr(curTempLayout->size));
+                                     mlir::IntegerAttr(), mlir::IntegerAttr());
+    // FC interface parameters live in the block's own L frame at
+    // kLocalBase (frame-relative), so recursive calls are isolated; the
+    // frame must cover both the TEMP vars and the parameter area
+    int32_t tempSize = curTempLayout ? curTempLayout->size : 0;
+    int32_t paramBytes = (kind == "FC" && curLayout) ? curLayout->size : 0;
+    if (paramBytes > 0)
+      blockOp->setAttr("paramBytes", builder.getI32IntegerAttr(paramBytes));
+    int32_t frame = tempSize;
+    if (paramBytes > 0 && kLocalBase + paramBytes > frame)
+      frame = kLocalBase + paramBytes;
+    if (frame > 0)
+      blockOp->setAttr("lframe", builder.getI32IntegerAttr(frame));
     auto *entry = builder.createBlock(&blockOp.getBody());
     builder.setInsertionPointToStart(entry);
     acc.clear();
@@ -2465,8 +2578,8 @@ private:
     if (m == "R")
       return parseSetReset(false);
     if (m == "AW" || m == "OW" || m == "XOW" || m == "AD" || m == "OD" ||
-        m == "XOD" || m == "UD" || m == "UW")
-      return parseWordLogic(m == "UD" ? "AD" : m == "UW" ? "OW" : m);
+        m == "XOD" || m == "UD" || m == "UW" || m == "UB" || m == "OB")
+      return parseWordLogic(m);
     if (m == "SP" || m == "SE" || m == "SS" || m == "SV" || m == "SI" ||
         m == "SA" || m == "SD") // SD = English off-delay (German SA)
       return parseTimerStart(m == "SD" ? "SA" : m);
@@ -2942,23 +3055,33 @@ private:
     std::string name = upperStr(lexer.getIdent());
     lexer.next();
     int32_t byte = 0, bit = 0;
+    bool isParam = false;
     if (curLayout) {
       auto it = curLayout->members.find(name);
       if (it != curLayout->members.end()) {
         byte = it->second.byte;
         bit = it->second.bit;
+        isParam = true;
       }
     }
-    if (!curLayout || curLayout->members.count(name) == 0) {
-      if (curTempLayout) {
-        auto it = curTempLayout->members.find(name);
-        if (it != curTempLayout->members.end()) {
-          byte = it->second.byte;
-          bit = it->second.bit;
-        }
+    if (!isParam && curTempLayout) {
+      auto it = curTempLayout->members.find(name);
+      if (it != curTempLayout->members.end()) {
+        byte = it->second.byte;
+        bit = it->second.bit;
       }
     }
-    int64_t area = curBlockFb ? 0x85 : 0x86;
+    // FB interface -> instance DB (DI, 0x85); FC interface -> the caller's
+    // (parent) L frame (VL, 0x87) at the parameter area offset; TEMP -> the
+    // block's own L frame (0x86)
+    int64_t area;
+    if (curBlockFb)
+      area = 0x85;
+    else if (isParam) {
+      area = 0x87;
+      byte += kLocalBase;
+    } else
+      area = 0x86;
     return constInt(builder.getI64Type(),
                     (area << 24) | ((int64_t)byte * 8 + bit));
   }
@@ -3140,7 +3263,7 @@ private:
         if (it != curLayout->members.end()) {
           mi = &it->second;
           area = curBlockFb ? mlir::scl::DirectArea::DataBlock
-                            : mlir::scl::DirectArea::Marker;
+                            : mlir::scl::DirectArea::Local;
           byte = curBlockFb ? mi->byte : kLocalBase + mi->byte;
         }
       }
@@ -3201,8 +3324,13 @@ private:
             }
           }
         }
-        return mkDirect(area, 0, byte, bit, width);
+        lastOperandType = type;
+        // FB locals live in the instance DB addressed via the DI register
+        // (db -1); DI-area accesses add the AR2 multi-instance base offset
+        return mkDirect(area, area == mlir::scl::DirectArea::DataBlock ? -1 : 0,
+                        byte, bit, width);
       }
+      lastOperandType = "";
       uint32_t h = 5381;
       for (char c : name)
         h = h * 33 + (unsigned char)c;
@@ -3741,9 +3869,15 @@ private:
         }
       } else {
         // pseudo operands (DBLG/DBNO/DILG) already yield a constant
-        v = mlir::isa<mlir::scl::DirectType>(addr.getType())
-                ? zextAcc(builder.create<awl::LoadOp>(loc(), addr))
-                : addr;
+        if (mlir::isa<mlir::scl::DirectType>(addr.getType())) {
+          auto dt = mlir::cast<mlir::scl::DirectType>(addr.getType());
+          v = (lastOperandType == "REAL" && dt.getWidth() == 32)
+                  ? (mlir::Value)builder.create<awl::LoadOp>(
+                        loc(), builder.getF32Type(), addr)
+                  : zextAcc(builder.create<awl::LoadOp>(loc(), addr));
+        } else {
+          v = addr;
+        }
       }
     }
     if (!v)
@@ -4027,9 +4161,13 @@ private:
   }
 
   bool parseWordLogic(const std::string &m) {
-    // AW/OW/XOW operate on words (i16), AD/OD/XOD/UD on double words (i32)
-    auto ty = (m.size() == 3 && m[2] == 'D') ? builder.getI32Type()
-                                             : builder.getI16Type();
+    // AW/OW/XOW/UW operate on words (i16), AD/OD/XOD/UD on double words
+    // (i32), AB/OB/UB on bytes (i8); U (Und) = AND, O (Oder) = OR, X = XOR
+    char w = m.back();
+    auto ty = w == 'D' ? builder.getI32Type()
+             : w == 'B' ? builder.getI8Type()
+                        : builder.getI16Type();
+    char op = m[0] == 'U' ? 'A' : m[0];
     mlir::Value b, a;
     if (lexer.getCurToken() == Tok::integer || lexer.getCurToken() == Tok::real) {
       // immediate operand: ACCU1 op imm
@@ -4047,9 +4185,9 @@ private:
     a = castTo(a, ty);
     b = castTo(b, ty);
     mlir::Value r;
-    if (m[0] == 'A')
+    if (op == 'A')
       r = builder.create<awl::AndOp>(loc(), ty, a, b);
-    else if (m[0] == 'O')
+    else if (op == 'O')
       r = builder.create<awl::OrOp>(loc(), ty, a, b);
     else
       r = builder.create<awl::XOrOp>(loc(), ty, a, b);
@@ -4174,7 +4312,7 @@ private:
           return true;
         }
         actual = mlir::isa<mlir::scl::DirectType>(addr.getType())
-                     ? (mlir::Value)builder.create<awl::LoadOp>(loc(), addr)
+                     ? zextAcc(builder.create<awl::LoadOp>(loc(), addr))
                      : addr;
       }
     haveLhs:;
@@ -4226,7 +4364,7 @@ private:
         return true;
       }
       expected = mlir::isa<mlir::scl::DirectType>(addr.getType())
-                     ? (mlir::Value)builder.create<awl::LoadOp>(loc(), addr)
+                     ? zextAcc(builder.create<awl::LoadOp>(loc(), addr))
                      : addr;
     } else {
       bool bcd = lexer.curBcdLit();
@@ -4305,6 +4443,14 @@ private:
         lexer.next();
         return constInt(builder.getI32Type(), w == "TRUE" ? 1 : 0);
       }
+      if ((w == "T" || w == "C" || w == "Z") &&
+          lexer.peekToken() == Tok::integer) {
+        // T 42 / C 7 as a CALL param: the timer/counter NUMBER (block ref)
+        lexer.next();
+        int64_t n = lexer.getInteger();
+        lexer.next();
+        return constInt(builder.getI32Type(), n);
+      }
     }
     mlir::Value addr = parseOperand(false);
     if (!addr)
@@ -4325,9 +4471,31 @@ private:
         return false;
       rloVal = rlo;
     }
+    std::string kind;
+    std::string orig;
+    int64_t suffixed = 0;
+    bool hasSuffix = false;
+    int32_t multiBase = -1; // >= 0: CALL #var — multi-instance FB/SFB at this offset
     if (lexer.getCurToken() == Tok::localvar) {
-      // CALL #VAR: indirect block call (block number/name in a variable) —
-      // not modelled; call a stub so the code still runs
+      // CALL #VAR: call through a block-typed variable — a multi-instance
+      // FB/SFB embedded in the caller's instance DB at the member's offset
+      std::string vname = upperStr(lexer.getIdent());
+      lexer.next();
+      const MemberInfo *mi = nullptr;
+      if (curLayout) {
+        auto it = curLayout->members.find(vname);
+        if (it != curLayout->members.end())
+          mi = &it->second;
+      }
+      std::string vty = mi ? mi->type : "";
+      if (mi && (vty.rfind("FB ", 0) == 0 || vty.rfind("SFB ", 0) == 0)) {
+        bool isSfb = vty.rfind("SFB", 0) == 0;
+        kind = isSfb ? "SFB" : "FB";
+        suffixed = atoll(vty.c_str() + (isSfb ? 4 : 3));
+        hasSuffix = true;
+        multiBase = mi->byte;
+      } else {
+      // unknown variable: call a stub so the code still runs
       lexer.next();
       if (lexer.getCurToken() == Tok::comma) {
         lexer.next();
@@ -4357,15 +4525,14 @@ private:
       if (!cond)
         rloActive = false;
       return true;
-    }
+      }
+    } else {
     if (lexer.getCurToken() != Tok::ident)
       return error("expected FC/FB/SFC after CALL");
-    std::string orig = upperIdent();
-    std::string kind = orig;
+    orig = upperIdent();
+    kind = orig;
     lexer.next();
     // awlsim writes the block number attached: CALL SFC47(...)
-    int64_t suffixed = 0;
-    bool hasSuffix = false;
     for (const char *p : {"SFC", "SFB", "FC", "FB"}) {
       size_t l = strlen(p);
       if (orig.size() > l && orig.compare(0, l, p) == 0 &&
@@ -4376,6 +4543,7 @@ private:
         kind = p;
         break;
       }
+    }
     }
     if (kind != "FC" && kind != "FB" && kind != "SFC" && kind != "SFB") {
       // symbolic block name: CALL "GE_DT" (params) — callee referenced by name
@@ -4407,7 +4575,7 @@ private:
         rloActive = false;
       return true;
     }
-    if (kind == "SFC" || kind == "SFB") {
+    if ((kind == "SFC" || kind == "SFB") && multiBase < 0) {
       // system block call: CALL SFC/SFB [-]n [(params)] — accepted
       // syntactically; SFCs/SFBs are host-provided (runtime stub), a
       // documented gap for the JIT
@@ -4438,7 +4606,7 @@ private:
       llvm::SmallVector<mlir::NamedAttribute, 2> attrs;
       attrs.push_back(builder.getNamedAttr(
           "callee", mlir::FlatSymbolRefAttr::get(builder.getContext(),
-                                                  "SFC" + std::to_string(n))));
+                                                  kind + std::to_string(n))));
       attrs.push_back(
           builder.getNamedAttr("sfc", builder.getI32IntegerAttr((int32_t)n)));
       if (lexer.getCurToken() == Tok::lparen) {
@@ -4460,12 +4628,21 @@ private:
       return true;
     }
     int64_t num;
+    mlir::Value indirectNum;
     if (hasSuffix) {
       num = suffixed;
     } else if (lexer.getCurToken() == Tok::lbracket) {
-      // indirect block call: UC FC [MW 50] — block number is runtime data,
-      // not modelled; call block 0
+      // indirect block call: UC/CC FC [MW 50] — the block number is runtime
+      // data; keep the operand value and dispatch over the blocks known in
+      // this file (jump table, like SPL)
       lexer.next();
+      indirectNum = parseOperand(false);
+      if (!indirectNum)
+        return false;
+      // parseOperand yields the operand address for memory operands; the
+      // block number is the loaded value
+      if (mlir::isa<mlir::scl::DirectType>(indirectNum.getType()))
+        indirectNum = zextAcc(builder.create<awl::LoadOp>(loc(), indirectNum));
       while (lexer.getCurToken() != Tok::rbracket &&
              lexer.getCurToken() != Tok::eof)
         lexer.next();
@@ -4496,18 +4673,49 @@ private:
       dbNum = db;
       attrs.push_back(
           builder.getNamedAttr("db", builder.getI32IntegerAttr((int32_t)db)));
+      // explicit ", DB m": the callee runs with this instance DB (AR2 is
+      // set to P#DBX 0.0 for the duration of the call)
+      attrs.push_back(builder.getNamedAttr("instdb", builder.getUnitAttr()));
     }
-    if (kind == "FB" && !attrs.empty() && attrs.size() == 1)
+    if (kind == "FB" && multiBase < 0 && !attrs.empty() && attrs.size() == 1)
       // CALL FB n without ", DB m": pass DB 0 (the current DB register) so
       // the call matches the FB function's i32 argument
       attrs.push_back(
           builder.getNamedAttr("db", builder.getI32IntegerAttr(0)));
+    if (multiBase >= 0) {
+      // multi-instance call: instance DB = DI register (db -1), AR2 is set
+      // to P#DBX + multiBase for the duration of the call
+      attrs.push_back(
+          builder.getNamedAttr("db", builder.getI32IntegerAttr(-1)));
+      attrs.push_back(builder.getNamedAttr("instdb", builder.getUnitAttr()));
+      attrs.push_back(builder.getNamedAttr(
+          "ar2off", builder.getI32IntegerAttr(multiBase)));
+      if (kind == "SFB")
+        attrs.push_back(builder.getNamedAttr(
+            "sfc", builder.getI32IntegerAttr((int32_t)num)));
+    }
     // Optional parameter list: CALL FB 1, DB 2 (P := v, Q => addr).
     // Input params (:=) are stored into the callee's interface area before
     // the call (instance DB m for FB, L area for FC); output params (=>)
     // are read back after the call and stored to the target operand.
     const Layout *callLayout = nullptr;
-    if (kind == "FB") {
+    int32_t paramDb = 0;   // DB number for DB-area params (FB/SFB)
+    int32_t paramBase = 0; // multi-instance offset within the instance DB
+    if (multiBase >= 0) {
+      paramDb = -1; // DI register
+      paramBase = multiBase;
+      if (kind == "FB") {
+        auto it = fbLayouts.find((int32_t)num);
+        if (it != fbLayouts.end())
+          callLayout = &it->second;
+      } else {
+        auto sit = sfbCache.find((int32_t)num);
+        if (sit == sfbCache.end())
+          sit = sfbCache.emplace((int32_t)num, sfbLayoutOf((int32_t)num)).first;
+        callLayout = &sit->second;
+      }
+    } else if (kind == "FB") {
+      paramDb = (int32_t)dbNum;
       auto it = fbLayouts.find((int32_t)num);
       if (it != fbLayouts.end())
         callLayout = &it->second;
@@ -4598,9 +4806,15 @@ private:
           }
           continue;
         }
-        auto area = kind == "FB" ? mlir::scl::DirectArea::DataBlock
-                                 : mlir::scl::DirectArea::Marker;
-        int32_t byte = kind == "FB" ? m->byte : kLocalBase + m->byte;
+        // FC params at the call site use the absolute marker staging area
+        // (kLocalBase); scl_rt_param_in/out copies it to/from the callee's
+        // own L frame, so the caller's frame params are never clobbered.
+        // FB/SFB params go to the instance DB (DI register for multi-instance
+        // calls), at the multi-instance base offset if applicable.
+        bool isDbParam = kind == "FB" || (kind == "SFB" && multiBase >= 0);
+        auto area = isDbParam ? mlir::scl::DirectArea::DataBlock
+                              : mlir::scl::DirectArea::Marker;
+        int32_t byte = isDbParam ? paramBase + m->byte : kLocalBase + m->byte;
         int32_t width = m->widthBits ? m->widthBits : 16;
         bool isArray = m->type == "ARRAY" && m->count > 1;
         if (!isOutput) {
@@ -4611,9 +4825,9 @@ private:
           if (isArray && target &&
               mlir::isa<mlir::scl::DirectType>(target.getType())) {
             copyArrayParam(m, byte, target, area,
-                           kind == "FB" ? (int32_t)dbNum : 0, true);
+                           isDbParam ? paramDb : 0, true);
           } else {
-            auto addr = mkDirect(area, kind == "FB" ? (int32_t)dbNum : 0,
+            auto addr = mkDirect(area, isDbParam ? paramDb : 0,
                                  byte, m->bit, width);
             builder.create<awl::StoreOp>(loc(), v, addr);
           }
@@ -4635,22 +4849,63 @@ private:
       if (lexer.getCurToken() == Tok::rparen)
         lexer.next();
     }
-    builder.create<awl::CallOp>(loc(), mlir::TypeRange{},
-                                cond ? mlir::ValueRange{rloVal}
-                                     : mlir::ValueRange{},
-                                attrs);
+    if (indirectNum) {
+      // jump-table dispatch over the FC/FB blocks declared in this file
+      auto i32 = builder.getI32Type();
+      mlir::Value n = castTo(indirectNum, i32);
+      std::string base =
+          "__ind" + std::to_string(indirectSeq++) + "_";
+      std::vector<int32_t> nums;
+      const auto &layouts = kind == "FB" ? fbLayouts : fcLayouts;
+      for (auto &kv : layouts)
+        nums.push_back(kv.first);
+      std::sort(nums.begin(), nums.end());
+      if (cond)
+        builder.create<awl::JumpIfNotOp>(loc(), rloVal,
+                                         builder.getStringAttr(base + "end"));
+      for (int32_t num : nums) {
+        auto c = builder.create<awl::CmpEqOp>(loc(), builder.getI1Type(), n,
+                                              constInt(i32, num));
+        builder.create<awl::JumpIfOp>(
+            loc(), c,
+            builder.getStringAttr(base + "n" + std::to_string(num)));
+      }
+      builder.create<awl::JumpOp>(loc(), builder.getStringAttr(base + "end"));
+      for (int32_t num : nums) {
+        builder.create<awl::LabelOp>(
+            loc(), builder.getStringAttr(base + "n" + std::to_string(num)));
+        llvm::SmallVector<mlir::NamedAttribute, 2> cattrs;
+        cattrs.push_back(builder.getNamedAttr(
+            "callee", mlir::FlatSymbolRefAttr::get(
+                          builder.getContext(), kind + std::to_string(num))));
+        if (kind == "FB")
+          cattrs.push_back(builder.getNamedAttr(
+              "db", builder.getI32IntegerAttr((int32_t)dbNum)));
+        builder.create<awl::CallOp>(loc(), mlir::TypeRange{}, mlir::ValueRange{},
+                                    cattrs);
+        builder.create<awl::JumpOp>(loc(), builder.getStringAttr(base + "end"));
+      }
+      builder.create<awl::LabelOp>(loc(), builder.getStringAttr(base + "end"));
+    } else {
+      builder.create<awl::CallOp>(loc(), mlir::TypeRange{},
+                                  cond ? mlir::ValueRange{rloVal}
+                                       : mlir::ValueRange{},
+                                  attrs);
+    }
     // output params: read back from the callee's interface area
     for (auto &op : outParams) {
-      auto area = kind == "FB" ? mlir::scl::DirectArea::DataBlock
-                               : mlir::scl::DirectArea::Marker;
-      int32_t byte = kind == "FB" ? op.m->byte : kLocalBase + op.m->byte;
+      bool isDbParam = kind == "FB" || (kind == "SFB" && multiBase >= 0);
+      auto area = isDbParam ? mlir::scl::DirectArea::DataBlock
+                            : mlir::scl::DirectArea::Marker;
+      int32_t byte = isDbParam ? paramBase + op.m->byte
+                               : kLocalBase + op.m->byte;
       int32_t width = op.m->widthBits ? op.m->widthBits : 16;
       if (op.array && mlir::isa<mlir::scl::DirectType>(op.target.getType())) {
         copyArrayParam(op.m, byte, op.target, area,
-                       kind == "FB" ? (int32_t)dbNum : 0, false);
+                       isDbParam ? paramDb : 0, false);
         continue;
       }
-      auto addr = mkDirect(area, kind == "FB" ? (int32_t)dbNum : 0, byte,
+      auto addr = mkDirect(area, isDbParam ? paramDb : 0, byte,
                            op.m->bit, width);
       mlir::Value v = builder.create<awl::LoadOp>(loc(), addr);
       if (mlir::isa<mlir::scl::DirectType>(op.target.getType()))

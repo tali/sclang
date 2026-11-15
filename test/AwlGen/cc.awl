@@ -4,8 +4,8 @@
 // CC (conditional call, RLO = 1): parses to awl.call with an rlo operand;
 // lowering splits the block and guards the call with cf.cond_br on the rlo.
 // Comparisons use M-area loads so the canonicalizer cannot fold the rlo.
-// CHECK: awl.call @FB1, rlo %{{.*}} : i1, db 2
-// CHECK: awl.call @FB1, rlo %{{.*}} : i1, db 2
+// CHECK: awl.call {instdb} @FB1, rlo %{{.*}} : i1, db 2
+// CHECK: awl.call {instdb} @FB1, rlo %{{.*}} : i1, db 2
 // STD: cf.cond_br %{{.*}}, ^bb{{[0-9]+}}, ^bb{{[0-9]+}}
 // STD: call @FB1(%c2_i32) : (i32) -> ()
 // STD: cf.cond_br %{{.*}}, ^bb{{[0-9]+}}, ^bb{{[0-9]+}}

@@ -64,12 +64,12 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 
 ## Current results (LLVM 17 build, this writing)
 
-- AWL compile: **110/116 pass (95%)**
+- AWL compile: **109/116 pass (94%)**
 - SCL single file: **15/15 pass (100%)**
 - SCL per project: **16/17 pass (94%)**
 - JIT smoke (files with OB 1, full pipeline + execution): **58/77 pass (75%)**
 - Oracle (`__ASSERT` files with OB 1, value-level, exit code must be 0):
-  **11/53 pass (21%)** — see "Oracle tier" below
+  **18/53 pass (34%)** — see "Oracle tier" below
 
 ## Remaining failures = documented gaps
 
@@ -95,23 +95,34 @@ references when a file is compiled alone:
 
 ## Oracle tier: what passes and what the failures mean
 
-10 of 53 `__ASSERT` files pass all their executed oracles. The failures map
-to known feature gaps, not to wrong lowering of supported ops (each failure
-message names the line and the actual/expected values):
+18 of 53 `__ASSERT` files pass all their executed oracles (was 11). Block
+calls are now fully modeled: FC params are frame-relative with
+param_in/param_out copies (recursion works — factorial passes), RET_VAL is an
+implicit interface member, indirect `UC FC [MW x]` dispatches over the
+file's blocks, FB multi-instances (`CALL #var`) work via DI+AR2 addressing,
+AR1/AR2 and DB/DI registers are call-saved, and SFB0-5 run real counter/timer
+semantics in the runtime (`scl_rt_sfb`). `insn_CALL` and
+`insn_CALL_multiinstance` pass all oracles.
 
-- data blocks / instance DBs / arrays / UDTs / pointers / strings
-  (`DB`, `immediates`, `array`, `udt`, `dbpointer`, `string`, `struct`,
-  `latin1`): memory areas are not yet modeled (planned work);
-- counters (`insn_Z`), timers (`insn_SA/SE/SI/SS/SV`: actual stays at the
-  preset value — no timer runtime), startup info (`startup_*`,
-  `ob_startup_info`: OB number / previous-cycle time not provided);
-- parameterized `CALL` (`insn_CALL`, `sfc*`, `fc*`: callees lower to empty
-  stubs, so results are 0);
-- `stw_operators`: status-bit related oracles beyond the skipped `__STW`.
+Remaining oracle failures map to known gaps (each message names the line and
+actual/expected):
 
-As memory areas, counters, timers and parameter passing are implemented,
-the oracle pass rate should climb; the floor in `run_conformance.py`
-(`FLOOR_ORACLE = 0.15`) guards against regressions.
+- pointers/ANY/DB-pointer types (`pointer`, `anypointer`,
+  `any-to-instance-db`, `dbpointer`): `P#`-valued variables and ANY
+  pointer params are not yet modeled;
+- `array`, `string`, `struct`, `udt` (compile-tier gaps + a few value gaps:
+  struct.awl:212 DBLG size, udt.awl:132 nested-UDT init);
+- startup info (`startup_*`, `ob_startup_info`: OB number / cycle info in the
+  ACCU at OB start not provided);
+- `insn_SI`/`insn_Z`: timer/counter NUMBER indirection through interface
+  words; `insn_MISC`: BCD/INV edge cases; `latin1`: char literal encoding;
+- SFCs (`sfc21`, `sfc47`, `sfc64`) and IEC library FCs (`fc4_delete`,
+  `fc9_eq_dt`, `fc12_ge_dt`, `fc21_len`): still host stubs;
+- `stw_operators`: STW bit tracking (A0/A1/OV/OS) beyond the skipped
+  `__STW` asserts.
+
+The floor in `run_conformance.py` (`FLOOR_ORACLE = 0.15`) guards against
+regressions.
 
 ## What the corpora caught (fixed this round)
 

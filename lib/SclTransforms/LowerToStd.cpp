@@ -358,15 +358,14 @@ static FlatSymbolRefAttr getOrInsertRtFunc(OpBuilder &b, ModuleOp module,
 /// to func @FBn(i32)), DB operands without a number (db = 0) address the
 /// instance DB, passed as the function's i32 argument.
 static Value directDbValue(OpBuilder &b, Location loc, scl::DirectType dt,
-                           Operation *op) {
+                           ModuleOp module, Operation *op) {
   auto i32 = b.getI32Type();
   if (dt.getArea() == scl::DirectArea::DataBlock && dt.getDb() == -1) {
-    // DI-area operand: the DB in the DI register
-    auto module = op ? op->getParentOfType<ModuleOp>() : ModuleOp();
-    auto fn = getOrInsertRtFunc(b, module, "scl_rt_current_di",
-                                b.getFunctionType({}, {i32}));
-    return b.create<func::CallOp>(loc, fn, TypeRange{i32}, ValueRange{})
-        .getResult(0);
+    // DI-area operand: pass the DI marker 0xFFFF through, so the runtime
+    // resolves it to the DI-register DB *and* adds the AR2 multi-instance
+    // base offset (awlsim cpu.py getArea_DI/setArea_DI)
+    return b.create<arith::ConstantOp>(
+        loc, i32, b.getIntegerAttr(i32, (int32_t)0xFFFF));
   }
   if (op && dt.getArea() == scl::DirectArea::DataBlock && dt.getDb() == 0) {
     if (auto func = op->template getParentOfType<func::FuncOp>()) {
@@ -389,7 +388,7 @@ static Value lowerDirectLoad(OpBuilder &b, Location loc, scl::DirectType dt,
   auto i64 = b.getI64Type();
   auto areaC = b.create<arith::ConstantOp>(
       loc, i8, b.getIntegerAttr(i8, (uint8_t)dt.getArea()));
-  auto dbC = directDbValue(b, loc, dt, op);
+  auto dbC = directDbValue(b, loc, dt, module, op);
   auto byteC = b.create<arith::ConstantOp>(loc, i32,
                                            b.getIntegerAttr(i32, dt.getByte()));
   if (dt.getWidth() == 1) {
@@ -411,6 +410,12 @@ static Value lowerDirectLoad(OpBuilder &b, Location loc, scl::DirectType dt,
                 .getResult(0);
   if (resTy == i64)
     return v;
+  if (resTy.isa<FloatType>()) {
+    // REAL load: reinterpret the bits, do not convert the value
+    Value iv = b.create<arith::TruncIOp>(
+        loc, b.getIntegerType(resTy.getIntOrFloatBitWidth()), v);
+    return b.create<arith::BitcastOp>(loc, resTy, iv);
+  }
   if (resTy.isInteger(1))
     return b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne, v,
                                    b.create<arith::ConstantOp>(
@@ -430,7 +435,7 @@ static LogicalResult lowerDirectStore(OpBuilder &b, Location loc,
   auto i64 = b.getI64Type();
   auto areaC = b.create<arith::ConstantOp>(
       loc, i8, b.getIntegerAttr(i8, (uint8_t)dt.getArea()));
-  auto dbC = directDbValue(b, loc, dt, op);
+  auto dbC = directDbValue(b, loc, dt, module, op);
   auto byteC = b.create<arith::ConstantOp>(loc, i32,
                                            b.getIntegerAttr(i32, dt.getByte()));
   if (dt.getWidth() == 1) {
@@ -2475,23 +2480,50 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
   matchAndRewrite(awl::CallOp op, awl::CallOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     SmallVector<Value, 4> args;
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
     // CALL FB n, DB m: pass the instance DB number as the FB's i32 argument
     if (auto dbAttr = op.getDb()) {
       auto i32 = rewriter.getI32Type();
-      args.push_back(rewriter.create<arith::ConstantOp>(
-          op.getLoc(), i32, rewriter.getI32IntegerAttr(dbAttr.value())));
-      // the instance DB becomes the DI register for the callee (AUF DI)
-      ModuleOp mod = op->getParentOfType<ModuleOp>();
-      auto diFn = getOrInsertRtFunc(rewriter, mod, "scl_rt_set_current_di",
-                                    rewriter.getFunctionType({i32}, {}));
-      rewriter.create<func::CallOp>(op.getLoc(), diFn, TypeRange{},
-                                    ValueRange{args.back()});
+      if (dbAttr.value() == -1) {
+        // multi-instance call (CALL #var): the instance DB is the current DI
+        // register; awlsim also sets the DB register to it (cpu.py
+        // __call_MULTI_FB: dbRegister = diRegister)
+        auto diFn = getOrInsertRtFunc(rewriter, mod, "scl_rt_current_di",
+                                      rewriter.getFunctionType({}, {i32}));
+        auto diVal = rewriter.create<func::CallOp>(op.getLoc(), diFn,
+                                                   TypeRange{i32}, ValueRange{})
+                         .getResult(0);
+        args.push_back(diVal);
+        auto dbFn = getOrInsertRtFunc(rewriter, mod, "scl_rt_set_current_db",
+                                      rewriter.getFunctionType({i32}, {}));
+        rewriter.create<func::CallOp>(op.getLoc(), dbFn, TypeRange{},
+                                      ValueRange{diVal});
+      } else {
+        args.push_back(rewriter.create<arith::ConstantOp>(
+            op.getLoc(), i32, rewriter.getI32IntegerAttr(dbAttr.value())));
+        // the instance DB becomes the DI register for the callee (AUF DI)
+        auto diFn = getOrInsertRtFunc(rewriter, mod, "scl_rt_set_current_di",
+                                      rewriter.getFunctionType({i32}, {}));
+        rewriter.create<func::CallOp>(op.getLoc(), diFn, TypeRange{},
+                                      ValueRange{args.back()});
+      }
+    }
+    // SFB0-5 (multi-instance or with instance DB): run the system FB
+    // semantics in the runtime (after the AR2 base is set below), using the
+    // DI register + AR2 base
+    bool sfbRt = false;
+    int32_t sfbN = 0;
+    if (auto sfcAttr = op.getSfc()) {
+      if (op.getCallee().startswith("SFB")) {
+        sfbRt = true;
+        sfbN = sfcAttr.value();
+      }
     }
     // Cross-file / system block callee (not defined in this module): create
     // an empty stub so single files of a multi-file project still lower and
     // JIT-run (the callee body is not modelled — documented approximation).
     ModuleOp module = op->getParentOfType<ModuleOp>();
-    if (!module.lookupSymbol(op.getCallee())) {
+    if (!sfbRt && !module.lookupSymbol(op.getCallee())) {
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointToEnd(module.getBody());
       SmallVector<Type, 4> argTys;
@@ -2504,8 +2536,92 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
       rewriter.setInsertionPointToStart(entry);
       rewriter.create<func::ReturnOp>(op.getLoc());
     }
+    // explicit instance DB (CALL FB n, DB m): AR2 := P#DBX 0.0 for the
+    // duration of the call, restored afterwards (S7 saves the ARs)
+    mlir::Value savedAr2;
+    if (op.getInstdb().has_value()) {
+      auto i32 = rewriter.getI32Type();
+      auto i64 = rewriter.getI64Type();
+      auto i8 = rewriter.getI8Type();
+      auto getFn = getOrInsertRtFunc(rewriter, module, "scl_rt_ar_get",
+                                     rewriter.getFunctionType({i8}, {i64}));
+      auto setFn = getOrInsertRtFunc(
+          rewriter, module, "scl_rt_ar_set",
+          rewriter.getFunctionType({i8, i64}, {}));
+      auto packFn = getOrInsertRtFunc(rewriter, module, "scl_rt_pack_s7",
+                                      rewriter.getFunctionType(
+                                          {i32, i32, i32, i32}, {i64}));
+      auto arC = rewriter.create<arith::ConstantOp>(
+          op.getLoc(), i8, rewriter.getI8IntegerAttr(2));
+      savedAr2 = rewriter.create<func::CallOp>(op.getLoc(), getFn,
+                                               TypeRange{i64},
+                                               ValueRange{arC})
+                     .getResult(0);
+      int32_t ar2off = op.getAr2off() ? (int32_t)op.getAr2off().value() : 0;
+      Value ptr;
+      if (ar2off > 0) {
+        // multi-instance base: AR2 += ar2off (relative to the caller's AR2,
+        // so nested multi-instances accumulate correctly)
+        auto addFn = getOrInsertRtFunc(
+            rewriter, module, "scl_rt_ar_add",
+            rewriter.getFunctionType({i8, i32}, {i64}));
+        auto arC2 = rewriter.create<arith::ConstantOp>(
+            op.getLoc(), i8, rewriter.getI8IntegerAttr(2));
+        auto offC = rewriter.create<arith::ConstantOp>(
+            op.getLoc(), i32, rewriter.getI32IntegerAttr(ar2off * 8));
+        ptr = rewriter
+                  .create<func::CallOp>(op.getLoc(), addFn, TypeRange{i64},
+                                        ValueRange{arC2, offC})
+                  .getResult(0);
+      } else {
+        auto areaC = rewriter.create<arith::ConstantOp>(
+            op.getLoc(), i32, rewriter.getI32IntegerAttr(0x85));
+        auto zero32 = rewriter.create<arith::ConstantOp>(
+            op.getLoc(), i32, rewriter.getI32IntegerAttr(0));
+        ptr = rewriter
+                  .create<func::CallOp>(op.getLoc(), packFn, TypeRange{i64},
+                                        ValueRange{areaC, zero32, zero32,
+                                                   zero32})
+                  .getResult(0);
+      }
+      rewriter.create<func::CallOp>(op.getLoc(), setFn, TypeRange{},
+                                    ValueRange{arC, ptr});
+    }
+    if (sfbRt) {
+      auto i32 = rewriter.getI32Type();
+      auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_sfb",
+                                  rewriter.getFunctionType({i32}, {}));
+      auto nC = rewriter.create<arith::ConstantOp>(
+          op.getLoc(), i32, rewriter.getI32IntegerAttr(sfbN));
+      rewriter.create<func::CallOp>(op.getLoc(), fn, TypeRange{},
+                                    ValueRange{nC});
+      if (savedAr2) {
+        auto i8 = rewriter.getI8Type();
+        auto i64 = rewriter.getI64Type();
+        auto setFn = getOrInsertRtFunc(
+            rewriter, module, "scl_rt_ar_set",
+            rewriter.getFunctionType({i8, i64}, {}));
+        auto arC = rewriter.create<arith::ConstantOp>(
+            op.getLoc(), i8, rewriter.getI8IntegerAttr(2));
+        rewriter.create<func::CallOp>(op.getLoc(), setFn, TypeRange{},
+                                      ValueRange{arC, savedAr2});
+      }
+      rewriter.eraseOp(op);
+      return success();
+    }
     auto call = rewriter.create<func::CallOp>(op.getLoc(), op.getCallee(),
                                               TypeRange{}, args);
+    if (savedAr2) {
+      auto i8 = rewriter.getI8Type();
+      auto i64 = rewriter.getI64Type();
+      auto setFn = getOrInsertRtFunc(
+          rewriter, module, "scl_rt_ar_set",
+          rewriter.getFunctionType({i8, i64}, {}));
+      auto arC = rewriter.create<arith::ConstantOp>(
+          op.getLoc(), i8, rewriter.getI8IntegerAttr(2));
+      rewriter.create<func::CallOp>(op.getLoc(), setFn, TypeRange{},
+                                    ValueRange{arC, savedAr2});
+    }
     rewriter.replaceOp(op, call.getResults());
     return success();
   }
@@ -3161,14 +3277,39 @@ struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
       auto popFn = getOrInsertRtFunc(rewriter, module, "scl_rt_l_pop",
                                      rewriter.getFunctionType({}, {}));
       int32_t frameSize = op.getLframe() ? (int32_t)op.getLframe().value() : 0;
+      int32_t paramBytes =
+          op.getParamBytes() ? (int32_t)op.getParamBytes().value() : 0;
       rewriter.setInsertionPointToStart(&func.getBody().front());
       auto frameC = rewriter.create<arith::ConstantOp>(
           loc, i32, rewriter.getI32IntegerAttr(frameSize));
-      rewriter.create<func::CallOp>(loc, pushFn, TypeRange{}, ValueRange{frameC});
+      auto pushCall =
+          rewriter.create<func::CallOp>(loc, pushFn, TypeRange{}, ValueRange{frameC});
+      // FC interface parameters: copy the caller frame's parameter area into
+      // this frame on entry (and back on exit), so recursive calls keep
+      // per-invocation parameters and output params propagate to the caller
+      func::CallOp inCall;
+      if (paramBytes > 0) {
+        auto inFn = getOrInsertRtFunc(rewriter, module, "scl_rt_param_in",
+                                      rewriter.getFunctionType({i32}, {}));
+        rewriter.setInsertionPointAfter(pushCall);
+        auto pC = rewriter.create<arith::ConstantOp>(
+            loc, i32, rewriter.getI32IntegerAttr(paramBytes));
+        inCall = rewriter.create<func::CallOp>(loc, inFn, TypeRange{},
+                                               ValueRange{pC});
+      }
       for (Block &b : func.getBody())
         for (auto &o : llvm::make_early_inc_range(b.getOperations()))
           if (auto ret = dyn_cast<func::ReturnOp>(&o)) {
             rewriter.setInsertionPoint(ret);
+            if (paramBytes > 0) {
+              auto outFn = getOrInsertRtFunc(
+                  rewriter, module, "scl_rt_param_out",
+                  rewriter.getFunctionType({i32}, {}));
+              auto pC = rewriter.create<arith::ConstantOp>(
+                  loc, i32, rewriter.getI32IntegerAttr(paramBytes));
+              rewriter.create<func::CallOp>(loc, outFn, TypeRange{},
+                                            ValueRange{pC});
+            }
             rewriter.create<func::CallOp>(loc, popFn, TypeRange{},
                                           ValueRange{});
           }

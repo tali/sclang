@@ -326,6 +326,9 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_sleep", (void *)&scl_rt_sleep);
     add("scl_rt_l_push", (void *)&scl_rt_l_push);
     add("scl_rt_l_pop", (void *)&scl_rt_l_pop);
+    add("scl_rt_param_in", (void *)&scl_rt_param_in);
+    add("scl_rt_param_out", (void *)&scl_rt_param_out);
+    add("scl_rt_sfb", (void *)&scl_rt_sfb);
     add("scl_rt_timer_fb", (void *)&scl_rt_timer_fb);
     add("scl_rt_assert_cmp", (void *)&scl_rt_assert_cmp);
     add("scl_rt_assert_cmp_r", (void *)&scl_rt_assert_cmp_r);

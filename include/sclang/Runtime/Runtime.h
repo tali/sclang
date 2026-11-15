@@ -166,6 +166,7 @@ typedef struct SclRtVTable {
   void (*set_current_db)(uint32_t db);
   uint32_t (*current_db)(void);
   void (*ar_set)(uint8_t ar, uint64_t ptr);
+  void (*sfb)(uint32_t n); ///< run SFB n on its instance area
   uint64_t (*ar_add)(uint8_t ar, uint32_t offBits); // returns new ptr
   int64_t (*read_indirect)(uint64_t ptr, uint8_t widthBytes);
   void (*write_indirect)(uint64_t ptr, int64_t value, uint8_t widthBytes);
@@ -210,6 +211,17 @@ uint64_t scl_rt_assert_failures(void);
 /// scl_rt_l_pop before every return. Sim-only (a host vtable receives raw
 /// L offsets and manages its own frames).
 void scl_rt_l_push(uint32_t bytes);
+/// Copy `bytes` of the FC parameter area between the marker staging area
+/// (offset 8192, where CALL stores the actual parameters) and the callee's
+/// own L frame at offset 8192: param_in after l_push, param_out before
+/// l_pop. This keeps per-invocation parameters for recursive FCs and
+/// propagates output params (RET_VAL / VAR_IN_OUT) back to the call site.
+void scl_rt_param_in(uint32_t bytes);
+void scl_rt_param_out(uint32_t bytes);
+/// Run a system function block (SFB 0-5: CTU/CTD/CTUD counters, TON/TOF/TP
+/// timers) on its instance area in the DI-register DB at the AR2 base
+/// offset (multi-instance base), like awlsim's systemblocks.
+void scl_rt_sfb(uint32_t n);
 void scl_rt_l_pop(void);
 
 /// Set the DI register (AUF/OPN DI n). DINO/DILG read it. Sim-only.
