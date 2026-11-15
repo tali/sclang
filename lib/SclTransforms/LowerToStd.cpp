@@ -160,6 +160,11 @@ static FbLayoutCache computeFbLayouts(ModuleOp module) {
             width = 32;
           if (auto bits = foldConstBits(init, width))
             member.initBits = *bits;
+          else if (pass == 0)
+            var.emitWarning()
+                << "non-constant initializer of FB member '"
+                << var.getSymName() << "' in FB '" << fb.getName()
+                << "' is ignored (member starts zeroed)";
         }
         layout.members.push_back(std::move(member));
         layout.size += size;

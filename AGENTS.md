@@ -115,7 +115,7 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 102 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 103 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
   (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
   timer/timer_lower/call_fb/cc, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
@@ -388,7 +388,9 @@ Remaining technical gaps:
   Strings are zero-padded (SCL pads with spaces — documented deviation).
 - FB member initializers that are constant EXPRESSIONS (e.g. `40 + 2`) are
   folded by `foldConstBits` and baked into the IDB global's cold start;
-  genuinely non-constant initializers are still ignored (zeroed).
+  genuinely non-constant initializers are ignored (zeroed) but now emit a
+  warning (MLIR drops warnings without a registered handler — `sclang` main()
+  registers one that prints all diagnostics to stderr).
 - CASE on real/bool selectors works (see above).
 - `goto` following another terminator is a compile error by design.
 - Whole-array var-to-var assignment works for 1-d arrays, including

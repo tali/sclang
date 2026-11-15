@@ -459,6 +459,13 @@ int main(int argc, char **argv) {
   // If we aren't dumping the AST, then we are compiling with/to MLIR.
 
   mlir::MLIRContext context;
+  // MLIR only prints errors to stderr by default; register a handler so
+  // warnings (e.g. ignored non-constant FB initializers) are shown too.
+  context.getDiagEngine().registerHandler([](mlir::Diagnostic &diag) {
+    diag.print(llvm::errs());
+    llvm::errs() << "\n";
+    return mlir::success();
+  });
   // Load our Dialect in this MLIR Context.
   context.getOrLoadDialect<mlir::scl::SclDialect>();
   context.getOrLoadDialect<mlir::awl::AwlDialect>();

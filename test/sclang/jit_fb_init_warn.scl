@@ -1,0 +1,30 @@
+// RUN: sclang --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// A non-constant FB member initializer cannot be folded into the IDB cold
+// start, so it is ignored (member starts zeroed) and a warning is emitted.
+// CHECK: non-constant initializer of FB member 'y' in FB 'FB1' is ignored (member starts zeroed)
+// CHECK: clock=0ms
+function_block FB1
+var_input
+  x : int;
+end_var
+var
+  y : int := x + 1;
+end_var
+begin
+end_function_block
+data_block DB1
+  FB1
+end_data_block
+function OB1 : int
+var_temp
+  r : int;
+end_var
+begin
+  FB1."DB1"(x := 5);
+  r := "DB1".y;
+  %MW0 := r;
+end_function
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function
