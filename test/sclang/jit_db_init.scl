@@ -1,0 +1,31 @@
+// RUN: sclang --opt --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// DB begin-section constant initializer: x := 40 + 2 = 42 baked into the
+// IDB global's cold start; %MW0 := "DB1".x -> M[1]=42.
+// CHECK: M:
+// CHECK: M[1]=42
+// CHECK: clock=0ms
+function_block FB1
+var
+  x : int;
+end_var
+begin
+end_function_block
+data_block DB1
+  FB1
+begin
+  x := 40 + 2;
+end_data_block
+function OB1 : int
+var_temp
+  r : int;
+end_var
+begin
+  FB1."DB1"();
+  r := "DB1".x;
+  %MW0 := r;
+end_function
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

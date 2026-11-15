@@ -592,7 +592,42 @@ private:
     mlir::TypeAttr typeAttr = mlir::TypeAttr::get(type);
     mlir::StringAttr nameAttr = mlir::StringAttr::get(context, name);
 
-    return builder.create<DataBlockOp>(location, typeAttr, nameAttr);
+    // DB begin-section assignments `member := <const>` become the `init`
+    // dict attr (member name -> i64 bit pattern), baked into the IDB
+    // global's cold start by DataBlockOpLowering.
+    mlir::DictionaryAttr initAttr;
+    if (auto *code = db->getAssignments()) {
+      SmallVector<mlir::NamedAttribute, 4> entries;
+      for (auto &instr : code->getInstructions()) {
+        auto *assign = llvm::dyn_cast<ValueAssignmentAST>(instr.get());
+        if (!assign)
+          continue;
+        auto *bin = llvm::dyn_cast<BinaryExpressionAST>(assign->getExpression());
+        if (!bin || bin->getOp() != tok_assignment)
+          continue;
+        auto *lhs = llvm::dyn_cast<SimpleVariableAST>(bin->getLhs());
+        if (!lhs || lhs->isSymbol()) {
+          emitError(loc(bin->getLhs()->loc()))
+              << "invalid DB initializer target";
+          return nullptr;
+        }
+        int64_t value = 0;
+        if (mlir::failed(foldConstIntAST(bin->getRhs(), value))) {
+          emitWarning(loc(bin->getRhs()->loc()))
+              << "non-constant DB initializer for '" << lhs->getName()
+              << "' in DB '" << name << "' is ignored";
+          continue;
+        }
+        entries.push_back(mlir::NamedAttribute(
+            mlir::StringAttr::get(context, lhs->getName()),
+            builder.getIntegerAttr(builder.getIntegerType(64), value)));
+      }
+      if (!entries.empty())
+        initAttr = mlir::DictionaryAttr::get(context, entries);
+    }
+
+    return builder.create<DataBlockOp>(location, typeAttr, nameAttr,
+                                       (mlir::Attribute)initAttr);
   }
 
   /// Register a user-defined type. Emits no op; returns success/failure.
@@ -1785,6 +1820,41 @@ private:
           << Twine(type->getType()) << "'";
       return nullptr;
     }
+  }
+
+  /// Fold a constant integer expression (literals, const symbols, and
+  /// + - * / over them) — used for DB initial values.
+  mlir::LogicalResult foldConstIntAST(const ExpressionAST *expr,
+                                      int64_t &value) {
+    if (auto *c = llvm::dyn_cast<IntegerConstantAST>(expr)) {
+      value = c->getValue();
+      return mlir::success();
+    }
+    if (auto *v = llvm::dyn_cast<SimpleVariableAST>(expr)) {
+      auto sym = symbolTable.lookup(v->getName());
+      if (!sym.isConst()) {
+        emitError(loc(v->loc())) << "not a constant: " << v->getName();
+        return mlir::failure();
+      }
+      return foldConstIntAST(sym.getConstValue(), value);
+    }
+    if (auto *bin = llvm::dyn_cast<BinaryExpressionAST>(expr)) {
+      int64_t l = 0, r = 0;
+      if (mlir::failed(foldConstIntAST(bin->getLhs(), l)) ||
+          mlir::failed(foldConstIntAST(bin->getRhs(), r)))
+        return mlir::failure();
+      switch (bin->getOp()) {
+      case tok_plus: value = l + r; return mlir::success();
+      case tok_minus: value = l - r; return mlir::success();
+      case tok_times: value = l * r; return mlir::success();
+      case tok_divide: case tok_div:
+        if (r == 0) { emitError(loc(bin->loc())) << "division by zero in constant"; return mlir::failure(); }
+        value = l / r; return mlir::success();
+      default: break;
+      }
+    }
+    emitError(loc(expr->loc())) << "constant integer expected";
+    return mlir::failure();
   }
 
   mlir::LogicalResult getConstantInteger(const ExpressionAST *expr,

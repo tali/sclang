@@ -1249,8 +1249,10 @@ struct LowerToAWLPass
     SmallVector<Operation *, 4> dbs;
     module.walk([&](scl::DataBlockOp op) { dbs.push_back(op); });
     for (Operation *op : dbs) {
-      op->emitWarning("data block initializers are not representable in AWL "
-                      "output; dropped");
+      if (auto db = dyn_cast<scl::DataBlockOp>(op))
+        if (db.getInitAttr())
+          db.emitWarning("data block initial values are not representable in "
+                         "AWL output; dropped");
       op->erase();
     }
   }

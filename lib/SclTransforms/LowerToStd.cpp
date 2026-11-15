@@ -1076,6 +1076,27 @@ struct DataBlockOpLowering : public OpConversionPattern<scl::DataBlockOp> {
             buf[m.offset + i] = (uint8_t)(m.initBits->getZExtValue() >>
                                           (8 * (msize - 1 - i)));
         }
+        // DB-level initial values (scl.db `init` attr) override the FB
+        // members' cold-start values.
+        if (auto initOpt = op.getInit()) {
+          if (auto initDict = initOpt->dyn_cast<mlir::DictionaryAttr>()) {
+            for (auto na : initDict.getValue()) {
+              std::string mname = na.getName().str();
+              auto ia = na.getValue().dyn_cast<IntegerAttr>();
+              if (!ia)
+                continue;
+              for (auto &m : layout.members) {
+                if (m.name != mname)
+                  continue;
+                int64_t msize = byteSize(m.type, layouts);
+                uint64_t v = ia.getValue().getZExtValue();
+                for (int64_t i = 0; i < msize; ++i)
+                  buf[m.offset + i] =
+                      (uint8_t)(v >> (8 * (msize - 1 - i)));
+              }
+            }
+          }
+        }
         auto i8 = memref.getElementType();
         for (uint8_t byte : buf)
           bytes.push_back(rewriter.getIntegerAttr(i8, byte));

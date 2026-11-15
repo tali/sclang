@@ -36,7 +36,10 @@ def DataBlockOp : TopLevelOp<"db", [Symbol]> {
 
   let arguments = (ins
     TypeAttr:$type,
-    StrAttr:$sym_name
+    StrAttr:$sym_name,
+    // Constant DB initial values (DB begin-section assignments folded at
+    // parse/codegen time): member name -> IntegerAttr (i64 bit pattern).
+    OptionalAttr<AnyAttr>:$init
   );
 
   let results = (outs);

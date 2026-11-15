@@ -115,7 +115,7 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 107 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 108 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
   (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
   timer/timer_lower/call_fb/cc, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
@@ -275,8 +275,12 @@ has no `\b` — use python3 for regex edits.
   compare (AWL `L` shifts ACC1 into ACC2).
   AWL parser pitfall: a label branch in the instruction loop must `continue`,
   not fall through to parseInstruction (two consecutive labels misparse).
-  AWL backend gaps: DB initializers (AWL text cannot express them; a
-  warning is emitted and they are dropped), dynamic array indices (AWL has
+  AWL backend gaps: DB initial values (AWL text cannot express them; a
+  warning is emitted and they are dropped — in the std path they ARE
+  supported: `scl.db` carries an `init` dict attr (member -> i64) folded
+  from the DB begin-section assignments by `foldConstIntAST` in MLIRGen
+  and baked into the IDB global cold start in DataBlockOpLowering, see
+  jit_db_init), dynamic array indices (AWL has
   no indirect addressing — constant indices are folded into the operand's
   byte offset). FB arrays/structs/strings ARE supported: composite FB
   members expose a byte direct at the member offset and
