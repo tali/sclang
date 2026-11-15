@@ -520,17 +520,18 @@ void ConstantDateAndTimeOp::getAsmResultNames(
 
 namespace {
 int bitWidth(Type type) {
-  TypeSwitch<Type>(type)
-  .Case<scl::IntegerType>([&](scl::IntegerType type) {
-    return type.getWidth();
-  })
-  .Case<scl::LogicalType>([&](scl::LogicalType type) {
-    return type.getWidth();
-  })
-  .Case<scl::RealType>([&](scl::RealType type) {
+  if (auto t = type.dyn_cast<scl::IntegerType>())
+    return t.getWidth();
+  if (auto t = type.dyn_cast<scl::LogicalType>())
+    return t.getWidth();
+  if (type.isa<scl::RealType>())
     return 32;
-  });
-
+  if (type.isa<scl::S5TimeType>() || type.isa<scl::DateType>())
+    return 16;
+  if (type.isa<scl::TimeType>() || type.isa<scl::TimeOfDayType>())
+    return 32;
+  if (type.isa<scl::DateAndTimeType>())
+    return 64;
   return -1;
 }
 }
@@ -555,8 +556,17 @@ bool BitCastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
 bool DialectCastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
   if (inputs.size() != 1 || outputs.size() != 1)
     return false;
-  bool inputScl = isa<SclDialect>(inputs.front().getDialect());
-  bool outputScl = isa<SclDialect>(outputs.front().getDialect());
+  Type in = inputs.front(), out = outputs.front();
+  // int/logical <-> real conversions (e.g. INT_TO_REAL) go through
+  // sitofp/fptosi at lowering, also within the scl dialect
+  if (in.isa<RealType>() != out.isa<RealType>())
+    return true;
+  // numeric casts between scl scalar types (e.g. dint -> time_of_day in
+  // DTL_TO_TOD) are fine: the operands convert to plain integers anyway
+  if (bitWidth(in) > 0 && bitWidth(out) > 0)
+    return true;
+  bool inputScl = isa<SclDialect>(in.getDialect());
+  bool outputScl = isa<SclDialect>(out.getDialect());
   // TBD check dialects
   return inputScl != outputScl;
 }
@@ -847,7 +857,10 @@ bool IntegerCastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
   // dword/bool) input is allowed as well — it converts to an IntegerType of
   // the same width during lowering.
   Type input = inputs.front();
-  if (!input.isa<IntegerType>() && !input.isa<LogicalType>())
+  if (!input.isa<IntegerType>() && !input.isa<LogicalType>() &&
+      !input.isa<S5TimeType>() && !input.isa<TimeType>() &&
+      !input.isa<TimeOfDayType>() && !input.isa<DateType>() &&
+      !input.isa<DateAndTimeType>())
     return false;
   IntegerType output = outputs.front().dyn_cast<IntegerType>();
   if (!output)

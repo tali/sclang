@@ -34,6 +34,10 @@ using llvm::all_of;
 using namespace mlir::arith;
 using namespace mlir::func;
 
+/// Convert an int/float value to `ty` (ext/trunc/sitofp/fptosi).
+/// Defined further below; declared here for DialectCastOpLowering.
+static Value convertScalarTo(OpBuilder &b, Location loc, Value v, Type ty);
+
 namespace {
 
 /// Return `true` if all elements are of the given type.
@@ -530,7 +534,8 @@ struct ConstantOpLowering : public OpConversionPattern<scl::ConstantOp> {
 
 // MARK: DialectCastOpLowering
 
-/// Removes DialectCastOps when they are not necessary any more.
+/// Removes DialectCastOps when they are not necessary any more; performs a
+/// scalar conversion (ext/trunc/sitofp/fptosi) when the types still differ.
 struct DialectCastOpLowering : public OpConversionPattern<scl::DialectCastOp> {
   using OpConversionPattern<scl::DialectCastOp>::OpConversionPattern;
 
@@ -538,8 +543,13 @@ struct DialectCastOpLowering : public OpConversionPattern<scl::DialectCastOp> {
   matchAndRewrite(scl::DialectCastOp op, scl::DialectCastOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Value value = adaptor.getValue();
+    Type targetTy = typeConverter->convertType(op.getType());
 
-    if (value.getType() != typeConverter->convertType(op.getType())) {
+    if (value.getType() != targetTy) {
+      if (Value converted = ::convertScalarTo(rewriter, op.getLoc(), value, targetTy)) {
+        rewriter.replaceOp(op, converted);
+        return success();
+      }
       return failure();
     }
     rewriter.replaceOp(op, value);
