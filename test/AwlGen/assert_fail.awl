@@ -1,0 +1,11 @@
+// RUN: not sclang -x awl --emit=jit --jit-cycles=2 %s 2>&1 | FileCheck %s
+// A failing awlsim __ASSERT oracle makes the sim runtime report the
+// mismatch and the driver exit with code 2 (oracle tier, see
+// docs/conformance.md).
+// CHECK: ASSERT FAILED line 9: actual=1 expected=2 op=0
+ORGANIZATION_BLOCK OB 1
+BEGIN
+	L	1
+	__ASSERT==	__ACCU 1,	2
+BE
+END_ORGANIZATION_BLOCK

@@ -1,0 +1,15 @@
+// RUN: sclang-gen -x awl --emit=mlir %s | FileCheck %s
+// RUN: sclang -x awl --emit=jit --jit-cycles=2 %s
+// awlsim __ASSERT oracle directives lower to awl.assert / awl.assert_r
+// runtime calls (docs/conformance.md, oracle tier). The second RUN line
+// passes iff the driver exits 0, i.e. every executed oracle held.
+// CHECK-LABEL: awl.block "OB1"
+// CHECK: awl.assert {{.*}}, 0, %{{.*}}, %{{.*}}
+// CHECK: awl.assert_r {{.*}}, 5, %{{.*}}, %{{.*}}
+ORGANIZATION_BLOCK OB 1
+BEGIN
+	L	5
+	__ASSERT==	__ACCU 1,	5
+	__ASSERT<=R	__ACCU 1,	5.0
+BE
+END_ORGANIZATION_BLOCK

@@ -12,11 +12,16 @@
 # below (a regression), so the lit test catches regressions when the
 # corpora are present.
 #
-# Two tiers:
+# Three tiers:
 #  - compile tier: --emit=mlir (frontend + MLIR verifier) on every file;
-#  - JIT tier: --emit=jit --jit-cycles=2 (full lowering + ExecutionEngine
-#    smoke run) on files defining OB 1 — checks the code also lowers and
-#    executes without crashing/missing symbols, not computed values.
+#  - JIT smoke tier: --emit=jit --jit-cycles=2 (full lowering +
+#    ExecutionEngine run) on files defining OB 1 — checks the code also
+#    lowers and executes without crashing/missing symbols, not computed
+#    values. Exit code 2 (awlsim __ASSERT oracles failed) still counts as
+#    smoke-pass: it proves lowering + execution worked;
+#  - oracle tier: --emit=jit --jit-cycles=5 on files defining OB 1 that
+#    contain awlsim __ASSERT directives — pass iff exit code is 0, i.e.
+#    every executed __ASSERT oracle held. This checks computed values.
 
 import argparse
 import os
@@ -26,14 +31,18 @@ import sys
 
 # Minimum pass rates (fractions) when corpora are present. Current state
 # (LLVM 17 build): compile tier AWL 109/116 = 0.94, SCL single 13/22 = 0.59,
-# SCL per-project 11/17 = 0.65; JIT tier (OB1 files) 69/77 = 0.90.
-# Remaining failures are documented gaps (awl shift/rotate + real math ops;
-# TIA library types in SCL; a few awlsim files with exotic syntax), see
-# docs/conformance.md.
+# SCL per-project 11/17 = 0.65; JIT smoke tier (OB1 files) 69/77 = 0.90;
+# oracle tier (__ASSERT + OB1 files) 10/53 = 0.19 — the failures map to
+# known feature gaps (data blocks/memory areas, counters, timers, strings,
+# startup info, parameterized calls), see docs/conformance.md.
+# Remaining compile failures are documented gaps (awl shift/rotate + real
+# math ops; TIA library types in SCL; a few awlsim files with exotic
+# syntax), see docs/conformance.md.
 FLOOR_AWL = 0.90
 FLOOR_SCL_SINGLE = 0.55
 FLOOR_SCL_PROJECT = 0.60
 FLOOR_JIT = 0.85
+FLOOR_ORACLE = 0.15
 
 TIMEOUT_S = 20
 
@@ -57,14 +66,16 @@ def sniff(text):
     return '-x=awl'
 
 
+# Returns (exit_code, stderr_lines). 0 = success, 2 = executed but __ASSERT
+# oracles failed (oracle tier), anything else = compile/lower/run failure.
 def run_one(sclang, path, xflag, emit='mlir', extra=()):
     try:
         p = subprocess.run([sclang, xflag, '--emit=' + emit, *extra, path],
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                            timeout=TIMEOUT_S)
-        return p.returncode == 0, p.stderr.decode('utf-8', 'replace').splitlines()
+        return p.returncode, p.stderr.decode('utf-8', 'replace').splitlines()
     except subprocess.TimeoutExpired:
-        return False, ['TIMEOUT (possible intra-block jump loop)']
+        return -1, ['TIMEOUT (possible intra-block jump loop)']
 
 
 def main():
@@ -105,22 +116,25 @@ def main():
     for p in awl_files:
         with open(p, 'r', errors='replace') as fh:
             xflag = sniff(fh.read())
-        ok, err = run_one(args.sclang, p, xflag)
-        awl_ok += record(ok, p, xflag, err)
+        rc, err = run_one(args.sclang, p, xflag)
+        awl_ok += record(rc == 0, p, xflag, err)
     awl_total = len(awl_files)
 
     # --- compile tier, SCL single files ---
     scl_ok = 0
     for p in scl_files:
-        ok, err = run_one(args.sclang, p, '-x=scl')
-        scl_ok += record(ok, p, '-x=scl', err)
+        rc, err = run_one(args.sclang, p, '-x=scl')
+        scl_ok += record(rc == 0, p, '-x=scl', err)
     scl_total = len(scl_files)
 
-    # --- JIT tier: full pipeline (lowering + ExecutionEngine) on files
-    # that define OB 1; smoke test (no crash, no missing symbol), not an
-    # oracle check of computed values ---
+    # --- JIT smoke tier: full pipeline (lowering + ExecutionEngine) on
+    # files that define OB 1; smoke test (no crash, no missing symbol),
+    # not an oracle check of computed values. rc 2 means the code ran but
+    # __ASSERT oracles failed — still a smoke pass ---
     jit_ok = 0
     jit_total = 0
+    oracle_ok = 0
+    oracle_total = 0
     for p in awl_files + scl_files:
         with open(p, 'r', errors='replace') as fh:
             text = fh.read()
@@ -128,9 +142,16 @@ def main():
             continue
         xflag = sniff(text)
         jit_total += 1
-        ok, err = run_one(args.sclang, p, xflag, emit='jit',
+        rc, err = run_one(args.sclang, p, xflag, emit='jit',
                           extra=('--jit-cycles=2',))
-        jit_ok += record(ok, p, xflag + ' jit', err)
+        jit_ok += record(rc in (0, 2), p, xflag + ' jit', err)
+        # --- oracle tier: awlsim __ASSERT directives as value-level
+        # checks; pass iff every executed oracle held (rc == 0) ---
+        if '__ASSERT' in text:
+            oracle_total += 1
+            rc, err = run_one(args.sclang, p, xflag, emit='jit',
+                              extra=('--jit-cycles=5',))
+            oracle_ok += record(rc == 0, p, xflag + ' oracle', err)
 
     # --- compile tier, SCL per-project: concatenate all .scl files of a dir ---
     dirs = sorted(set(os.path.dirname(p) for p in scl_files))
@@ -148,8 +169,8 @@ def main():
                     out.write('\n')
                 with open(p, 'r', errors='replace') as fh:
                     out.write(fh.read())
-        ok, err = run_one(args.sclang, tmp, '-x=scl')
-        proj_ok += record(ok, d + ' (project)', '-x=scl', err)
+        rc, err = run_one(args.sclang, tmp, '-x=scl')
+        proj_ok += record(rc == 0, d + ' (project)', '-x=scl', err)
 
     def rate(ok, total):
         return ok / total if total else 1.0
@@ -162,6 +183,8 @@ def main():
           (proj_ok, proj_total, 100 * rate(proj_ok, proj_total)))
     print('JIT (OB1 files): %d/%d pass (%.0f%%)' %
           (jit_ok, jit_total, 100 * rate(jit_ok, jit_total)))
+    print('Oracle (__ASSERT): %d/%d pass (%.0f%%)' %
+          (oracle_ok, oracle_total, 100 * rate(oracle_ok, oracle_total)))
     if lines:
         print('--- failures ---')
         for l in lines:
@@ -173,14 +196,17 @@ def main():
     bad = (rate(awl_ok, awl_total) < FLOOR_AWL or
            rate(scl_ok, scl_total) < FLOOR_SCL_SINGLE or
            rate(proj_ok, proj_total) < FLOOR_SCL_PROJECT or
-           rate(jit_ok, jit_total) < FLOOR_JIT)
+           rate(jit_ok, jit_total) < FLOOR_JIT or
+           rate(oracle_ok, oracle_total) < FLOOR_ORACLE)
     if bad:
         print('REGRESSION: pass rate below floor '
-              '(awl>=%.2f scl>=%.2f proj>=%.2f jit>=%.2f)' %
-              (FLOOR_AWL, FLOOR_SCL_SINGLE, FLOOR_SCL_PROJECT, FLOOR_JIT))
+              '(awl>=%.2f scl>=%.2f proj>=%.2f jit>=%.2f oracle>=%.2f)' %
+              (FLOOR_AWL, FLOOR_SCL_SINGLE, FLOOR_SCL_PROJECT, FLOOR_JIT,
+               FLOOR_ORACLE))
         return 1
-    print('OK (floors: awl>=%.2f scl>=%.2f proj>=%.2f jit>=%.2f)' %
-          (FLOOR_AWL, FLOOR_SCL_SINGLE, FLOOR_SCL_PROJECT, FLOOR_JIT))
+    print('OK (floors: awl>=%.2f scl>=%.2f proj>=%.2f jit>=%.2f oracle>=%.2f)' %
+          (FLOOR_AWL, FLOOR_SCL_SINGLE, FLOOR_SCL_PROJECT, FLOOR_JIT,
+           FLOOR_ORACLE))
     return 0
 
 
