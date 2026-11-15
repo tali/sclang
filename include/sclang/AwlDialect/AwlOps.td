@@ -237,6 +237,20 @@ def CounterOp : AwlOp<"counter"> {
   let assemblyFormat = "attr-dict $op `,` $value `:` type($value) `,` $counter `:` type($counter)";
 }
 
+// __ASSERT==/__ASSERT<>... (awlsim test oracles): runtime value check.
+// op: 0 ==, 1 !=, 2 >, 3 <, 4 >=, 5 <=. id is the source line for diagnostics.
+def AssertOp : AwlOp<"assert"> {
+  let summary = "__ASSERT: integer runtime oracle check";
+  let arguments = (ins I32Attr:$id, I8Attr:$op, I64:$actual, I64:$expected);
+  let assemblyFormat = "attr-dict $id `,` $op `,` $actual `,` $expected";
+}
+
+def AssertROp : AwlOp<"assert_r"> {
+  let summary = "__ASSERT==R: real runtime oracle check";
+  let arguments = (ins I32Attr:$id, I8Attr:$op, F64:$actual, F64:$expected);
+  let assemblyFormat = "attr-dict $id `,` $op `,` $actual `,` $expected";
+}
+
 def NopOp : AwlOp<"nop"> {
   let summary = "NOP 0/1";
   let assemblyFormat = "attr-dict";

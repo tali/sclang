@@ -73,6 +73,8 @@ public:
   double getReal() const { return cur_.realVal; }
   int line() const { return lineNo; }
   int col() const { return colNo; }
+  // line of the current token (lineNo itself is ahead due to lookahead)
+  int curLine() const { return cur_.line; }
   bool curQuoted() const { return cur_.quoted; }
 
   Tok next() {
@@ -102,6 +104,7 @@ private:
     int64_t intVal = 0;
     double realVal = 0;
     bool quoted = false; // came from a "..." or '...' literal
+    int line = 0;        // line the token starts on
   };
 
   Token scan() {
@@ -125,6 +128,7 @@ private:
     }
     if (cur.empty())
       return t; // eof
+    t.line = lineNo;
     char c = cur.front();
     // S5T#<value><base> literal, e.g. S5T#2S or S5T#500MS -> S5TIME-encoded
     // integer (bits 12-15 time base, bits 0-11 BCD value)
@@ -213,9 +217,11 @@ private:
         }
         return t;
       }
-      // awlsim test directives (__ASSERT==, __FEATURE, __STWRST, ...):
-      // skip the whole line, they are test oracles, not AWL
-      if (t.ident.starts_with("__")) {
+      // awlsim test directives (__FEATURE, __STWRST, ...): skip the line.
+      // __ASSERT... is kept as an ident — the parser lowers it to a runtime
+      // oracle check (awl.assert), see parseAssert.
+      if (t.ident.starts_with("__") && !t.ident.starts_with("__ASSERT") &&
+          t.ident != "__ACCU" && t.ident != "__STW") {
         while (!cur.empty() && cur.front() != '\n')
           cur = cur.drop_front();
         return scan();
@@ -406,6 +412,10 @@ private:
           cur = cur.drop_front();
         int64_t v = 0;
         if (base == 16) {
+          // C-style hex prefix, e.g. DW#16#0xF7654660
+          if (cur.size() >= 2 && cur.front() == '0' &&
+              tolower((unsigned char)cur[1]) == 'x')
+            cur = cur.drop_front(2);
           while (!cur.empty() && isxdigit(cur.front())) {
             char h = cur.front();
             int d = isdigit(h) ? h - '0' : tolower(h) - 'a' + 10;
@@ -1351,6 +1361,8 @@ private:
       rloActive = false;
       return true;
     }
+    if (m.rfind("__ASSERT", 0) == 0)
+      return parseAssert();
     if (m == "CALL" || m == "UC" || m == "CC")
       return parseCall(m == "CC");
     return error("unknown instruction '" + m + "' in block " + blockName);
@@ -2177,6 +2189,117 @@ private:
         builder.create<awl::JumpIfNotOp>(loc(), rlo, builder.getStringAttr(label));
     }
     rloActive = false;
+    return true;
+  }
+
+  // __ASSERT<cmp>[R] <lhs>, <rhs> — awlsim test oracle. lhs is __ACCU n or
+  // a memory operand (loaded); __STW bit asserts are skipped (the sim does
+  // not track status-word bits). Lowered to awl.assert / awl.assert_r.
+  bool parseAssert() {
+    uint32_t id = (uint32_t)lexer.curLine();
+    Tok cmp = lexer.getCurToken();
+    if (cmp != Tok::eq && cmp != Tok::ne && cmp != Tok::lt && cmp != Tok::le &&
+        cmp != Tok::gt && cmp != Tok::ge) {
+      lexer.nextLine(); // not an assert form we know: skip the line
+      return true;
+    }
+    lexer.next();
+    bool isReal = false;
+    if (lexer.getCurToken() == Tok::ident && upperIdent() == "R") {
+      isReal = true;
+      lexer.next();
+    }
+    int op;
+    switch (cmp) {
+    case Tok::eq: op = 0; break;
+    case Tok::ne: op = 1; break;
+    case Tok::gt: op = 2; break;
+    case Tok::lt: op = 3; break;
+    case Tok::ge: op = 4; break;
+    default: op = 5; break;
+    }
+    mlir::Value actual;
+    if (lexer.getCurToken() == Tok::ident) {
+      std::string w = upperIdent();
+      if (w == "__STW" || w == "BIE" || w == "OV" || w == "OS" || w == "VKE" ||
+          w == "A0" || w == "A1" || w == "RLO") {
+        lexer.nextLine(); // status-word bits not tracked by the sim: skip
+        return true;
+      }
+      if (w == "__ACCU") {
+        lexer.next();
+        int n = 1;
+        if (lexer.getCurToken() == Tok::integer) {
+          n = (int)lexer.getInteger();
+          lexer.next();
+        }
+        actual = (n >= 1 && (size_t)n <= acc.size())
+                     ? acc[acc.size() - n]
+                     : constInt(builder.getI32Type(), 0);
+      } else {
+        mlir::Value addr = parseOperand(false);
+        if (!addr) {
+          lexer.nextLine();
+          return true;
+        }
+        actual = mlir::isa<mlir::scl::DirectType>(addr.getType())
+                     ? (mlir::Value)builder.create<awl::LoadOp>(loc(), addr)
+                     : addr;
+      }
+    } else if (lexer.getCurToken() == Tok::integer ||
+               lexer.getCurToken() == Tok::real ||
+               lexer.getCurToken() == Tok::minus) {
+      // constant lhs (e.g. __ASSERT== 1, 2 or a pointer literal P#E 2.1, 17)
+      mlir::Value c = parseConst();
+      if (!c) {
+        lexer.nextLine();
+        return true;
+      }
+      actual = c;
+    } else {
+      lexer.nextLine(); // unsupported lhs form: skip the line
+      return true;
+    }
+    if (lexer.getCurToken() != Tok::comma) {
+      lexer.nextLine();
+      return true;
+    }
+    lexer.next();
+    mlir::Value expected;
+    // rhs may be another accumulator: __ASSERT== __ACCU 1, __ACCU 2
+    if (lexer.getCurToken() == Tok::ident && upperIdent() == "__ACCU") {
+      lexer.next();
+      int n = 1;
+      if (lexer.getCurToken() == Tok::integer) {
+        n = (int)lexer.getInteger();
+        lexer.next();
+      }
+      expected = (n >= 1 && (size_t)n <= acc.size())
+                     ? acc[acc.size() - n]
+                     : constInt(builder.getI32Type(), 0);
+    } else {
+      mlir::Value c = parseConst();
+      if (!c) {
+        lexer.nextLine();
+        return true;
+      }
+      expected = c;
+    }
+    auto idAttr = builder.getI32IntegerAttr((int32_t)id);
+    auto opAttr = builder.getI8IntegerAttr((int8_t)op);
+    // awlsim compares as real when the R suffix is given or either side
+    // is a real literal (e.g. __ASSERT== __ACCU 1, 0.0)
+    bool real = isReal || mlir::isa<mlir::FloatType>(actual.getType()) ||
+                mlir::isa<mlir::FloatType>(expected.getType());
+    if (real) {
+      actual = castTo(actual, builder.getF64Type());
+      expected = castTo(expected, builder.getF64Type());
+      builder.create<awl::AssertROp>(loc(), idAttr, opAttr, actual, expected);
+    } else {
+      actual = castTo(actual, builder.getI64Type());
+      expected = castTo(expected, builder.getI64Type());
+      builder.create<awl::AssertOp>(loc(), idAttr, opAttr, actual, expected);
+    }
     return true;
   }
 

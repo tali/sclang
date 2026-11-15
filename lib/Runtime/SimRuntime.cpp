@@ -51,6 +51,7 @@ struct SimState {
     uint64_t startMs = 0;
   };
   std::map<uint64_t, TimerFbState> timerFbs;
+  uint64_t assertFailures = 0; // failed __ASSERT oracle checks
 };
 
 /// Decode an S5TIME-encoded 16-bit value to milliseconds.
@@ -405,6 +406,60 @@ void scl_rt_sim_reset(void) {
 }
 
 uint64_t scl_rt_sim_clock_ms(void) { return state().clockMs; }
+
+// MARK: test oracles (ABI v4)
+
+static bool assertCheck(uint8_t op, int64_t actual, int64_t expected) {
+  switch (op) {
+  case 0: return actual == expected;
+  case 1: return actual != expected;
+  case 2: return actual > expected;
+  case 3: return actual < expected;
+  case 4: return actual >= expected;
+  default: return actual <= expected;
+  }
+}
+
+static bool assertCheckR(uint8_t op, double actual, double expected) {
+  switch (op) {
+  case 0: return actual == expected;
+  case 1: return actual != expected;
+  case 2: return actual > expected;
+  case 3: return actual < expected;
+  case 4: return actual >= expected;
+  default: return actual <= expected;
+  }
+}
+
+void scl_rt_assert_cmp(uint32_t id, uint8_t op, int64_t actual,
+                       int64_t expected) {
+  auto &s = state();
+  if (s.vtable && s.vtable->assert_cmp) {
+    s.vtable->assert_cmp(id, op, actual, expected);
+    return;
+  }
+  if (!assertCheck(op, actual, expected)) {
+    ++s.assertFailures;
+    fprintf(stderr, "ASSERT FAILED line %u: actual=%lld expected=%lld op=%u\n",
+            id, (long long)actual, (long long)expected, op);
+  }
+}
+
+void scl_rt_assert_cmp_r(uint32_t id, uint8_t op, double actual,
+                         double expected) {
+  auto &s = state();
+  if (s.vtable && s.vtable->assert_cmp_r) {
+    s.vtable->assert_cmp_r(id, op, actual, expected);
+    return;
+  }
+  if (!assertCheckR(op, actual, expected)) {
+    ++s.assertFailures;
+    fprintf(stderr, "ASSERT FAILED line %u: actual=%f expected=%f op=%u\n",
+            id, actual, expected, op);
+  }
+}
+
+uint64_t scl_rt_assert_failures(void) { return state().assertFailures; }
 
 void scl_rt_sim_dump_areas(void) {
   auto &s = state();

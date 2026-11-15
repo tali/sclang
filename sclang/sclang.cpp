@@ -320,6 +320,8 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_timer_start", (void *)&scl_rt_timer_start);
     add("scl_rt_counter_op", (void *)&scl_rt_counter_op);
     add("scl_rt_timer_fb", (void *)&scl_rt_timer_fb);
+    add("scl_rt_assert_cmp", (void *)&scl_rt_assert_cmp);
+    add("scl_rt_assert_cmp_r", (void *)&scl_rt_assert_cmp_r);
     // memref.copy lowers to a call to the MLIR C runner helper.
     add("memrefCopy", (void *)&memrefCopy);
     return map;
@@ -441,6 +443,12 @@ int runJit(mlir::ModuleOp module) {
 
   if (dumpAreas && runtimeKind == Sim)
     scl_rt_sim_dump_areas();
+
+  // Test oracles (awlsim __ASSERT): any failed assert fails the run.
+  if (runtimeKind == Sim && scl_rt_assert_failures() > 0) {
+    llvm::errs() << scl_rt_assert_failures() << " assert(s) failed\n";
+    return 2;
+  }
 
   return 0;
 }

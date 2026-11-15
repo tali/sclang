@@ -129,11 +129,29 @@ typedef struct SclRtVTable {
      2=TP. idbPtr is the instance DB buffer (builtin layout: IN @0, PT @4
      (i32 ms, big-endian), Q @8, ET @12 (i32 ms)). */
   void (*timer_fb)(uint8_t mode, uint64_t idbPtr);
+  /* Appended for test oracles (v4). May be NULL in older host runtimes;
+     the sim then handles asserts itself. op: 0 ==, 1 !=, 2 >, 3 <, 4 >=,
+     5 <=. */
+  void (*assert_cmp)(uint32_t id, uint8_t op, int64_t actual,
+                     int64_t expected);
+  void (*assert_cmp_r)(uint32_t id, uint8_t op, double actual,
+                       double expected);
 } SclRtVTable;
 
 /// Register a host vtable; all subsequent ABI calls forward through it.
 /// Pass NULL to return to the built-in simulation.
 void scl_rt_register(const SclRtVTable *vtable);
+
+/// Test oracles (ABI v4): awlsim-style __ASSERT checks lowered from the AWL
+/// frontend. op: 0 ==, 1 !=, 2 >, 3 <, 4 >=, 5 <=. The sim counts failures
+/// (and prints them); query with scl_rt_assert_failures().
+void scl_rt_assert_cmp(uint32_t id, uint8_t op, int64_t actual,
+                       int64_t expected);
+void scl_rt_assert_cmp_r(uint32_t id, uint8_t op, double actual,
+                         double expected);
+/// Number of failed asserts so far (sim only; 0 when a host vtable without
+/// assert support is registered).
+uint64_t scl_rt_assert_failures(void);
 
 /// Simulation-only configuration (NOT part of the fixed ABI): set the size
 /// in bytes of a simulated area (I/Q/M/T/C). DB areas grow on demand unless

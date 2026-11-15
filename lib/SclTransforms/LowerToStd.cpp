@@ -2065,15 +2065,24 @@ static Value convertScalarTo(OpBuilder &b, Location loc, Value v, Type ty) {
   Type src = v.getType();
   if (src == ty)
     return v;
-  if (src.isa<FloatType>() && ty.isa<FloatType>())
-    return v; // same width assumed
+  if (src.isa<FloatType>() && ty.isa<FloatType>()) {
+    if (src.getIntOrFloatBitWidth() < ty.getIntOrFloatBitWidth())
+      return b.create<arith::ExtFOp>(loc, ty, v);
+    if (src.getIntOrFloatBitWidth() > ty.getIntOrFloatBitWidth())
+      return b.create<arith::TruncFOp>(loc, ty, v);
+    return v;
+  }
   if (src.isa<FloatType>() && ty.isa<IntegerType>())
     return b.create<arith::FPToSIOp>(loc, ty, v);
   if (src.isa<IntegerType>() && ty.isa<FloatType>())
     return b.create<arith::SIToFPOp>(loc, ty, v);
   if (src.isa<IntegerType>() && ty.isa<IntegerType>()) {
-    if (src.getIntOrFloatBitWidth() < ty.getIntOrFloatBitWidth())
+    if (src.getIntOrFloatBitWidth() < ty.getIntOrFloatBitWidth()) {
+      // a bit (i1) is an unsigned 0/1, not a sign bit
+      if (src.getIntOrFloatBitWidth() == 1)
+        return b.create<arith::ExtUIOp>(loc, ty, v);
       return b.create<arith::ExtSIOp>(loc, ty, v);
+    }
     return b.create<arith::TruncIOp>(loc, ty, v);
   }
   return nullptr;
@@ -2339,6 +2348,53 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
     auto call = rewriter.create<func::CallOp>(op.getLoc(), op.getCallee(),
                                               TypeRange{}, args);
     rewriter.replaceOp(op, call.getResults());
+    return success();
+  }
+};
+
+// __ASSERT oracle -> scl_rt_assert_cmp / scl_rt_assert_cmp_r
+struct AwlAssertOpLowering : public OpConversionPattern<awl::AssertOp> {
+  using OpConversionPattern<awl::AssertOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::AssertOp op, awl::AssertOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i32 = rewriter.getI32Type();
+    auto i8 = rewriter.getI8Type();
+    auto i64 = rewriter.getI64Type();
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_assert_cmp",
+                                rewriter.getFunctionType({i32, i8, i64, i64}, {}));
+    auto idC = rewriter.create<arith::ConstantOp>(
+        op.getLoc(), i32, rewriter.getI32IntegerAttr(op.getId()));
+    auto opC = rewriter.create<arith::ConstantOp>(
+        op.getLoc(), i8, rewriter.getI8IntegerAttr(op.getOp()));
+    rewriter.create<func::CallOp>(op.getLoc(), fn, TypeRange{},
+                                  ValueRange{idC, opC, adaptor.getActual(),
+                                             adaptor.getExpected()});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct AwlAssertROpLowering : public OpConversionPattern<awl::AssertROp> {
+  using OpConversionPattern<awl::AssertROp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::AssertROp op, awl::AssertROp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i32 = rewriter.getI32Type();
+    auto i8 = rewriter.getI8Type();
+    auto f64 = rewriter.getF64Type();
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_assert_cmp_r",
+                                rewriter.getFunctionType({i32, i8, f64, f64}, {}));
+    auto idC = rewriter.create<arith::ConstantOp>(
+        op.getLoc(), i32, rewriter.getI32IntegerAttr(op.getId()));
+    auto opC = rewriter.create<arith::ConstantOp>(
+        op.getLoc(), i8, rewriter.getI8IntegerAttr(op.getOp()));
+    rewriter.create<func::CallOp>(op.getLoc(), fn, TypeRange{},
+                                  ValueRange{idC, opC, adaptor.getActual(),
+                                             adaptor.getExpected()});
+    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -2618,6 +2674,7 @@ void SclToStdLoweringPass::runOnOperation() {
   patterns.add<
       AwlAddLowering, AwlAndLowering, AwlAssignOpLowering, AwlBlockOpLowering,
       AwlCallOpLowering, AwlCastOpLowering, AwlCmpEqLowering, AwlCmpGeLowering,
+      AwlAssertOpLowering, AwlAssertROpLowering,
       AwlCmpGtLowering, AwlCmpLeLowering, AwlCmpLtLowering, AwlCmpNeLowering,
       AwlConstOpLowering, AwlCounterOpLowering, AwlDirectOpLowering,
       AwlDivLowering, AwlLoadOpLowering, AwlMulLowering, AwlNegOpLowering,
