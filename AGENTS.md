@@ -115,7 +115,7 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 104 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 106 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT), incl. direct_address (Parse), direct (MLIR), direct + big_endian
   (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
   timer/timer_lower/call_fb/cc, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
@@ -275,9 +275,16 @@ has no `\b` — use python3 for regex edits.
   compare (AWL `L` shifts ACC1 into ACC2).
   AWL parser pitfall: a label branch in the instruction loop must `continue`,
   not fall through to parseInstruction (two consecutive labels misparse).
-  AWL backend gaps: FB arrays/structs/strings, DB initializers. (CALL FB n,
-  DB m, CC, timers, FC params and cross-width assignment via awl.cast are
-  done — see below.)
+  AWL backend gaps: DB initializers (AWL text cannot express them; a
+  warning is emitted and they are dropped), dynamic array indices (AWL has
+  no indirect addressing — constant indices are folded into the operand's
+  byte offset). FB arrays/structs/strings ARE supported: composite FB
+  members expose a byte direct at the member offset and
+  getindex/getelement with constant indices fold into DB/M byte offsets
+  (`widthOf` covers arrays/structs; `AwlFbMember` keeps the declared type;
+  `declaredTypeOf` resolves it; verified by jit_awl_backend_fb_array).
+  (CALL FB n, DB m, CC, timers, FC params and cross-width assignment via
+  awl.cast are done — see below.)
 - **FC parameters in the SCL->AWL backend (implemented)**: passed through a
   reserved window at the top of the M area (the AWL analog of the S7 L
   stack): `kParamBaseByte = 65280`, 8 bytes per param; the FC return value
@@ -407,6 +414,12 @@ Remaining technical gaps:
 - Whole-array var-to-var assignment works for 1-d arrays, including
   array-of-struct elements (copied through a char-array view of the flat i8
   buffer in MLIRGen; see `byteSizeOf`).
+- FB-member array-of-struct elements (`pts[1].x` on an FB member) work in
+  the std path: GetIndexOpLowering only emits a static-size window when the
+  result is address<composite> (plain array variable); the byte-view path
+  (arrayType attr set, result address<i8>) must stay a dynamic-size view or
+  the conversion framework inserts an invalid DialectCastOp materialization
+  (fixed; see jit_fb_array_of_struct).
 
 ## Repo hygiene
 

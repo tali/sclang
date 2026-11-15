@@ -1,0 +1,46 @@
+// RUN: sclang --emit=jit --dump-areas %s 2>&1 | FileCheck %s --check-prefix=SCL
+// RUN: sclang-gen --emit=awl %s | sclang -x awl --emit=jit --dump-areas - 2>&1 | FileCheck %s --check-prefix=SCL
+// CHECK-NOT: failed
+// FB with a string input, an int array and struct members, exercised with
+// constant indices: SCL->AWL->JIT must match SCL->JIT.
+// FB1: a[1] = n*10 = 30, a[2] = 31, s = 'AB'; %MW2 = 31, %MW4 = 'A' = 65.
+// SCL: M:
+// SCL: M[3]=31
+// SCL: M[5]=65
+// SCL: M[7]=65
+// SCL: clock=0ms
+type point_t
+  struct
+    x : int;
+    y : int;
+  end_struct
+end_type
+function_block FB1
+var_input
+  s : string[8];
+  n : int;
+end_var
+var
+  a : array[0..2] of int;
+  p : point_t;
+end_var
+begin
+  a[1] := n * 10;
+  a[2] := a[1] + 1;
+  p.x := a[2];
+  p.y := s[0];
+  %MW2 := a[2] + p.x - a[2];
+  %MW4 := s[0];
+  %MW6 := p.y;
+end_function_block
+data_block DB1
+  FB1
+end_data_block
+function OB1 : int
+begin
+  FB1."DB1"(s := 'AB', n := 3);
+end_function
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

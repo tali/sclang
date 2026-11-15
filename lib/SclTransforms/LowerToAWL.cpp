@@ -50,6 +50,7 @@ namespace {
 struct AwlFbMember {
   int64_t offset;
   int width;
+  Type type; // declared scl type (for struct field / array element offsets)
 };
 using AwlFbLayout = llvm::StringMap<AwlFbMember>;
 
@@ -77,6 +78,24 @@ static int widthOf(Type t) {
     return it.getWidth();
   if (isa<scl::RealType>(t))
     return 32;
+  // composites occupy their flat byte size
+  if (auto at = dyn_cast<scl::ArrayType>(t)) {
+    int64_t count = 1;
+    for (auto &dim : at.getDimensions())
+      count *= dim.second - dim.first + 1;
+    int ew = widthOf(at.getElementType());
+    return ew > 0 ? (int)(count * ew) : -1;
+  }
+  if (auto st = dyn_cast<scl::StructType>(t)) {
+    int total = 0;
+    for (auto f : st.getElementTypes()) {
+      int w = widthOf(f);
+      if (w <= 0)
+        return -1;
+      total += w;
+    }
+    return total;
+  }
   return -1;
 }
 
@@ -144,6 +163,35 @@ struct FuncConverter {
     return scl::DirectType::get(ctx, scl::DirectArea::Marker, 0, byte, bit, w);
   }
 
+  // The declared scl type behind an address value (FB member, local
+  // tempvar, array element), used for struct field offsets.
+  Type declaredTypeOf(Value addr) {
+    if (auto gv = addr.getDefiningOp<scl::GetVariableOp>()) {
+      auto baseTy = gv.getAddr().getType().dyn_cast<scl::AddressType>();
+      if (baseTy && baseTy.getElementType().isa<scl::InstanceDbType>() &&
+          fbLayouts) {
+        auto idbTy = baseTy.getElementType().cast<scl::InstanceDbType>();
+        std::string fbSym = llvm::StringRef(idbTy.getFbSymbol()).upper();
+        auto lit = fbLayouts->find(fbSym);
+        if (lit != fbLayouts->end()) {
+          auto mit = lit->second.find(gv.getSymName().str());
+          if (mit != lit->second.end())
+            return mit->second.type;
+        }
+      }
+    }
+    if (auto gi = addr.getDefiningOp<scl::GetIndexOp>()) {
+      if (auto at = gi.getArrayType())
+        if (auto atTy = at->dyn_cast<scl::ArrayType>())
+          return atTy.getElementType();
+    }
+    if (auto ge = addr.getDefiningOp<scl::GetElementOp>()) {
+      if (auto bt = ge.getBaseType())
+        return *bt;
+    }
+    return addr.getType().cast<scl::AddressType>().getElementType();
+  }
+
   // Resolve an scl address value to a direct type (M-area var or % direct).
   scl::DirectType directOf(Value addr) {
     auto it = varDirect.find(addr);
@@ -175,15 +223,97 @@ struct FuncConverter {
           }
           std::string member = gv.getSymName().str();
           auto mit = lit->second.find(member);
-          if (mit != lit->second.end())
+          if (mit != lit->second.end()) {
+            int w = mit->second.width;
+            if (w == 1 || w == 8 || w == 16 || w == 32)
+              return scl::DirectType::get(ctx, scl::DirectArea::DataBlock, db,
+                                           (int32_t)mit->second.offset, 0, w);
+            // composite member (array/struct/string): expose its base as a
+            // byte direct; element access goes through GetIndexOp/GetElementOp
             return scl::DirectType::get(ctx, scl::DirectArea::DataBlock, db,
-                                         (int32_t)mit->second.offset, 0,
-                                         mit->second.width);
+                                         (int32_t)mit->second.offset, 0, 8);
+          }
         }
       }
       emitError(addr.getLoc()) << "unknown FB member '"
                                 << gv.getSymName().str() << "'";
       return nullptr;
+    }
+    // getindex with a constant index: fold index * element size into the
+    // base direct's byte offset (AWL has no indirect addressing, so dynamic
+    // indices are not representable).
+    if (auto gi = addr.getDefiningOp<scl::GetIndexOp>()) {
+      if (gi.getIndices().size() != 1) {
+        emitError(addr.getLoc()) << "multi-dimensional arrays are not "
+                                   "representable in AWL output";
+        return nullptr;
+      }
+      scl::DirectType base = directOf(gi.getAddr());
+      if (!base)
+        return nullptr;
+      int64_t idx = 0;
+      if (auto c = gi.getIndices()[0].getDefiningOp<scl::ConstantOp>()) {
+        if (auto ia = c.getValue().dyn_cast<IntegerAttr>())
+          idx = ia.getValue().getSExtValue();
+      } else {
+        emitError(addr.getLoc()) << "dynamic array index is not representable "
+                                   "in AWL output";
+        return nullptr;
+      }
+      // Element size/width: from the declared array type if tracked (byte-view
+      // path: result element is i8, so use the array's element type), else
+      // from the result element type (plain array variable). Composite
+      // elements (structs) stay byte views (width 8) but advance by the full
+      // element size.
+      int elemBits = widthOf(addr.getType().cast<scl::AddressType>()
+                                 .getElementType());
+      int64_t elemBytes = elemBits > 0 ? (elemBits + 7) / 8 : 1;
+      if (auto at = gi.getArrayType()) {
+        if (auto atTy = at->dyn_cast<scl::ArrayType>()) {
+          int ew = widthOf(atTy.getElementType());
+          if (ew > 0) {
+            elemBytes = (ew + 7) / 8;
+            elemBits = ew > 32 ? 8 : ew;
+          }
+        }
+      }
+      int w = elemBits > 0 ? elemBits : 8;
+      return scl::DirectType::get(ctx, base.getArea(), base.getDb(),
+                                   base.getByte() + (int32_t)(idx * elemBytes),
+                                   0, w);
+    }
+    // getelement: struct field at its byte offset within the base
+    if (auto ge = addr.getDefiningOp<scl::GetElementOp>()) {
+      scl::DirectType base = directOf(ge.getAddr());
+      if (!base)
+        return nullptr;
+      Type baseTy = declaredTypeOf(ge.getAddr());
+      auto st = baseTy.dyn_cast<scl::StructType>();
+      if (!st) {
+        emitError(addr.getLoc()) << "struct element of non-struct base";
+        return nullptr;
+      }
+      int64_t fieldOff = 0;
+      int fw = 8;
+      bool found = false;
+      for (auto [fname, fty] : llvm::zip(st.getElementNames(), st.getElementTypes())) {
+        if (fname.str() == ge.getName().str()) {
+          fw = widthOf(fty);
+          found = true;
+          break;
+        }
+        int w = widthOf(fty);
+        if (w <= 0)
+          break;
+        fieldOff += (w + 7) / 8;
+      }
+      if (!found || fw <= 0) {
+        emitError(addr.getLoc()) << "unknown struct field '" << ge.getName()
+                                  << "'";
+        return nullptr;
+      }
+      return scl::DirectType::get(ctx, base.getArea(), base.getDb(),
+                                   base.getByte() + (int32_t)fieldOff, 0, fw);
     }
     emitError(addr.getLoc())
         << "address not representable as an AWL operand (FB members, arrays, "
@@ -749,7 +879,8 @@ struct FuncConverter {
             scl::LessEqualOp, scl::GreaterThanOp, scl::GreaterEqualOp,
             scl::UnaryNotOp, scl::UnaryMinusOp, scl::IntegerCastOp,
             scl::BitCastOp, scl::DialectCastOp, scl::GetDirectOp,
-            scl::GetVariableOp, scl::GetGlobalOp>(op))
+            scl::GetVariableOp, scl::GetGlobalOp, scl::GetIndexOp,
+            scl::GetElementOp>(op))
       return success();
     emitError(op->getLoc()) << "operation not supported by the AWL backend: "
                             << op->getName();
@@ -1048,7 +1179,7 @@ struct LowerToAWLPass
         int w = widthOf(var.getType());
         if (w <= 0)
           continue;
-        layout[var.getSymName().str()] = {off, w};
+        layout[var.getSymName().str()] = {off, w, var.getType()};
         off += (w + 7) / 8;
       }
       fbLayouts[std::string(llvm::StringRef(fb.getName()).upper())] = layout;

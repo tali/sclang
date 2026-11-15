@@ -1258,8 +1258,13 @@ struct GetIndexOpLowering : public OpConversionPattern<scl::GetIndexOp> {
       Value off = combineOffsets(rewriter, loc, constOff, dynOff, byteFlat);
       bool compositeElem =
           arrayTy.getElementType().isa<scl::StructType, scl::ArrayType>();
+      // A static-size window is only correct when the result is an
+      // address<composite> (plain array variable, no arrayType attr); the
+      // byte-view path (array member of a FB/struct) yields address<i8>,
+      // which converts to a dynamic-size view.
+      bool staticSize = compositeElem && !op.getArrayType().has_value();
       Value view = makeByteView(rewriter, loc, root, off, elemBytes, ctx,
-                                compositeElem);
+                                staticSize);
       rewriter.replaceOp(op, view);
       return success();
     }

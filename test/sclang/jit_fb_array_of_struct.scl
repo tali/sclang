@@ -1,0 +1,36 @@
+// RUN: sclang --opt --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// Array-of-struct as an FB member with constant index: p.x=11, p.y=22,
+// pts[1].x=12, pts[1].y=24, %MW2 = 12 + 24 = 36 = 0x24 (M[3]).
+// CHECK: M:
+// CHECK: M[3]=36
+// CHECK: clock=0ms
+type point_t
+  struct
+    x : int;
+    y : int;
+  end_struct
+end_type
+function_block FB1
+var
+  p : point_t;
+  pts : array[0..1] of point_t;
+end_var
+begin
+  p.x := 11;
+  p.y := 22;
+  pts[1].x := p.x + 1;
+  pts[1].y := p.y + 2;
+  %MW2 := pts[1].x + pts[1].y;
+end_function_block
+data_block DB1
+  FB1
+end_data_block
+function OB1 : int
+begin
+  FB1."DB1"();
+end_function
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function
