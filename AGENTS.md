@@ -345,8 +345,9 @@ has no `\b` — use python3 for regex edits.
   - Lexer: `%…` is one `tok_direct_address` token (raw text without `%`);
     `Parser::ParseDirectAddressExpression` parses `%I0.0`, `%IB2`, `%IW4`,
     `%ID0`, `%DB1.DBX0.0`…`%DB1.DBD8` into a `DirectVariableAST`. Plain `%I0`
-    without a bit number is a parse error; `%T`/`%C` parse but MLIRGen rejects
-    them ("timers/counters not yet supported").
+    without a bit number is a parse error; `%T`/`%C` timers/counters are
+    supported (`%TW1`/`%TD1`/`%CW1` word/dword forms work through the same
+    `scl_rt_*` C ABI; the sim runtime owns the T/C areas).
   - LowerToStd: `address<direct<…>>` converts to a packed-i64 placeholder
     (never used); `scl.load`/`scl.store` through a direct address lower to
     `@scl_rt_read/write[_bit](area: i8, db: i32, byteOff: i32, widthBytes|bit:
@@ -366,12 +367,13 @@ has no `\b` — use python3 for regex edits.
 
 ## Known gaps (parsed but not lowered / not code-generated)
 
-AWL known gaps (both directions): IEC timer instructions
-SP/SE/SS/SV/SI, counters ZV/ZR. CALL DB m is N/A — S7 AWL has no CALL DB
-instruction (DBs are opened with OPN, which our explicit `DBn.` operands
-make unnecessary). (CALL FB n / DB m with FB instance DBs, CC
-conditional calls, and FC params via the M param window are implemented —
-see the bullets above.)
+AWL: no known instruction gaps in either direction. CALL DB m is N/A —
+S7 AWL has no CALL DB instruction (DBs are opened with OPN, which our
+explicit `DBn.` operands make unnecessary). IEC timer instructions
+SP/SE/SS/SV/SI (`awl.timer_start` + `scl_rt_timer_start`) and counters
+ZV/ZR (`awl.counter` + `scl_rt_counter_op`), CALL FB n / DB m with FB
+instance DBs, CC conditional calls, and FC params via the M param window
+are all implemented — see the bullets above.
 
 Memory areas `%I`/`%Q`/`%M`/`%DB…`/`%T`/`%C` are implemented (see above):
 `!scl.direct` type, `scl.getdirect`, `%`-address parsing, lowering to the
