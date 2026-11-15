@@ -90,6 +90,21 @@ class MLIRGenImpl {
 public:
   MLIRGenImpl(mlir::MLIRContext &context) : builder(&context) {}
 
+  /// Set when any error diagnostic was emitted. Lets mlirGen fail cleanly
+  /// (return nullptr) instead of crashing on null types/values when
+  /// assertions are disabled. Member overloads shadow mlir::emitError for
+  /// unqualified calls inside this class.
+  bool errorOccurred = false;
+  mlir::InFlightDiagnostic emitError(mlir::Location location) {
+    errorOccurred = true;
+    return mlir::emitError(location);
+  }
+  mlir::InFlightDiagnostic emitError(mlir::Location location,
+                                     const llvm::Twine &message) {
+    errorOccurred = true;
+    return mlir::emitError(location, message);
+  }
+
   /// Public API: convert the AST for a Toy module (source file) to an MLIR
   /// Module operation.
   mlir::ModuleOp mlirGen(const ModuleAST *moduleAST) {
@@ -124,16 +139,18 @@ public:
                         callableVarTypes[fb->getIdentifier()]);
       }
     }
+    if (errorOccurred)
+      return nullptr;
 
     for (const auto &unit : *moduleAST) {
       builder.clearInsertionPoint();
       if (auto *udt = llvm::dyn_cast<UserDefinedTypeAST>(unit.get())) {
-        if (failed(mlirGen(udt)))
+        if (failed(mlirGen(udt)) || errorOccurred)
           return nullptr;
         continue;
       }
       auto func = mlirGen(unit.get());
-      if (!func)
+      if (!func || errorOccurred)
         return nullptr;
       theModule.push_back(func);
     }
@@ -177,6 +194,8 @@ private:
   /// into (FB/struct members are addressed as i8 byte views; the declared
   /// type is needed to type loads and to resolve nested member access).
   llvm::DenseMap<mlir::Value, mlir::Type> byteViewTypes;
+  /// For `base.%Xn` bit accesses: bit number per byte address.
+  llvm::DenseMap<mlir::Value, int> bitViewBits;
   /// Function/OB name -> result type, collected in a pre-pass over the
   /// module so calls can be typed even before the callee is generated.
   llvm::StringMap<mlir::Type> functionResultTypes;
@@ -245,6 +264,8 @@ private:
   mlir::LogicalResult declare(mlir::Location loc, llvm::StringRef name,
                               const ExpressionAST *constValue) {
     mlir::Value value = mlirGen(constValue);
+    if (!value)
+      return mlir::failure();
     mlir::Type type = value.getType();
 
     assert(!name.empty());
@@ -294,6 +315,8 @@ private:
                               bool isInput, bool isOutput) {
     for (const auto &decl : decls->getValues()) {
       auto type = getType(decl->getDataType());
+      if (!type)
+        return mlir::failure();
       mlir::Value init = nullptr;
       if (decl->getInitializer().has_value()) {
         init = mlirGen(decl->getInitializer().value());
@@ -314,6 +337,8 @@ private:
   mlir::LogicalResult mlirGenTempVar(const VariableDeclarationSubsectionAST *decls) {
     for (const auto &decl : decls->getValues()) {
       auto type = getType(decl->getDataType());
+      if (!type)
+        return mlir::failure();
       auto addressType = AddressType::get(type);
       auto init = decl->getInitializer();
       for (const auto &var : decl->getVars()) {
@@ -333,6 +358,26 @@ private:
       }
     }
 
+    return mlir::success();
+  }
+
+  /// TIA `VAR CONSTANT` subsection: register each declared name as a
+  /// constant symbol with its initializer as the constant value.
+  mlir::LogicalResult mlirGenConstantVars(
+      const VariableDeclarationSubsectionAST *decls) {
+    for (const auto &decl : decls->getValues()) {
+      auto init = decl->getInitializer();
+      if (!init) {
+        emitError(loc(decl->loc()))
+            << "constant declaration requires an initializer";
+        return mlir::failure();
+      }
+      for (const auto &var : decl->getVars()) {
+        auto location = loc(var->loc());
+        if (failed(declare(location, var->getIdentifier(), *init)))
+          return mlir::failure();
+      }
+    }
     return mlir::success();
   }
 
@@ -367,6 +412,8 @@ private:
       case VariableDeclarationSubsectionAST::VarInOut:
         return mlirGen(decl, /*isInput=*/true, /*isOutput=*/true);
       case VariableDeclarationSubsectionAST::Var:
+        if (decl->isConstant())
+          return mlirGenConstantVars(decl);
         return mlirGen(decl, /*isInput=*/false, /*isOutput=*/false);
       case VariableDeclarationSubsectionAST::VarTemp:
         return mlirGenTempVar(decl);
@@ -441,11 +488,15 @@ private:
           addVariables(vardecls, input_types, input_names);
           break;
         case VariableDeclarationSubsectionAST::VarOutput:
-          addVariables(vardecls, output_types, output_names);
+          // FC outputs are not propagated to the caller yet (no `=>`
+          // write-back): keep them as function-local statics so the block
+          // compiles. FB outputs are IDB members and unaffected.
+          tempvar.push_back(&vardecls);
           break;
         case VariableDeclarationSubsectionAST::VarInOut:
+          // In/out passed as input; write-back to the caller is a
+          // documented gap (see AGENTS.md).
           addVariables(vardecls, input_types, input_names);
-          addVariables(vardecls, output_types, output_names);
           break;
         case VariableDeclarationSubsectionAST::Var:
         case VariableDeclarationSubsectionAST::VarTemp:
@@ -587,7 +638,33 @@ private:
     auto context = builder.getContext();
 
     StringRef name = db->getIdentifier();
-    mlir::Type type = getType(db->getType());
+    mlir::Type type;
+    if (db->getType()) {
+      type = getType(db->getType());
+    } else if (auto *decls = db->getDeclarations()) {
+      // TIA non-optimized DB: the type is the implicit struct of the
+      // declared members.
+      llvm::SmallVector<mlir::StringAttr, 4> names;
+      llvm::SmallVector<mlir::Type, 4> types;
+      for (auto &sub : decls->getDecls()) {
+        if (sub->getKind() !=
+            DeclarationSubsectionAST::DeclarationASTKind::Decl_Variable)
+          continue;
+        auto &vardecls = llvm::cast<VariableDeclarationSubsectionAST>(*sub);
+        for (auto &value : vardecls.getValues()) {
+          auto t = getType(value->getDataType());
+          if (!t)
+            return nullptr;
+          for (auto &var : value->getVars())
+            names.push_back(builder.getStringAttr(var->getIdentifier()));
+          for (auto &var : value->getVars()) {
+            (void)var;
+            types.push_back(t);
+          }
+        }
+      }
+      type = StructType::get(names, types);
+    }
     if (!type) return nullptr;
     mlir::TypeAttr typeAttr = mlir::TypeAttr::get(type);
     mlir::StringAttr nameAttr = mlir::StringAttr::get(context, name);
@@ -607,9 +684,11 @@ private:
           continue;
         auto *lhs = llvm::dyn_cast<SimpleVariableAST>(bin->getLhs());
         if (!lhs || lhs->isSymbol()) {
-          emitError(loc(bin->getLhs()->loc()))
-              << "invalid DB initializer target";
-          return nullptr;
+          // not a plain start-value assignment (e.g. member/array init in a
+          // DB code section): not executed by the sim, skip with a warning
+          emitWarning(loc(bin->getLhs()->loc()))
+              << "non-trivial DB initializer in '" << name << "' is ignored";
+          continue;
         }
         int64_t value = 0;
         if (mlir::failed(foldConstIntAST(bin->getRhs(), value))) {
@@ -785,6 +864,11 @@ private:
       return nullptr;
     ArrayType arrTy = lhsArr ? lhsArr : rhsArr;
     if (!arrTy) {
+      // a single-char literal against a char scalar: not a string compare,
+      // fall through to the normal path (char constant)
+      const StringConstantAST *lit = lhsLit ? lhsLit : rhsLit;
+      if (lit && lit->getValue().size() <= 1)
+        return nullptr;
       emitError(location) << "string literal compared with a non-string";
       return nullptr;
     }
@@ -1007,6 +1091,40 @@ private:
     if (!rhs)
       return mlir::failure();
 
+    // `base.%Xn := v`: read-modify-write of a single bit in the base byte.
+    if (auto *bin = llvm::dyn_cast<BinaryExpressionAST>(expr->getLhs())) {
+      if (bin->getOp() == tok_dot) {
+        if (auto *dir = llvm::dyn_cast<DirectVariableAST>(bin->getRhs())) {
+          if (std::string(dir->getArea()) == "X") {
+            auto *ctx = builder.getContext();
+            auto byteTy = LogicalType::get(ctx, 8);
+            auto i8 = IntegerType::get(ctx, 8);
+            int bit = dir->getBit();
+            mlir::Value bitVal = rhs;
+            if (bitVal.getType() != i8) {
+              auto cast = builder.create<IntegerCastOp>(location, i8, bitVal);
+              if (bitVal.getType().isa<LogicalType>())
+                cast.setZextAttr(builder.getUnitAttr());
+              bitVal = cast.getResult();
+            }
+            auto scaleC = builder.create<ConstantOp>(
+                location, i8, builder.getIntegerAttr(i8, (int64_t)(1 << bit)));
+            auto set = builder.create<MulOp>(location, bitVal, scaleC.getResult());
+            auto byteVal = builder.create<LoadOp>(location, byteTy, lhs).getResult();
+            auto byteI8 = builder.create<IntegerCastOp>(location, i8, byteVal);
+            byteI8.setZextAttr(builder.getUnitAttr());
+            auto maskC = builder.create<ConstantOp>(
+                location, i8,
+                builder.getIntegerAttr(i8, (int64_t)(uint8_t)~(1 << bit)));
+            auto cleared = builder.create<AndOp>(location, byteI8.getResult(), maskC.getResult());
+            auto newByte = builder.create<OrOp>(location, cleared.getResult(), set.getResult());
+            builder.create<StoreOp>(location, lhs, newByte.getResult());
+            return mlir::success();
+          }
+        }
+      }
+    }
+
     // Implicit integer conversion on assignment (e.g. char -> int). For
     // byte-view member addresses use the declared member type, not the i8
     // address element type.
@@ -1044,6 +1162,8 @@ private:
   mlir::Value mlirGenLValue(const ExpressionAST *expr) {
     auto location = loc(expr->loc());
     mlir::Value address = mlirGen(expr);
+    if (!address)
+      return nullptr;
 
     if (!address.getType().isa<AddressType>()) {
       emitError(location) << "not a lvalue, type " << address.getType();
@@ -1098,9 +1218,31 @@ private:
     }
     if (auto *bin = llvm::dyn_cast<BinaryExpressionAST>(expr)) {
       if (bin->getOp() == tok_dot) {
+        auto location = loc(expr->loc());
         auto addr = mlirGen(expr);
         if (!addr)
           return nullptr;
+        if (auto *dir = llvm::dyn_cast<DirectVariableAST>(bin->getRhs())) {
+          // relative access base.%Xn: load the byte and extract the bit
+          // (byte / 2^n) % 2 as a byte-typed 0/1 value
+          if (std::string(dir->getArea()) == "X") {
+            auto byteTy = LogicalType::get(builder.getContext(), 8);
+            auto i8 = IntegerType::get(builder.getContext(), 8);
+            auto byteVal = builder.create<LoadOp>(location, byteTy, addr).getResult();
+            auto divC = builder.create<ConstantOp>(
+                location, byteTy,
+                builder.getIntegerAttr(i8, (int64_t)(1 << dir->getBit())));
+            auto shifted = builder.create<DivOp>(location, byteVal, divC.getResult());
+            auto modC = builder.create<ConstantOp>(
+                location, byteTy, builder.getIntegerAttr(i8, (int64_t)2));
+            return builder.create<ModOp>(location, shifted.getResult(), modC.getResult()).getResult();
+          }
+          // base.%Bn/.%Wn/.%Dn: load with the recorded access width
+          auto it = byteViewTypes.find(addr);
+          if (it == byteViewTypes.end())
+            return nullptr;
+          return builder.create<LoadOp>(location, it->second, addr);
+        }
         // Declared member type: tracked for byte-view member addresses,
         // otherwise derived from the base type.
         mlir::Type ty = nullptr;
@@ -1114,7 +1256,7 @@ private:
         }
         if (!ty)
           return nullptr;
-        return builder.create<LoadOp>(loc(expr->loc()), ty, addr);
+        return builder.create<LoadOp>(location, ty, addr);
       }
     }
     if (llvm::isa<IndexedVariableAST>(expr)) {
@@ -1161,7 +1303,16 @@ private:
   }
 
   mlir::Value mlirGen(const StringConstantAST *expr) {
-    emitError(loc(expr->loc())) << "StringConstantAST not implemented";
+    // A single-character string literal used as a value is a char constant
+    // (e.g. comparing a CHAR with 'x').
+    if (expr->getValue().size() == 1) {
+      auto i8 = IntegerType::get(builder.getContext(), 8);
+      return builder.create<ConstantOp>(
+          loc(expr->loc()), i8,
+          builder.getIntegerAttr(i8, (uint8_t)expr->getValue()[0]));
+    }
+    emitError(loc(expr->loc()))
+        << "string literal only supported as assignment/comparison target";
     return nullptr;
   }
 
@@ -1236,6 +1387,12 @@ private:
       return variable.getValue();
     if (variable.isDirect())
       return variable.getValue();
+    // A global data block referenced without quotes, e.g. `MyDB.member`.
+    if (DataBlockOp db = mlir::SymbolTable::lookupNearestSymbolFrom<DataBlockOp>(
+            theModule, builder.getStringAttr(name))) {
+      mlir::Type address = AddressType::get(db.getType());
+      return builder.create<GetGlobalOp>(location, address, name);
+    }
     emitError(location) << "unknown variable '" << name << "'";
     return nullptr;
   }
@@ -1279,20 +1436,58 @@ private:
     return nullptr;
   }
 
+  /// Relative access into a composite variable: `base.%B<n>` / `.%W<n>` /
+  /// `.%D<n>` select a byte/word/dword at absolute byte offset <n> within
+  /// the base (returned as an i8 view address with the access width recorded
+  /// in byteViewTypes); `base.%X<n>` selects bit <n> of the base byte (the
+  /// byte address is returned and the bit number recorded in bitViewBits).
+  mlir::Value mlirGenRelativeAccess(mlir::Location location, mlir::Value base,
+                                    const DirectVariableAST *dir) {
+    if (!base)
+      return nullptr;
+    auto *ctx = builder.getContext();
+    auto area = std::string(dir->getArea());
+    auto i8 = IntegerType::get(ctx, 8);
+    // byte-offset address via an i8-array view with a constant index
+    // (element size 1, so the index is the byte offset)
+    mlir::Value addr = base;
+    if (dir->getByte() != 0) {
+      auto intTy = getType(tok_int);
+      auto i16 = builder.getIntegerType(16);
+      auto idx = builder.create<ConstantOp>(
+          location, intTy, builder.getIntegerAttr(i16, dir->getByte()));
+      auto arrTy = ArrayType::get({{0, 0}}, i8);
+      addr = builder.create<GetIndexOp>(location, AddressType::get(i8), base,
+                                        mlir::ValueRange{idx},
+                                        mlir::TypeAttr::get(arrTy));
+    }
+    if (area == "X") {
+      bitViewBits[addr] = dir->getBit();
+      byteViewTypes[addr] = LogicalType::get(ctx, 8);
+      return addr;
+    }
+    // B/W/D: record the access width on the (possibly offset) byte address
+    byteViewTypes[addr] = LogicalType::get(ctx, dir->getWidth());
+    return addr;
+  }
+
   mlir::Value mlirGenElement(mlir::Location location,
                              mlir::Value address, StringRef name) {
     mlir::Type baseType = address.getType().cast<AddressType>().getElementType();
     auto i8 = IntegerType::get(builder.getContext(), 8);
     mlir::Type resultType = AddressType::get(i8);
 
-    return mlir::TypeSwitch<mlir::Type, mlir::Value>(baseType)
-    .Case<InstanceDbType>([&](auto idbType) -> mlir::Value {
+    // Member access into an instance DB (FB variable), possibly reached
+    // through a byte view (FB-typed member of another FB/struct).
+    auto genIdbMember = [&](InstanceDbType idbType) -> mlir::Value {
       auto fbName = builder.getStringAttr(idbType.getFbSymbol());
       auto fb = mlir::SymbolTable::lookupNearestSymbolFrom<FunctionBlockOp>(
         theModule, fbName);
       // Builtin timer FBs have no FunctionBlockOp; their member types are
       // fixed (IN/Q: bool, PT/ET: time).
       std::string fbUp = std::string(fbName.getValue().upper());
+      if (llvm::StringRef(fbUp).ends_with("_TIME"))
+        fbUp = fbUp.substr(0, fbUp.size() - 5);
       if (!fb && (fbUp == "TON" || fbUp == "TOF" || fbUp == "TP")) {
         mlir::Type t;
         std::string mUp = std::string(llvm::StringRef(name).upper());
@@ -1323,6 +1518,11 @@ private:
       auto result = builder.create<GetVariableOp>(location, resultType, address, name);
       byteViewTypes[result] = var.getType();
       return result;
+    };
+
+    return mlir::TypeSwitch<mlir::Type, mlir::Value>(baseType)
+    .Case<InstanceDbType>([&](auto idbType) -> mlir::Value {
+      return genIdbMember(idbType);
     })
     .Case<StructType>([&](auto structType) -> mlir::Value {
       auto result = builder.create<GetElementOp>(location, resultType, address,
@@ -1339,7 +1539,16 @@ private:
         return nullptr;
       }
       auto it = byteViewTypes.find(address);
-      if (it == byteViewTypes.end() || !it->second.isa<StructType>()) {
+      if (it == byteViewTypes.end()) {
+        emitError(location) << "unsupported base type " << baseType
+                            << " for element '" << name << "'";
+        return nullptr;
+      }
+      // FB-typed member (e.g. a TON_TIME timer inside an FB): the declared
+      // instance-DB type is tracked in byteViewTypes.
+      if (auto idbTy = it->second.dyn_cast<InstanceDbType>())
+        return genIdbMember(idbTy);
+      if (!it->second.isa<StructType>()) {
         emitError(location) << "unsupported base type " << baseType
                             << " for element '" << name << "'";
         return nullptr;
@@ -1452,6 +1661,10 @@ private:
       mlir::Value lhs = mlirGen(expr->getLhs());
       if (!lhs)
         return nullptr;
+      if (auto *dir = llvm::dyn_cast<DirectVariableAST>(expr->getRhs())) {
+        // relative access: base.%Bn/.%Wn/.%Dn (byte offset) or base.%Xn (bit)
+        return mlirGenRelativeAccess(location, lhs, dir);
+      }
       if (!isa<SimpleVariableAST>(expr->getRhs())) {
         emitError(loc(expr->getRhs()->loc()), "expected element name");
         return nullptr;
@@ -1493,6 +1706,14 @@ private:
         return it.getWidth();
       if (auto lt = t.dyn_cast<LogicalType>())
         return lt.getWidth();
+      // time/date types compare and mix arithmetically with integers as
+      // plain integers of their storage width
+      if (t.isa<S5TimeType>() || t.isa<DateType>())
+        return 16;
+      if (t.isa<TimeType>() || t.isa<TimeOfDayType>())
+        return 32;
+      if (t.isa<DateAndTimeType>())
+        return 64;
       return -1;
     };
     auto toIntOfWidth = [&](mlir::Value v, int w) -> mlir::Value {
@@ -1508,10 +1729,25 @@ private:
       return op.getResult();
     };
     int lw = widthOfTy(lhs.getType()), rw = widthOfTy(rhs.getType());
-    if (lw > 0 && rw > 0 && lw != rw) {
+    // Normalize when widths differ OR when the types differ at the same
+    // width (e.g. !scl.time vs i32): normalize to a plain IntegerType.
+    if (lw > 0 && rw > 0 && (lw != rw || lhs.getType() != rhs.getType())) {
       int w = std::max(lw, rw);
       lhs = toIntOfWidth(lhs, w);
       rhs = toIntOfWidth(rhs, w);
+    }
+
+    // Mixed real/integer operands: convert the integer side to real
+    // (sitofp at lowering) so comparisons/arithmetic have matching types.
+    if (lhs.getType().isa<RealType>() != rhs.getType().isa<RealType>()) {
+      auto realTy = lhs.getType().isa<RealType>() ? lhs.getType() : rhs.getType();
+      auto toReal = [&](mlir::Value v) -> mlir::Value {
+        if (v.getType() == realTy)
+          return v;
+        return builder.create<DialectCastOp>(location, realTy, v).getResult();
+      };
+      lhs = toReal(lhs);
+      rhs = toReal(rhs);
     }
 
     // Derive the operation name from the binary operator.
@@ -1584,12 +1820,33 @@ private:
 
     return TypeSwitch<const ExpressionAST *, mlir::LogicalResult>(expr->getFunction())
     .Case<SimpleVariableAST>([&](auto callee) {
-      mlirGenFcCall(expr, callee->getName());
+      // Call of an FB instance variable (e.g. #TIME(IN := ...) on a
+      // TON_TIME member): a call.fb on that instance.
+      if (auto fbSym = fbInstanceOf(callee->getName())) {
+        if (failed(mlirGenFbCall(expr, callee->getName(), *fbSym)))
+          return mlir::failure();
+        return mlir::success();
+      }
+      mlirGenFcCall(expr, callee->getName(), /*allowVoid=*/true);
       return mlir::success();
     })
     .Case<BinaryExpressionAST>([&](auto callee) {
       if (callee->getOp() != tok_dot)
         return mlir::failure();
+      // `#valve.timerClose.TON(...)`: explicit timer-FB suffix on an
+      // instance member — call TON/TOF/TP on the member before the suffix.
+      if (auto *rhsVar = dyn_cast<SimpleVariableAST>(callee->getRhs())) {
+        std::string rhsUp = std::string(rhsVar->getName().upper());
+        if ((rhsUp == "TON" || rhsUp == "TOF" || rhsUp == "TP") &&
+            isa<BinaryExpressionAST>(callee->getLhs())) {
+          mlir::Value instAddr = mlirGen(callee->getLhs());
+          if (!instAddr)
+            return mlir::failure();
+          if (failed(mlirGenFbCallOn(expr, instAddr, rhsUp)))
+            return mlir::failure();
+          return mlir::success();
+        }
+      }
       auto fbVar = dyn_cast<SimpleVariableAST>(callee->getLhs());
       if (!fbVar) {
         emitError(location, "invalid fb in function call");
@@ -1600,10 +1857,35 @@ private:
         emitError(location, "invalid instance db in function call");
         return mlir::failure();
       }
-      if (failed(mlirGenFbCall(expr, idbVar->getName(), fbVar->getName()))) {
-        emitError(location, "invalid FB call");
+      // `FB1 "DB1"(...)`: lhs is an FB name (source-defined or builtin
+      // timer), rhs a (global) instance DB.
+      std::string fbUp = std::string(fbVar->getName().upper());
+      if (llvm::StringRef(fbUp).ends_with("_TIME"))
+        fbUp = fbUp.substr(0, fbUp.size() - 5);
+      if (fbNames.contains(fbVar->getName()) || fbUp == "TON" ||
+          fbUp == "TOF" || fbUp == "TP") {
+        if (failed(mlirGenFbCall(expr, idbVar->getName(), fbVar->getName()))) {
+          emitError(location, "invalid FB call");
+          return mlir::failure();
+        }
+        return mlir::success();
+      }
+      // `#valve.timerOpen(...)`: the callee is an FB-instance member access
+      // (e.g. a TON_TIME timer inside a struct); call the member's FB on the
+      // member address.
+      mlir::Value instAddr = mlirGen(callee);
+      if (!instAddr)
+        return mlir::failure();
+      auto it = byteViewTypes.find(instAddr);
+      if (it == byteViewTypes.end() || !it->second.isa<InstanceDbType>()) {
+        emitError(location, "call target '")
+            << fbVar->getName() << "." << idbVar->getName()
+            << "' is not a function block instance";
         return mlir::failure();
       }
+      if (failed(mlirGenFbCallOn(expr, instAddr,
+                                 it->second.cast<InstanceDbType>().getFbSymbol())))
+        return mlir::failure();
       return mlir::success();
     })
     .Default([&](auto callee) {
@@ -1621,6 +1903,11 @@ private:
       emitError(location, "invalid callee in function call");
       return nullptr;
     }
+    if (auto fbSym = fbInstanceOf(callee->getName())) {
+      emitError(location) << "function block '" << callee->getName()
+                          << "' call used as a value";
+      return nullptr;
+    }
     return mlirGenFcCall(expr, callee->getName());
    }
 
@@ -1633,10 +1920,11 @@ private:
           fStr = nullptr) {
     for (auto &arg : fc->getParameters()) {
       auto binary = dyn_cast<BinaryExpressionAST>(arg.get());
-      if (binary && binary->getOp() == tok_assignment) {
+      if (binary && (binary->getOp() == tok_assignment ||
+                     binary->getOp() == tok_assign_output)) {
         auto lhs = binary->getLhs();
         auto name = dyn_cast<SimpleVariableAST>(lhs);
-        if (!name || name->isSymbol()) {
+        if (!name) {
           emitError(loc(lhs->loc()), "invalid parameter name");
           return mlir::failure();
         }
@@ -1678,7 +1966,198 @@ private:
     return mlirGenCallParameters(fc, f, nullptr, paramTypes);
   }
 
-  mlir::Value mlirGenFcCall(const FunctionCallAST *expr, StringRef callee) {
+  /// IEC 61131-3 conversion builtin `SRC_TO_DST` (single argument): cast
+  /// the argument to the destination type via scl.int.cast (zext for the
+  /// unsigned byte/word/dword targets). Returns nullptr if not a builtin.
+  /// TIA DATE_AND_TIME field extractor DT_YEAR..DT_MSEC / DT_WEEKDAY:
+  /// the DT is stored as 8 big-endian BCD bytes in an i64 (ADR-001);
+  /// byte k (0=year .. 5=second, 6=msec/weekday) is extracted with
+  /// div/mod and BCD-decoded. Returns nullptr if `callee` is not a DT_*.
+  mlir::Value mlirGenDtField(mlir::Location location,
+                             const FunctionCallAST *expr, StringRef callee) {
+    std::string up = std::string(callee.upper());
+    if (!llvm::StringRef(up).starts_with("DT_"))
+      return nullptr;
+    // byte index within the 8-byte DT and whether to BCD-decode
+    int byteIdx = -1;
+    bool bcd = true;
+    std::string field = up.substr(3);
+    if (field == "YEAR") byteIdx = 0;
+    else if (field == "MONTH") byteIdx = 1;
+    else if (field == "DAY") byteIdx = 2;
+    else if (field == "HOUR") byteIdx = 3;
+    else if (field == "MINUTE") byteIdx = 4;
+    else if (field == "SECOND") byteIdx = 5;
+    else if (field == "MSEC") byteIdx = 6;      // high nibble pair of byte 6
+    else if (field == "WEEKDAY") { byteIdx = 6; bcd = false; } // low nibble
+    else if (field == "NANOSECOND") byteIdx = 7;
+    else if (field == "TOD") byteIdx = -2; // special: time-of-day in ms
+    else return nullptr;
+
+    mlir::Value arg;
+    if (failed(mlirGenCallParameters(
+            expr, [&](StringRef, mlir::Value v) { arg = v; },
+            [&](mlir::Value v) { arg = v; })))
+      return nullptr;
+    if (!arg)
+      return nullptr;
+    auto *ctx = builder.getContext();
+    auto i64 = IntegerType::get(ctx, 64);
+    auto i16 = IntegerType::get(ctx, 16);
+    if (arg.getType() != i64) {
+      auto cast = builder.create<IntegerCastOp>(location, i64, arg);
+      if (arg.getType().isa<LogicalType>())
+        cast.setZextAttr(builder.getUnitAttr());
+      arg = cast.getResult();
+    }
+    auto i64Const = [&](int64_t v) {
+      return builder.create<ConstantOp>(location, i64,
+                                        builder.getIntegerAttr(i64, v)).getResult();
+    };
+    if (byteIdx == -2) {
+      // DT_TOD: ms since midnight from the BCD hour/min/sec/msec bytes
+      auto bcdByte = [&](int idx) -> mlir::Value {
+        int64_t p = 1;
+        for (int i = 0; i < 7 - idx; ++i)
+          p *= 256;
+        auto b = builder.create<ModOp>(
+            location,
+            builder.create<DivOp>(location, arg, i64Const(p)).getResult(),
+            i64Const(256)).getResult();
+        auto lo = builder.create<ModOp>(location, b, i64Const(16)).getResult();
+        auto hi = builder.create<DivOp>(location, b, i64Const(16)).getResult();
+        return builder.create<AddOp>(
+            location, lo,
+            builder.create<MulOp>(location, hi, i64Const(10)).getResult()).getResult();
+      };
+      mlir::Value ms = builder.create<MulOp>(location, bcdByte(6), i64Const(1)).getResult();
+      ms = builder.create<AddOp>(
+          location, ms,
+          builder.create<MulOp>(location, bcdByte(5), i64Const(1000)).getResult()).getResult();
+      ms = builder.create<AddOp>(
+          location, ms,
+          builder.create<MulOp>(location, bcdByte(4), i64Const(60000)).getResult()).getResult();
+      ms = builder.create<AddOp>(
+          location, ms,
+          builder.create<MulOp>(location, bcdByte(3), i64Const(3600000)).getResult()).getResult();
+      auto todTy = getType(tok_time_of_day);
+      auto i32 = IntegerType::get(ctx, 32);
+      if (ms.getType() != i32)
+        ms = builder.create<IntegerCastOp>(location, i32, ms).getResult();
+      if (ms.getType() != todTy)
+        ms = builder.create<DialectCastOp>(location, todTy, ms).getResult();
+      return ms;
+    }
+    // byte = (v / 256^(7-byteIdx)) % 256   (unsigned shifts via div/mod)
+    int64_t pow = 1;
+    for (int i = 0; i < 7 - byteIdx; ++i)
+      pow *= 256;
+    auto byteVal = builder.create<ModOp>(
+        location, builder.create<DivOp>(location, arg, i64Const(pow)).getResult(),
+        i64Const(256)).getResult();
+    mlir::Value fieldVal = byteVal;
+    if (bcd) {
+      // BCD decode: (b % 16) + 10 * (b / 16)
+      auto lo = builder.create<ModOp>(location, byteVal, i64Const(16)).getResult();
+      auto hi = builder.create<DivOp>(location, byteVal, i64Const(16)).getResult();
+      fieldVal = builder.create<AddOp>(
+          location, lo, builder.create<MulOp>(location, hi, i64Const(10)).getResult()).getResult();
+    } else {
+      fieldVal = builder.create<ModOp>(location, byteVal, i64Const(16)).getResult();
+    }
+    // result type INT
+    auto resTy = getType(tok_int);
+    if (fieldVal.getType() != i16)
+      fieldVal = builder.create<IntegerCastOp>(location, i16, fieldVal).getResult();
+    (void)resTy;
+    return fieldVal;
+  }
+
+  mlir::Value mlirGenBuiltinConversion(mlir::Location location,
+                                        const FunctionCallAST *expr,
+                                        StringRef callee) {
+    auto context = builder.getContext();
+    // destination type from the _TO_<DST> suffix
+    auto pos = callee.rfind("_TO_");
+    if (pos == StringRef::npos || pos + 4 >= callee.size())
+      return nullptr;
+    std::string dst = std::string(callee.substr(pos + 4).upper());
+    Token dstTok;
+    if (dst == "INT") dstTok = tok_int;
+    else if (dst == "DINT") dstTok = tok_dint;
+    else if (dst == "BYTE" || dst == "USINT") dstTok = tok_byte;
+    else if (dst == "WORD" || dst == "UINT") dstTok = tok_word;
+    else if (dst == "DWORD" || dst == "UDINT" || dst == "ULINT")
+      dstTok = tok_dword;
+    else if (dst == "CHAR" || dst == "SINT") dstTok = tok_char;
+    else if (dst == "BOOL") dstTok = tok_bool;
+    else if (dst == "TIME") dstTok = tok_time;
+    else if (dst == "S5TIME") dstTok = tok_s5time;
+    else if (dst == "DATE") dstTok = tok_date;
+    else if (dst == "TOD" || dst == "TIME_OF_DAY") dstTok = tok_time_of_day;
+    else if (dst == "DT" || dst == "DATE_AND_TIME" || dst == "DTL")
+      dstTok = tok_date_and_time;
+    else if (dst == "REAL" || dst == "LREAL")
+      dstTok = tok_real;
+    else
+      return nullptr; // string targets not supported yet
+    mlir::Type resTy = getType(dstTok);
+    if (!resTy)
+      return nullptr;
+
+    mlir::Value arg;
+    if (failed(mlirGenCallParameters(
+            expr, [&](StringRef, mlir::Value v) { arg = v; },
+            [&](mlir::Value v) { arg = v; })))
+      return nullptr;
+    if (!arg)
+      return nullptr;
+    // REAL source: dialect-cast straight to the target (fptosi/… at lowering)
+    if (arg.getType().isa<RealType>() && !resTy.isa<RealType>()) {
+      if (arg.getType() != resTy)
+        arg = builder.create<DialectCastOp>(location, resTy, arg);
+      return arg;
+    }
+    // cast to the destination width as an IntegerType first (int.cast only
+    // has integer results), then dialect-cast to the scl target type
+    int width = 16;
+    if (auto it = resTy.dyn_cast<IntegerType>())
+      width = it.getWidth();
+    else if (auto lt = resTy.dyn_cast<LogicalType>())
+      width = lt.getWidth();
+    else if (resTy.isa<RealType>())
+      width = 32;
+    else if (resTy.isa<S5TimeType>() || resTy.isa<DateType>())
+      width = 16;
+    else if (resTy.isa<TimeType>() || resTy.isa<TimeOfDayType>())
+      width = 32;
+    else if (resTy.isa<DateAndTimeType>())
+      width = 64;
+    if (resTy.isa<RealType>()) {
+      // int -> real: sitofp at lowering, via mlir.cast i32 -> !scl.real
+      auto intTy = IntegerType::get(context, 32);
+      if (arg.getType() != intTy) {
+        auto cast = builder.create<IntegerCastOp>(location, intTy, arg);
+        if (arg.getType().isa<LogicalType>())
+          cast.setZextAttr(builder.getUnitAttr()); // byte/word/dword: unsigned
+        arg = cast.getResult();
+      }
+      return builder.create<DialectCastOp>(location, resTy, arg).getResult();
+    }
+    auto intTy = IntegerType::get(context, width);
+    if (arg.getType() != intTy) {
+      auto cast = builder.create<IntegerCastOp>(location, intTy, arg);
+      if (resTy.isa<LogicalType>())
+        cast.setZextAttr(builder.getUnitAttr()); // byte/word/dword: unsigned
+      arg = cast.getResult();
+    }
+    if (arg.getType() != resTy)
+      arg = builder.create<DialectCastOp>(location, resTy, arg);
+    return arg;
+  }
+
+  mlir::Value mlirGenFcCall(const FunctionCallAST *expr, StringRef callee,
+                            bool allowVoid = false) {
     auto location = loc(expr->loc());
     auto context = builder.getContext();
 
@@ -1700,12 +2179,26 @@ private:
 
     auto rtIt = functionResultTypes.find(callee);
     if (rtIt == functionResultTypes.end()) {
+      // IEC conversion builtin (INT_TO_WORD, TIME_TO_DINT, ...)?
+      if (mlir::Value v = mlirGenBuiltinConversion(location, expr, callee))
+        return v;
+      // TIA DATE_AND_TIME field extractor (DT_DAY(...), ...)?
+      if (mlir::Value v = mlirGenDtField(location, expr, callee))
+        return v;
+      // TIA system functions reading the clock: return the sim epoch
+      // (1990-01-01 00:00:00); the virtual clock advances via scl_rt_cycle.
+      std::string upCallee = std::string(callee.upper());
+      if (upCallee == "RD_SYS_T" || upCallee == "RD_LOC_T" ||
+          upCallee == "READ_CLK")
+        return builder.create<ConstantDateAndTimeOp>(location, 1990, 1, 1, 0,
+                                                      0, 0, 0);
       emitError(location) << "unknown function '" << callee << "'";
       return nullptr;
     }
     mlir::Type resultType = rtIt->second;
     if (resultType.isa<mlir::NoneType>()) {
-      emitError(location) << "void function '" << callee << "' used as a value";
+      if (!allowVoid)
+        emitError(location) << "void function '" << callee << "' used as a value";
       return nullptr;
     }
 
@@ -1713,16 +2206,45 @@ private:
     return builder.create<CallFcOp>(location, resultType, callee, arguments, argNamesAttr);
   }
 
+  /// If `name` is a local variable of FB-instance type (e.g. a TON_TIME
+  /// timer in VAR_TEMP), return the FB symbol it instantiates.
+  std::optional<StringRef> fbInstanceOf(StringRef name) {
+    auto sym = symbolTable.lookup(name);
+    mlir::Type t = sym.getType();
+    if (!t)
+      return std::nullopt;
+    if (t.isa<AddressType>())
+      t = t.cast<AddressType>().getElementType();
+    if (auto idbTy = t.dyn_cast<InstanceDbType>())
+      return idbTy.getFbSymbol();
+    return std::nullopt;
+  }
+
   mlir::LogicalResult mlirGenFbCall(const FunctionCallAST *expr, StringRef idb, StringRef fb) {
     auto location = loc(expr->loc());
 
     auto idbType = InstanceDbType::get(builder.getContext(), fb);
     auto argType = AddressType::get(idbType);
-    auto idbRef = builder.create<GetGlobalOp>(location, argType, idb);
+    mlir::Value idbRef;
+    auto sym = symbolTable.lookup(idb);
+    if (sym.isAddress() || sym.isElement()) {
+      // local instance variable (e.g. a timer in VAR_TEMP / an FB member)
+      idbRef = sym.isElement() ? mlirGenVariable(location, idb) : sym.getValue();
+    } else {
+      idbRef = builder.create<GetGlobalOp>(location, argType, idb);
+    }
     if (!idbRef) {
       emitError(location, "invalid IDB reference");
       return mlir::failure();
     }
+    return mlirGenFbCallOn(expr, idbRef, fb);
+  }
+
+  /// Emit the parameter stores and the call.fb for an instance address that
+  /// is already resolved (global DB, local variable, or struct member).
+  mlir::LogicalResult mlirGenFbCallOn(const FunctionCallAST *expr,
+                                      mlir::Value idbRef, StringRef fb) {
+    auto location = loc(expr->loc());
 
     const llvm::StringMap<mlir::Type> *paramTypes = nullptr;
     auto ptIt = callableVarTypes.find(fb);
@@ -1730,6 +2252,8 @@ private:
       paramTypes = &ptIt->second;
     if (failed(mlirGenCallParameters(expr, [&] (StringRef name, mlir::Value value) {
       auto elem = mlirGenElement(location, idbRef, name);
+      if (!elem)
+        return mlir::failure();
       builder.create<StoreOp>(location, elem, value);
       return mlir::success();
     }, nullptr, paramTypes,
@@ -1924,8 +2448,11 @@ private:
     // A reference to a function block type is an instance DB.
     if (fbNames.contains(type->getName()))
       return InstanceDbType::get(builder.getContext(), type->getName());
-    // Builtin timer FBs (lowered to @scl_rt_timer_fb, no source definition)
+    // Builtin timer FBs (lowered to @scl_rt_timer_fb, no source definition);
+    // TIA also names the timer types TON_TIME/TOF_TIME/TP_TIME
     std::string up = llvm::StringRef(type->getName()).upper();
+    if (llvm::StringRef(up).ends_with("_TIME"))
+      up = up.substr(0, up.size() - 5);
     if (up == "TON" || up == "TOF" || up == "TP")
       return InstanceDbType::get(builder.getContext(), up);
     emitError(loc(type->loc())) << "unknown type '" << type->getName() << "'";
