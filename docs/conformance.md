@@ -29,14 +29,22 @@ What is run (two tiers):
   - every `*.scl` (except `makefile.scl`) individually with `-x=scl`;
   - every directory of `.scl` files concatenated (newline-separated) as one
     project with `-x=scl` (TIA exports are multi-file);
-- **JIT tier** (`--emit=jit --jit-cycles=2`) on every file defining OB 1:
-  the full pipeline — LowerToStd, LowerToLLVM, ExecutionEngine — and two
-  scan cycles of `_mlir_ciface_OB1`. This is a *smoke test*: it proves the
-  program lowers and executes without crashing or missing symbols. It does
-  NOT check computed values against an oracle (the awlsim `__ASSERT==`
-  directives are test oracles and are skipped by the frontend). True
-  value-level checks live in the repo's own `test/sclang/jit_*` tests, which
-  FileCheck the `--dump-areas` memory image after JIT execution.
+- **JIT smoke tier** (`--emit=jit --jit-cycles=2`) on every file defining
+  OB 1: the full pipeline — LowerToStd, LowerToLLVM, ExecutionEngine — and
+  two scan cycles of `_mlir_ciface_OB1`. This is a *smoke test*: it proves
+  the program lowers and executes without crashing or missing symbols.
+  Exit code 2 (awlsim `__ASSERT` oracles failed, see below) still counts as
+  a smoke pass — it proves lowering and execution worked.
+- **Oracle tier** (`--emit=jit --jit-cycles=5`) on every OB 1 file that
+  contains awlsim `__ASSERT<cmp>[R] lhs, rhs` directives: the frontend
+  lowers them to `awl.assert` / `awl.assert_r` runtime oracle calls
+  (`scl_rt_assert_cmp[_r]`, Runtime ABI v4), evaluated at every scan cycle
+  exactly where awlsim evaluates them. The tier passes iff the driver exits
+  0, i.e. every executed oracle held — this checks *computed values*
+  against the expectations embedded in the publicly available test files.
+  `__STW`/status-bit asserts (`BIE`, `OV`, `A0`, …) are skipped (the sim
+  does not track status bits). Malformed/unknown assert forms skip the line
+  so they can never break the compile tier.
 
 To make the JIT tier work on single files of multi-file projects,
 `awl.call` to a callee not defined in the module now lowers to an empty stub
@@ -59,7 +67,9 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 - AWL compile: **109/116 pass (94%)**
 - SCL single file: **13/22 pass (59%)**
 - SCL per project: **11/17 pass (65%)**
-- JIT (files with OB 1, full pipeline + execution): **69/77 pass (90%)**
+- JIT smoke (files with OB 1, full pipeline + execution): **69/77 pass (90%)**
+- Oracle (`__ASSERT` files with OB 1, value-level, exit code must be 0):
+  **10/53 pass (19%)** — see "Oracle tier" below
 
 ## Remaining failures = documented gaps
 
@@ -83,6 +93,26 @@ references when a file is compiled alone:
   (pass as a project except the `CONCAT`/`STRING_TO_INT`/`INT_TO_STRING`
   string builtins, which are not implemented).
 
+## Oracle tier: what passes and what the failures mean
+
+10 of 53 `__ASSERT` files pass all their executed oracles. The failures map
+to known feature gaps, not to wrong lowering of supported ops (each failure
+message names the line and the actual/expected values):
+
+- data blocks / instance DBs / arrays / UDTs / pointers / strings
+  (`DB`, `immediates`, `array`, `udt`, `dbpointer`, `string`, `struct`,
+  `latin1`): memory areas are not yet modeled (planned work);
+- counters (`insn_Z`), timers (`insn_SA/SE/SI/SS/SV`: actual stays at the
+  preset value — no timer runtime), startup info (`startup_*`,
+  `ob_startup_info`: OB number / previous-cycle time not provided);
+- parameterized `CALL` (`insn_CALL`, `sfc*`, `fc*`: callees lower to empty
+  stubs, so results are 0);
+- `stw_operators`: status-bit related oracles beyond the skipped `__STW`.
+
+As memory areas, counters, timers and parameter passing are implemented,
+the oracle pass rate should climb; the floor in `run_conformance.py`
+(`FLOOR_ORACLE = 0.15`) guards against regressions.
+
 ## What the corpora caught (fixed this round)
 
 The AWL frontend previously passed 56/116; the corpora drove these fixes in
@@ -105,7 +135,8 @@ The AWL frontend previously passed 56/116; the corpora drove these fixes in
 - `CALL SFC47(…)`, `CALL "GE_DT"(…)`, `CALL "FB", "IDB" (…)`, `UC FC [MW 50]`;
 - block header lines (`TITLE/AUTHOR/FAMILY/NAME/VERSION/NETWORK/…`), `{…}`
   attribute blocks, quoted block names (`OB "CYCLE"`), awlsim directives
-  (`__ASSERT==` etc. — skipped as test oracles), `__CNST_PI` etc.;
+  (`__FEATURE` etc. line-skipped; `__ASSERT*` lowered to runtime oracles —
+  see the oracle tier above), `__CNST_PI` etc.;
 - accumulator semantics: `T` does not pop ACCU1, short stacks pad with 0.
 
 Bugs found and fixed while doing this: two-token lookahead staleness after

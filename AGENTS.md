@@ -115,7 +115,7 @@ has no `\b` — use python3 for regex edits.
   comments from CHECK lines — never put `// ...` inside a CHECK pattern.
   Constants are hoisted to the top of the block by canonicalizer/CSE, so check
   `arith.constant` lines with CHECK-DAG, not ordered CHECK.
-- 110 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
+- 112 tests currently pass (SclGen/Parse, SclGen/MLIR, SclTransforms, AwlGen,
   sclang JIT, conformance), incl. direct_address (Parse), direct (MLIR), direct + big_endian
   (SclTransforms), AwlGen ops/lower/areas/err_label/roundtrip/roundtrip_timer/
   timer/timer_lower/call_fb/cc, to_awl + to_awl_areas + to_awl_fb (SclTransforms),
@@ -133,10 +133,16 @@ has no `\b` — use python3 for regex edits.
 - External conformance: `test/conformance/run_conformance.py` compiles public
   SCL/AWL corpora (default root $SCLANG_CONFORMANCE_CORPORA or
   /Users/martin/scl-external; SKIPs when absent) and enforces pass-rate floors.
-  Two tiers: compile (--emit=mlir) and JIT smoke (--emit=jit --jit-cycles=2
-  on OB1 files; full lowering + ExecutionEngine, no value oracles).
+  Three tiers: compile (--emit=mlir), JIT smoke (--emit=jit --jit-cycles=2
+  on OB1 files; rc 2 = __ASSERT oracles failed still counts as smoke pass),
+  oracle (--emit=jit --jit-cycles=5 on OB1 files containing __ASSERT; pass
+  iff rc == 0 — awlsim __ASSERT directives lower to awl.assert/assert_r ->
+  scl_rt_assert_cmp[_r], Runtime ABI v4; __STW/status-bit asserts skipped;
+  malformed assert forms skip the line). sclang driver exits 2 when
+  scl_rt_assert_failures() > 0 after the cycle loop.
   Current: AWL 109/116 (94%), SCL single 13/22, SCL per-project 11/17,
-  JIT 69/77 (90%). Corpora + licenses + results + gap list:
+  JIT smoke 69/77 (90%), oracle (__ASSERT value-level) 10/53 (19%).
+  Corpora + licenses + results + gap list:
   `docs/conformance.md`.
   `check-sclang` includes `test/conformance` (added to test/CMakeLists.txt).
 
@@ -258,7 +264,13 @@ has no `\b` — use python3 for regex edits.
   reset (next U/O/NOT uses the neutral value), otherwise the RLO SSA value from
   a predecessor block would not dominate the label's block after splitting.
   Pitfalls hit: lexer needs 2-token lookahead with per-token payload structs
-  (a single shared `identVal` is clobbered by the lookahead); do NOT
+  (a single shared `identVal` is clobbered by the lookahead). `lexer.line()`
+  is the SCANNED position (lookahead is ahead) — use `lexer.curLine()` (the
+  current token's own line, stored in `Token.line`) for diagnostics/oracle
+  ids. Base-16 typed literals accept a C-style `0x` prefix (`DW#16#0xFF…`).
+  `convertScalarTo` now does real float width changes (ExtF/TruncF; it used
+  to return the value unchanged for float->float, which broke f32->f64).
+  do NOT
   `module.push_back(op)` after creating an op with an insertion point inside the
   module — double insertion corrupts the ilist and `mlir::verify` loops forever
   (sample the hung process to see this).
