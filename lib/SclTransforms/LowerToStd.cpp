@@ -2361,42 +2361,43 @@ struct AwlRealMathOpLowering : public OpConversionPattern<awl::RealMathOp> {
     Value v = adaptor.getValue();
     std::string k = op.getKind().str();
     Value r;
-    if (k == "abs")
+    if (k == "abs") {
       r = rewriter.create<math::AbsFOp>(loc, f32, v);
-    else if (k == "negr")
+    } else if (k == "negr") {
       r = rewriter.create<arith::NegFOp>(loc, f32, v);
-    else if (k == "sin")
-      r = rewriter.create<math::SinOp>(loc, f32, v);
-    else if (k == "cos")
-      r = rewriter.create<math::CosOp>(loc, f32, v);
-    else if (k == "tan")
-      r = rewriter.create<math::TanOp>(loc, f32, v);
-    else if (k == "asin" || k == "acos") {
-      // no math.asin/acos in this MLIR version: call libm directly so the
-      // result is bit-identical to awlsim's asin()/acos()
+    } else if (k == "sqr") {
+      r = rewriter.create<arith::MulFOp>(loc, f32, v, v);
+    } else {
+      // sin/cos/tan/asin/acos/atan/sqrt/exp/ln: call libm in double precision
+      // and round back to f32 — bit-identical to awlsim, which evaluates
+      // Python math (double) on the f32 operand value. (math.tan etc. have no
+      // direct JIT legalization in this MLIR version.)
+      const char *fn = nullptr;
+      if (k == "sin") fn = "sin";
+      else if (k == "cos") fn = "cos";
+      else if (k == "tan") fn = "tan";
+      else if (k == "asin") fn = "asin";
+      else if (k == "acos") fn = "acos";
+      else if (k == "atan") fn = "atan";
+      else if (k == "sqrt") fn = "sqrt";
+      else if (k == "exp") fn = "exp";
+      else if (k == "ln") fn = "log";
+      if (!fn)
+        return failure();
       auto mod = op->getParentOfType<ModuleOp>();
-      std::string fn = k == "asin" ? "asinf" : "acosf";
-      auto ft = rewriter.getFunctionType(f32, f32);
+      auto f64 = rewriter.getF64Type();
+      auto ft = rewriter.getFunctionType(f64, f64);
       auto callee = mod.lookupSymbol<func::FuncOp>(fn);
       if (!callee) {
         OpBuilder b(mod.getBody(), mod.getBody()->begin());
         callee = b.create<func::FuncOp>(loc, fn, ft);
         callee.setPrivate();
       }
-      r = rewriter.create<func::CallOp>(loc, callee, ValueRange{v}).getResult(0);
+      Value d = rewriter.create<arith::ExtFOp>(loc, f64, v);
+      Value rd = rewriter.create<func::CallOp>(loc, callee, ValueRange{d})
+                     .getResult(0);
+      r = rewriter.create<arith::TruncFOp>(loc, f32, rd);
     }
-    else if (k == "atan")
-      r = rewriter.create<math::AtanOp>(loc, f32, v);
-    else if (k == "sqrt")
-      r = rewriter.create<math::SqrtOp>(loc, f32, v);
-    else if (k == "exp")
-      r = rewriter.create<math::ExpOp>(loc, f32, v);
-    else if (k == "ln")
-      r = rewriter.create<math::LogOp>(loc, f32, v);
-    else if (k == "sqr")
-      r = rewriter.create<arith::MulFOp>(loc, f32, v, v);
-    else
-      return failure();
     rewriter.replaceOp(op, r);
     return success();
   }

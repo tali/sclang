@@ -1190,6 +1190,9 @@ public:
   std::vector<std::string> typeDeclSpans; // TYPE decl text, for fixpoint
   std::map<std::string, Layout> tempLayouts; // VAR_TEMP of OB/FC/FB (L-stack)
   std::map<std::string, Layout> namedLayouts; // FUNCTION(_BLOCK) quoted names
+  // quoted block name -> {kind, num}, for CALL #var through a quoted-typed
+  // multi-instance variable (MULTI : "Function Block 2")
+  std::map<std::string, std::pair<std::string, int32_t>> namedBlockNums;
   std::string forcedKind; // set by parseModule for FUNCTION(_BLOCK) quoted
   const Layout *curLayout = nullptr;         // interface of the block being parsed
   const Layout *curTempLayout = nullptr;     // VAR_TEMP of the block being parsed
@@ -1210,6 +1213,7 @@ public:
     fcLayouts.clear();
     tempLayouts.clear();
     namedLayouts.clear();
+    namedBlockNums.clear();
     dbFbRef.clear();
     typeDeclSpans.clear();
     gFbLayouts = &fbLayouts;
@@ -1327,6 +1331,7 @@ public:
           kind = w == "FUNCTION" ? "FC" : "FB";
           lx.next();
           Lptr = &namedLayouts[blockName];
+          namedBlockNums[blockName] = {kind, (int32_t)blockNumFromName(blockName)};
         } else {
           kind = lx.getCurToken() == Tok::ident ? upperStr(lx.getIdent()) : "";
           lx.next();
@@ -3961,7 +3966,11 @@ private:
         return false;
     } else if (lexer.getCurToken() == Tok::lbracket) {
       lexer.next();
-      if (lexer.getCurToken() == Tok::ident) {
+      if (lexer.getCurToken() == Tok::localvar) {
+        addr = parseOperand(false); // AUF DB [#DBNR]
+        if (!addr)
+          return false;
+      } else if (lexer.getCurToken() == Tok::ident) {
         std::string w = upperIdent();
         lexer.next();
         int32_t width = 16;
@@ -4642,6 +4651,15 @@ private:
           mi = &it->second;
       }
       std::string vty = mi ? mi->type : "";
+      // quoted block type names ("Function Block 2") resolve via
+      // namedBlockNums (typeNameOf strips the quotes)
+      if (mi && !vty.empty()) {
+        std::string bare = vty.front() == '"' ? vty.substr(1, vty.size() - 2) : vty;
+        auto nit = namedBlockNums.find(bare);
+        if (nit != namedBlockNums.end() &&
+            (nit->second.first == "FB" || nit->second.first == "SFB"))
+          vty = nit->second.first + " " + std::to_string(nit->second.second);
+      }
       if (mi && (vty.rfind("FB ", 0) == 0 || vty.rfind("SFB ", 0) == 0)) {
         bool isSfb = vty.rfind("SFB", 0) == 0;
         kind = isSfb ? "SFB" : "FB";
