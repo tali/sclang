@@ -140,8 +140,8 @@ has no `\b` — use python3 for regex edits.
   scl_rt_assert_cmp[_r], Runtime ABI v4; __STW/status-bit asserts skipped;
   malformed assert forms skip the line). sclang driver exits 2 when
   scl_rt_assert_failures() > 0 after the cycle loop.
-  Current: AWL 109/116 (94%), SCL single 13/22, SCL per-project 11/17,
-  JIT smoke 69/77 (90%), oracle (__ASSERT value-level) 10/53 (19%).
+  Current: AWL 109/116 (94%), SCL single 15/15, SCL per-project 16/17,
+  JIT smoke 61/77 (79%), oracle (__ASSERT value-level) 24/53 (45%).
   Corpora + licenses + results + gap list:
   `docs/conformance.md`.
   `check-sclang` includes `test/conformance` (added to test/CMakeLists.txt).

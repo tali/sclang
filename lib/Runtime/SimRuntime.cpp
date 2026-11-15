@@ -600,17 +600,13 @@ void scl_rt_sfb(uint32_t n) {
     scl_rt_write_bit(SCL_RT_AREA_DB, db, base + byte, bit, v);
   };
   uint64_t key = ((uint64_t)db << 32) | base;
+  if (n > 5)
+    return; // unknown SFB number (e.g. CALL SFB -1): no-op, BIE stays 1
   if (n <= 2) { // CTU / CTD / CTUD counters
     int cv = (int16_t)(uint16_t)(rd(6, 2) & 0xFFFF);
     int pv = (int16_t)(uint16_t)(rd(2, 2) & 0xFFFF);
-    bool r = rdb(0, 2);
-    bool ld = rdb(0, 3);
-    bool ldEdge = ld && !s.sfbPrevLd[key];
-    s.sfbPrevLd[key] = ld;
-    if (ldEdge)
-      cv = pv; // LD: load PV into CV
-    if (n == 0) { // CTU
-      bool cu = rdb(0, 0), cuo = rdb(8, 0);
+    if (n == 0) { // CTU: CU@0.0 R@0.1, Q = CV >= PV
+      bool cu = rdb(0, 0), r = rdb(0, 1), cuo = rdb(8, 0);
       bool edge = cu && !cuo;
       wrb(8, 0, cu);
       if (r)
@@ -619,70 +615,133 @@ void scl_rt_sfb(uint32_t n) {
         cv++;
       wr(6, 2, (uint16_t)cv);
       wrb(4, 0, cv >= pv);
-    } else if (n == 1) { // CTD
-      bool cd = rdb(0, 1), cod = rdb(8, 1);
-      bool edge = cd && !cod;
-      wrb(8, 1, cd);
-      if (r)
-        cv = 0;
-      else if (edge && cv > -32768)
+    } else if (n == 1) { // CTD: CD@0.0 LOAD@0.1, Q = CV <= 0
+      bool cd = rdb(0, 0), load = rdb(0, 1), cdo = rdb(8, 0);
+      bool cdEdge = cd && !cdo;
+      wrb(8, 0, cd);
+      if (load)
+        cv = pv; // LOAD is level-triggered (awlsim sfb_1): CV := PV
+      else if (cdEdge && cv > -32768)
         cv--;
       wr(6, 2, (uint16_t)cv);
-      wrb(4, 0, cv <= pv);
-    } else { // CTUD
-      bool cu = rdb(0, 0), cuo = rdb(8, 0);
-      bool cd = rdb(0, 1), cod = rdb(8, 1);
-      bool eu = cu && !cuo, ed = cd && !cod;
+      wrb(4, 0, cv <= 0);
+    } else { // CTUD: CU@0.0 CD@0.1 R@0.2 LOAD@0.3, QU = CV>=PV, QD = CV<=0
+      bool cu = rdb(0, 0), cd = rdb(0, 1), r = rdb(0, 2), load = rdb(0, 3);
+      bool cuo = rdb(8, 0), cdo = rdb(8, 1);
+      bool eu = cu && !cuo, ed = cd && !cdo;
       wrb(8, 0, cu);
       wrb(8, 1, cd);
       if (r)
         cv = 0;
-      else if (eu && cv < 32767)
+      else if (load)
+        cv = pv; // LOAD is level-triggered
+      else if (eu && !ed && cv < 32767)
         cv++;
-      else if (ed && cv > -32768)
+      else if (ed && !eu && cv > -32768)
         cv--;
       wr(6, 2, (uint16_t)cv);
       wrb(4, 0, cv >= pv);
+      wrb(4, 1, cv <= 0);
     }
     return;
   }
-  // SFB3 TON / SFB4 TOF / SFB5 TP
-  uint64_t pt = s5timeToMs(rd(2, 2) & 0xFFFF);
-  bool in = rdb(0, 0);
-  auto &st = s.sfbTimers[key];
+  // SFB3 TP / SFB4 TON / SFB5 TOF (awlsim system_sfb_3/4/5). Instance layout:
+  // IN@0.0, PT@2 (32-bit TIME, ms), Q@6.0, ET@8 (32-bit), STATE@12 (byte),
+  // STIME@14 (32-bit), ATIME@18 (32-bit). The STATE/STIME/ATIME live in the
+  // instance DB itself.
   uint64_t now = s.clockMs;
-  if (n == 3) { // TON
-    if (in && !st.prevIn) {
-      st.running = true;
-      st.startMs = now;
-      st.done = false;
-    }
-    if (st.running && !st.done && now - st.startMs >= pt) {
-      st.running = false;
-      st.done = true;
-    }
-    wrb(4, 0, st.done);
-    wr(6, 2, st.done ? pt : (now - st.startMs));
-  } else if (n == 4) { // TOF
-    if (!in && st.prevIn) {
-      st.running = true;
-      st.startMs = now;
-    }
-    if (st.running && now - st.startMs >= pt)
-      st.running = false;
-    wrb(4, 0, in || st.running);
-    wr(6, 2, in ? 0 : (now - st.startMs > pt ? pt : now - st.startMs));
-  } else { // TP
-    if (in && !st.prevIn) {
-      st.running = true;
-      st.startMs = now;
-    }
-    if (st.running && now - st.startMs >= pt)
-      st.running = false;
-    wrb(4, 0, st.running);
-    wr(6, 2, st.running ? (now - st.startMs > pt ? pt : now - st.startMs) : 0);
+  int64_t pt = (int32_t)(uint32_t)rd(2, 4); // PT: 32-bit TIME in ms
+  bool in = rdb(0, 0);
+  uint8_t state = (uint8_t)(rd(12, 1) & 0xFF);
+  const uint8_t ST_RUNNING = 1, ST_FINISHED = 2;
+  if (pt <= 0) { // invalid/zero PT: reset (awlsim: PT==0 also clears IN)
+    if (pt == 0)
+      wrb(0, 0, false);
+    wrb(6, 0, false);
+    wr(8, 4, 0);
+    wr(12, 1, 0);
+    return;
   }
-  st.prevIn = in;
+  if (n == 3) { // TP (awlsim system_sfb_3): Q=1 while running, Q=0 when elapsed
+    if (in && !(state & (ST_RUNNING | ST_FINISHED))) {
+      wr(14, 4, now); // STIME
+      state |= ST_RUNNING;
+      wr(12, 1, state);
+    }
+    if (state & ST_RUNNING) {
+      wr(18, 4, now); // ATIME
+      uint64_t stime = (uint32_t)rd(14, 4);
+      uint64_t et = (now - stime) & 0x7FFFFFFF;
+      if ((int64_t)et >= pt) {
+        et = (uint64_t)pt;
+        state &= ~ST_RUNNING;
+        state |= ST_FINISHED;
+        wr(12, 1, state);
+        wrb(6, 0, false); // Q = 0 when elapsed (awlsim sfb_3)
+      } else {
+        wrb(6, 0, true); // Q = 1 while running
+      }
+      wr(8, 4, et);
+    }
+    if (!in && (state & ST_FINISHED)) {
+      state &= ~ST_FINISHED;
+      wr(12, 1, state);
+      wr(8, 4, 0);
+    }
+  } else if (n == 4) { // TON (awlsim system_sfb_4): IN starts, !IN shuts down, Q=1 when elapsed
+    if (in) {
+      if (!(state & (ST_RUNNING | ST_FINISHED))) {
+        wr(14, 4, now);
+        state |= ST_RUNNING;
+        wr(12, 1, state);
+      }
+    } else {
+      state &= ~(ST_FINISHED | ST_RUNNING);
+      wr(12, 1, state);
+      wr(8, 4, 0);
+      wrb(6, 0, false);
+    }
+    if (state & ST_RUNNING) {
+      wr(18, 4, now); // ATIME
+      uint64_t stime = (uint32_t)rd(14, 4);
+      uint64_t et = (now - stime) & 0x7FFFFFFF;
+      if ((int64_t)et >= pt) {
+        et = (uint64_t)pt;
+        state &= ~ST_RUNNING;
+        state |= ST_FINISHED;
+        wr(12, 1, state);
+        wrb(6, 0, true); // Q = 1 when elapsed
+      } else {
+        wrb(6, 0, false);
+      }
+      wr(8, 4, et);
+    }
+  } else { // TOF (awlsim system_sfb_5): STATE_PREV_IN = 1, STATE_DELAYING = 2
+    if (in) {
+      state &= ~ST_FINISHED;
+      state |= ST_RUNNING; // PREV_IN
+      wr(12, 1, state);
+      wr(8, 4, 0);
+      wrb(6, 0, true); // Q = 1 while IN
+    } else if (state & ST_RUNNING) { // negative edge: start the delay
+      wr(14, 4, now);
+      state |= ST_FINISHED;  // DELAYING
+      state &= ~ST_RUNNING;   // ~PREV_IN
+      wr(12, 1, state);
+    }
+    if (state & ST_FINISHED) { // delaying
+      wr(18, 4, now); // ATIME
+      uint64_t stime = (uint32_t)rd(14, 4);
+      uint64_t et = (now - stime) & 0x7FFFFFFF;
+      if ((int64_t)et >= pt) {
+        et = (uint64_t)pt;
+        state &= ~ST_FINISHED;
+        wr(12, 1, state);
+        wrb(6, 0, false); // Q = 0 when elapsed
+      }
+      wr(8, 4, et);
+    }
+  }
 }
 
 void scl_rt_sleep(uint32_t ms) {

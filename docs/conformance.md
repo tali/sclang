@@ -67,9 +67,9 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 - AWL compile: **109/116 pass (94%)**
 - SCL single file: **15/15 pass (100%)**
 - SCL per project: **16/17 pass (94%)**
-- JIT smoke (files with OB 1, full pipeline + execution): **58/77 pass (75%)**
+- JIT smoke (files with OB 1, full pipeline + execution): **61/77 pass (79%)**
 - Oracle (`__ASSERT` files with OB 1, value-level, exit code must be 0):
-  **18/53 pass (34%)** — see "Oracle tier" below
+  **24/53 pass (45%)** — see "Oracle tier" below
 
 ## Remaining failures = documented gaps
 
@@ -95,13 +95,17 @@ references when a file is compiled alone:
 
 ## Oracle tier: what passes and what the failures mean
 
-18 of 53 `__ASSERT` files pass all their executed oracles (was 11). Block
+24 of 53 `__ASSERT` files pass all their executed oracles (was 18). Block
 calls are now fully modeled: FC params are frame-relative with
 param_in/param_out copies (recursion works — factorial passes), RET_VAL is an
 implicit interface member, indirect `UC FC [MW x]` dispatches over the
 file's blocks, FB multi-instances (`CALL #var`) work via DI+AR2 addressing,
 AR1/AR2 and DB/DI registers are call-saved, and SFB0-5 run real counter/timer
-semantics in the runtime (`scl_rt_sfb`). `insn_CALL` and
+semantics in the runtime (`scl_rt_sfb`): SFB0-2 counters (CTU/CTD/CTUD with
+R > LOAD > edge precedence per awlsim) and SFB3-5 timers (TP/TON/TOF with
+STATE/STIME/ATIME in the instance DB, ATIME only updated while running,
+PT==0 resets IN) — all six `sfb*.awl` oracles pass, plus `sfb/basic.awl`
+(`CALL SFB -1` is a no-op, BIE stays 1). `insn_CALL` and
 `insn_CALL_multiinstance` pass all oracles.
 
 Remaining oracle failures map to known gaps (each message names the line and

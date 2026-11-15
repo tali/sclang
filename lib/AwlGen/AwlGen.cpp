@@ -866,40 +866,65 @@ static std::map<int32_t, Layout> *gFbLayouts = nullptr;
 // CTU/CTD/CTUD counters, TON/TOF/TP timers)
 static Layout sfbLayoutOf(int32_t n) {
   Layout L;
-  auto bit = [&](const char *name, int32_t byte, int32_t b) {
+  // sections: 0 = IN, 1 = OUT, 3 = STAT (the CALL param direction comes
+  // from the section, awlsim-style)
+  auto bit = [&](const char *name, int32_t byte, int32_t b, uint8_t sec) {
     MemberInfo m;
     m.type = "BOOL";
     m.isBit = true;
     m.widthBits = 1;
     m.byte = byte;
     m.bit = b;
+    m.section = sec;
     L.members[name] = m;
   };
-  auto word = [&](const char *name, int32_t byte, const char *ty, int32_t wb) {
+  auto word = [&](const char *name, int32_t byte, const char *ty, int32_t wb,
+                  uint8_t sec) {
     MemberInfo m;
     m.type = ty;
     m.widthBits = wb;
     m.byte = byte;
+    m.section = sec;
     L.members[name] = m;
   };
-  if (n <= 2) { // SFB0 CTU / SFB1 CTD / SFB2 CTUD
-    bit("CU", 0, 0);
-    bit("CD", 0, 1);
-    bit("R", 0, 2);
-    bit("LD", 0, 3);
-    word("PV", 2, "INT", 16);
-    bit("Q", 4, 0);
-    word("CV", 6, "INT", 16);
-    bit("CUO", 8, 0);
-    if (n == 2)
-      bit("COD", 8, 1);
+  if (n == 0) { // SFB0 CTU (awlsim system_sfb_0)
+    bit("CU", 0, 0, 0);
+    bit("R", 0, 1, 0);
+    word("PV", 2, "INT", 16, 0);
+    bit("Q", 4, 0, 1);
+    word("CV", 6, "INT", 16, 1);
+    bit("CUO", 8, 0, 3);
     L.size = 10;
-  } else { // SFB3 TON / SFB4 TOF / SFB5 TP
-    bit("IN", 0, 0);
-    word("PT", 2, "TIME", 16);
-    bit("Q", 4, 0);
-    word("ET", 6, "TIME", 16);
-    L.size = 8;
+  } else if (n == 1) { // SFB1 CTD (awlsim system_sfb_1)
+    bit("CD", 0, 0, 0);
+    bit("LOAD", 0, 1, 0);
+    word("PV", 2, "INT", 16, 0);
+    bit("Q", 4, 0, 1);
+    word("CV", 6, "INT", 16, 1);
+    bit("CDO", 8, 0, 3);
+    L.size = 10;
+  } else if (n == 2) { // SFB2 CTUD (awlsim system_sfb_2)
+    bit("CU", 0, 0, 0);
+    bit("CD", 0, 1, 0);
+    bit("R", 0, 2, 0);
+    bit("LOAD", 0, 3, 0);
+    word("PV", 2, "INT", 16, 0);
+    bit("QU", 4, 0, 1);
+    bit("QD", 4, 1, 1);
+    word("CV", 6, "INT", 16, 1);
+    bit("CUO", 8, 0, 3);
+    bit("CDO", 8, 1, 3);
+    L.size = 10;
+  } else { // SFB3 TON / SFB4 TOF / SFB5 TP (awlsim system_sfb_3 layout;
+    // TIME is a 32-bit type there, total instance size 22)
+    bit("IN", 0, 0, 0);
+    word("PT", 2, "TIME", 32, 0);
+    bit("Q", 6, 0, 1);
+    word("ET", 8, "TIME", 32, 1);
+    word("STATE", 12, "BYTE", 8, 3);
+    word("STIME", 14, "TIME", 32, 3);
+    word("ATIME", 18, "TIME", 32, 3);
+    L.size = 22;
   }
   return L;
 }
@@ -4476,6 +4501,7 @@ private:
     int64_t suffixed = 0;
     bool hasSuffix = false;
     int32_t multiBase = -1; // >= 0: CALL #var — multi-instance FB/SFB at this offset
+    int32_t sfbDbNum = -1;  // direct CALL SFB n, DB m: instance DB number
     if (lexer.getCurToken() == Tok::localvar) {
       // CALL #VAR: call through a block-typed variable — a multi-instance
       // FB/SFB embedded in the caller's instance DB at the member's offset
@@ -4575,10 +4601,10 @@ private:
         rloActive = false;
       return true;
     }
-    if ((kind == "SFC" || kind == "SFB") && multiBase < 0) {
-      // system block call: CALL SFC/SFB [-]n [(params)] — accepted
-      // syntactically; SFCs/SFBs are host-provided (runtime stub), a
-      // documented gap for the JIT
+    if (kind == "SFC" && multiBase < 0) {
+      // system function call: CALL SFC [-]n [(params)] — accepted
+      // syntactically; SFCs are host-provided (runtime stub), a documented
+      // gap for the JIT
       bool neg = false;
       if (lexer.getCurToken() == Tok::minus) {
         lexer.next();
@@ -4589,24 +4615,16 @@ private:
         n = suffixed;
       } else {
         if (lexer.getCurToken() != Tok::integer)
-          return error("expected SFC/SFB number after CALL");
+          return error("expected SFC number after CALL");
         n = lexer.getInteger();
         lexer.next();
       }
       if (neg)
         n = -n;
-      // SFB with instance DB: CALL SFB n, DB m
-      if (kind == "SFB" && lexer.getCurToken() == Tok::comma) {
-        lexer.next();
-        if (lexer.getCurToken() == Tok::ident && upperIdent() == "DB")
-          lexer.next();
-        if (lexer.getCurToken() == Tok::integer)
-          lexer.next();
-      }
       llvm::SmallVector<mlir::NamedAttribute, 2> attrs;
       attrs.push_back(builder.getNamedAttr(
           "callee", mlir::FlatSymbolRefAttr::get(builder.getContext(),
-                                                  kind + std::to_string(n))));
+                                                  "SFC" + std::to_string(n))));
       attrs.push_back(
           builder.getNamedAttr("sfc", builder.getI32IntegerAttr((int32_t)n)));
       if (lexer.getCurToken() == Tok::lparen) {
@@ -4626,6 +4644,33 @@ private:
                                        : mlir::ValueRange{},
                                   attrs);
       return true;
+    }
+    if (kind == "SFB" && multiBase < 0) {
+      // direct SFB call: CALL SFB n, DB m [(params)] — the instance DB and
+      // parameters are handled by the common path below
+      bool negSfb = false;
+      if (lexer.getCurToken() == Tok::minus) { // CALL SFB -1 (awlsim basic.awl)
+        lexer.next();
+        negSfb = true;
+      }
+      if (!hasSuffix) {
+        if (lexer.getCurToken() == Tok::integer) {
+          suffixed = lexer.getInteger();
+          if (negSfb)
+            suffixed = -suffixed;
+          hasSuffix = true;
+          lexer.next();
+        }
+      }
+      if (lexer.getCurToken() == Tok::comma) {
+        lexer.next();
+        if (lexer.getCurToken() == Tok::ident && upperIdent() == "DB")
+          lexer.next();
+        if (lexer.getCurToken() == Tok::integer) {
+          sfbDbNum = (int32_t)lexer.getInteger();
+          lexer.next();
+        }
+      }
     }
     int64_t num;
     mlir::Value indirectNum;
@@ -4650,9 +4695,16 @@ private:
         lexer.next();
       num = 0;
     } else {
+      bool neg = false;
+      if (lexer.getCurToken() == Tok::minus) {
+        lexer.next();
+        neg = true;
+      }
       if (lexer.getCurToken() != Tok::integer)
         return error("expected block number after " + kind);
       num = lexer.getInteger();
+      if (neg)
+        num = -num;
       lexer.next();
     }
     std::string callee = kind + std::to_string(num);
@@ -4682,6 +4734,15 @@ private:
       // the call matches the FB function's i32 argument
       attrs.push_back(
           builder.getNamedAttr("db", builder.getI32IntegerAttr(0)));
+    if (kind == "SFB" && multiBase < 0) {
+      attrs.push_back(builder.getNamedAttr(
+          "sfc", builder.getI32IntegerAttr((int32_t)num)));
+      if (sfbDbNum >= 0) {
+        attrs.push_back(builder.getNamedAttr(
+            "db", builder.getI32IntegerAttr(sfbDbNum)));
+        attrs.push_back(builder.getNamedAttr("instdb", builder.getUnitAttr()));
+      }
+    }
     if (multiBase >= 0) {
       // multi-instance call: instance DB = DI register (db -1), AR2 is set
       // to P#DBX + multiBase for the duration of the call
@@ -4719,6 +4780,13 @@ private:
       auto it = fbLayouts.find((int32_t)num);
       if (it != fbLayouts.end())
         callLayout = &it->second;
+    } else if (kind == "SFB") {
+      if (sfbDbNum >= 0)
+        paramDb = sfbDbNum;
+      auto sit = sfbCache.find((int32_t)num);
+      if (sit == sfbCache.end())
+        sit = sfbCache.emplace((int32_t)num, sfbLayoutOf((int32_t)num)).first;
+      callLayout = &sit->second;
     } else {
       auto it = fcLayouts.find((int32_t)num);
       if (it != fcLayouts.end())
@@ -4791,6 +4859,11 @@ private:
           if (it != callLayout->members.end())
             m = &it->second;
         }
+        // The parameter direction comes from the interface section, not the
+        // := / => syntax (awlsim uses the field type): VAR_OUTPUT fields are
+        // copied back after the call and are NOT stored into before it
+        if (m && m->section == 1)
+          isOutput = true;
         if (!m) {
           // unknown parameter (no interface layout): skip its value/target
           int depth = 0;
@@ -4811,7 +4884,7 @@ private:
         // own L frame, so the caller's frame params are never clobbered.
         // FB/SFB params go to the instance DB (DI register for multi-instance
         // calls), at the multi-instance base offset if applicable.
-        bool isDbParam = kind == "FB" || (kind == "SFB" && multiBase >= 0);
+        bool isDbParam = kind == "FB" || kind == "SFB";
         auto area = isDbParam ? mlir::scl::DirectArea::DataBlock
                               : mlir::scl::DirectArea::Marker;
         int32_t byte = isDbParam ? paramBase + m->byte : kLocalBase + m->byte;
@@ -4894,7 +4967,7 @@ private:
     }
     // output params: read back from the callee's interface area
     for (auto &op : outParams) {
-      bool isDbParam = kind == "FB" || (kind == "SFB" && multiBase >= 0);
+      bool isDbParam = kind == "FB" || kind == "SFB";
       auto area = isDbParam ? mlir::scl::DirectArea::DataBlock
                             : mlir::scl::DirectArea::Marker;
       int32_t byte = isDbParam ? paramBase + op.m->byte
