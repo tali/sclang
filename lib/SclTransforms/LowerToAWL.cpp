@@ -316,8 +316,9 @@ struct FuncConverter {
                                    base.getByte() + (int32_t)fieldOff, 0, fw);
     }
     emitError(addr.getLoc())
-        << "address not representable as an AWL operand (FB members, arrays, "
-           "structs and DB symbols are not yet supported by the AWL backend)";
+        << "address not representable as an AWL operand (only M-area vars, % "
+           "directs, FB/struct members and constant-indexed elements are "
+           "supported by the AWL backend)";
     return nullptr;
   }
 
