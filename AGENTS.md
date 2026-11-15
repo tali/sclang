@@ -148,6 +148,31 @@ has no `\b` — use python3 for regex edits.
 
 ## Key design decisions (do not regress)
 
+- AWL scalar semantics follow awlsim exactly: 8/16-bit values are UNSIGNED
+  at their width (`AwlMemoryObject_asScalar` masks 0xFF/0xFFFF), so loads
+  zero-extend into the 32-bit ACCU (`zextAcc`) and integer literals in the
+  int16 range are zero-extended too (`parseConst` emits i32 `v & 0xFFFF`;
+  `B#`/`W#`/`L#` typed literals carry `litWidth` 8/16/32). Assert oracles
+  compare as u32 bit patterns (`assertCheck` in SimRuntime), matching
+  awlsim's width-masked compare. DT#/DATE_AND_TIME is 8 BCD bytes (width-64
+  direct), packed big-endian with awlsim's float-msec + weekday rules.
+- `[ARn, P#x.y]` addressing is a TEMPORARY offset: `scl_rt_ar_add` must NOT
+  write back into the AR register. DI-area S7 pointers (area 0x85) decode to
+  db=0xFFFF which resolves to the DI register; FB calls emit
+  `scl_rt_set_current_di(db)` so `DIW…`/`P##var` work inside FBs.
+- Array members track per-dimension bounds (`MemberInfo.dims/lo/elemSize`);
+  `consumeArrayIndices` returns a BIT offset (ARRAY OF BOOL is bit-packed).
+  Declaration initializers (`VAR : ARRAY[..] := 1, 2, 4 (…)`) are captured
+  raw in `Layout.memberInit` and replayed per-element into `__scl_db_init`
+  via a sub-lexer (the sub-lexer's input string must outlive it — dangling
+  StringRef pitfall). CALL params with array RHS copy element-wise
+  (`copyArrayParam`, incl. FC L-area `kLocalBase` offset and by-reference
+  copy-back).
+- `SPL` is a jump table (low byte of ACCU selects among following `SPA`
+  labels, default = SPL operand); `BEB`/`BEC` lower to the new `awl.be_if`
+  op (conditional block end); `BEU` = `BE`. S5T encoding picks the FINEST
+  timebase covering the value (awlsim `Timer_seconds_to_s5t`), units in ms.
+
 - `SclTypeConverter` maps `!scl.address<T>` to a **0-d memref with dynamic offset**
   (`memref<T, strided<[], offset: ?>>`) so array element addresses from
   `memref.reinterpret_cast` type-check. `memref.alloca` rejects non-identity

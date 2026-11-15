@@ -646,9 +646,9 @@ mlir::Type parseDirectType(mlir::DialectAsmParser &parser) {
       parser.parseInteger(bit) || parser.parseComma() ||
       parser.parseInteger(width) || parser.parseGreater())
     return Type();
-  if (width != 1 && width != 8 && width != 16 && width != 32) {
+  if (width != 1 && width != 8 && width != 16 && width != 32 && width != 64) {
     parser.emitError(parser.getNameLoc(),
-                     "direct width must be 1, 8, 16 or 32 bits");
+                     "direct width must be 1, 8, 16, 32 or 64 bits");
     return Type();
   }
   return DirectType::get(parser.getBuilder().getContext(), *area, db, byte, bit,

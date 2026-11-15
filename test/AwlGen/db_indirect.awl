@@ -11,7 +11,7 @@ BEGIN
 END_DATA_BLOCK
 
 // CHECK: awl.block "__scl_db_init"
-// CHECK: awl.store %{{.*}}, %{{.*}} : i16, !scl.direct<DB, 1, 0, 0, 16>
+// CHECK: awl.store %{{.*}}, %{{.*}} : i32, !scl.direct<DB, 1, 0, 0, 16>
 // CHECK: awl.store %{{.*}}, %{{.*}} : i1, !scl.direct<DB, 1, 2, 3, 1>
 ORGANIZATION_BLOCK OB 1
 BEGIN

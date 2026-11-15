@@ -71,8 +71,10 @@ public:
   Tok peekToken() const { return ahead_.tok; }
   llvm::StringRef getIdent() const { return cur_.ident; }
   int64_t getInteger() const { return cur_.intVal; }
+  int getLitWidth() const { return cur_.litWidth; }
   double getReal() const { return cur_.realVal; }
   int line() const { return lineNo; }
+  llvm::StringRef raw() const { return cur; } // unconsumed input
   int col() const { return colNo; }
   // line of the current token (lineNo itself is ahead due to lookahead)
   int curLine() const { return cur_.line; }
@@ -109,6 +111,7 @@ private:
     bool quoted = false; // came from a "..." or '...' literal
     bool bcdLit = false; // C#... counter literal (raw BCD pattern)
     bool ptrLocal = false; // P##name: pointer to a block-local variable
+    int litWidth = 0;    // B#/W#/L# typed literal: 8/16/32
     int line = 0;        // line the token starts on
   };
 
@@ -164,16 +167,19 @@ private:
         }
         int64_t unit = -1;
         if (i + 1 < s.size() && s[i] == 'M' && s[i + 1] == 'S') {
-          unit = 1; // 10ms
+          unit = 1; // ms
           i += 2;
         } else if (i < s.size() && s[i] == 'H') {
-          unit = 360000;
+          unit = 3600000;
+          ++i;
+        } else if (i < s.size() && s[i] == 'D') {
+          unit = 86400000;
           ++i;
         } else if (i < s.size() && s[i] == 'M') {
-          unit = 6000;
+          unit = 60000;
           ++i;
         } else if (i < s.size() && s[i] == 'S') {
-          unit = 100;
+          unit = 1000;
           ++i;
         }
         if (!anyDigit || unit < 0)
@@ -181,22 +187,29 @@ private:
         else
           total += num * unit;
       }
-      if (!ok || total < 0 || total > 999LL * 1000) {
+      if (!ok || total < 0 || total > 9990LL * 1000) { // max 9990s in ms
         llvm::errs() << file << ":" << lineNo << ":" << colNo
                      << ": bad S5TIME literal 'S5T#" << s << "'\n";
         t.tok = Tok::eof;
         return t;
       }
-      static const int64_t steps[] = {1000, 100, 10, 1}; // 10s, 1s, 100ms, 10ms
-      static const int codes[] = {3, 2, 1, 0};
-      int code = 0;
-      int64_t val = total;
-      for (int k = 0; k < 4; ++k) {
-        if (total % steps[k] == 0 && total / steps[k] <= 999) {
-          code = codes[k];
-          val = total / steps[k];
-          break;
-        }
+      // awlsim Timer_seconds_to_s5t: finest timebase that covers the value
+      // (total is in ms): <=9.99s -> 10ms base, <=99.9s -> 100ms,
+      // <=999s -> 1s, else 10s
+      int code;
+      int64_t val;
+      if (total <= 9990) {
+        code = 0;
+        val = total / 10;
+      } else if (total <= 99900) {
+        code = 1;
+        val = total / 100;
+      } else if (total <= 999000) {
+        code = 2;
+        val = total / 1000;
+      } else {
+        code = 3;
+        val = total / 10000;
       }
       int64_t bcd = ((val / 100) << 8) | (((val / 10) % 10) << 4) | (val % 10);
       t.intVal = ((int64_t)code << 12) | bcd;
@@ -233,11 +246,63 @@ private:
           cur = cur.drop_front();
         return scan();
       }
+      // typed integer literals: B#.. (i8), W#.. (i16), L#.. (i32); the value
+      // may itself be base-prefixed (B#16#91) or C-style hex (L#0x2A)
+      if (t.ident.size() == 1 &&
+          (t.ident == "B" || t.ident == "W" || t.ident == "L") &&
+          cur.size() >= 2 && cur.front() == '#' &&
+          (isdigit((unsigned char)cur[1]) || cur[1] == '-')) {
+        cur = cur.drop_front(); // '#'
+        bool neg = false;
+        if (!cur.empty() && cur.front() == '-') {
+          cur = cur.drop_front();
+          neg = true;
+        }
+        int64_t lead = 0;
+        while (!cur.empty() && isdigit((unsigned char)cur.front())) {
+          lead = lead * 10 + (cur.front() - '0');
+          cur = cur.drop_front();
+        }
+        int64_t v = lead;
+        if (!cur.empty() && cur.front() == '#') {
+          cur = cur.drop_front();
+          int b = (int)lead;
+          v = 0;
+          if (b == 16) {
+            if (cur.size() >= 2 && cur.front() == '0' &&
+                tolower((unsigned char)cur[1]) == 'x')
+              cur = cur.drop_front(2);
+            while (!cur.empty() && isxdigit((unsigned char)cur.front())) {
+              char h = cur.front();
+              int d = isdigit((unsigned char)h) ? h - '0' : tolower((unsigned char)h) - 'a' + 10;
+              v = v * 16 + d;
+              cur = cur.drop_front();
+            }
+          } else if (b == 8 || b == 2) {
+            while (!cur.empty() && cur.front() >= '0' &&
+                   cur.front() < (char)('0' + b)) {
+              v = v * b + (cur.front() - '0');
+              cur = cur.drop_front();
+            }
+          } else {
+            while (!cur.empty() && isdigit((unsigned char)cur.front())) {
+              v = v * 10 + (cur.front() - '0');
+              cur = cur.drop_front();
+            }
+          }
+        }
+        if (neg)
+          v = -v;
+        t.intVal = v;
+        t.tok = Tok::integer;
+        t.litWidth = t.ident == "B" ? 8 : t.ident == "W" ? 16 : 32;
+        return t;
+      }
       // DATE/TIME literals: D#1990-1-1 (days since 1990-01-01), T#2s (ms),
-      // DT#... (not modelled, 0)
+      // TOD#h:m:s.ms (ms since midnight), DT#y-mo-d-h:mi:s.ms (8 BCD bytes)
       if ((t.ident == "D" || t.ident == "T" || t.ident == "DT" ||
            t.ident == "TOD" || t.ident == "DATE" || t.ident == "TIME" ||
-           t.ident == "TIME_OF_DAY") &&
+           t.ident == "TIME_OF_DAY" || t.ident == "DATE_AND_TIME") &&
           !cur.empty() && cur.front() == '#') {
         cur = cur.drop_front();
         std::string s;
@@ -251,8 +316,13 @@ private:
         }
         int64_t v = 0;
         if (t.ident == "T" || t.ident == "TIME") {
-          // components <digits><unit>, units MS/S/M/H -> total ms
+          // components <digits><unit>, units MS/S/M/H/D -> total ms
+          bool neg = false;
           size_t i = 0;
+          if (!s.empty() && s[0] == '-') {
+            neg = true;
+            i = 1;
+          }
           while (i < s.size()) {
             size_t before = i;
             int64_t num = 0;
@@ -265,6 +335,9 @@ private:
             } else if (i < s.size() && s[i] == 'H') {
               unit = 3600000;
               ++i;
+            } else if (i < s.size() && s[i] == 'D') {
+              unit = 86400000;
+              ++i;
             } else if (i < s.size() && s[i] == 'M') {
               unit = 60000;
               ++i;
@@ -276,11 +349,47 @@ private:
               break; // no progress: avoid an infinite loop
             v += num * unit;
           }
+          if (neg)
+            v = -v;
         } else if (t.ident == "TOD" || t.ident == "TIME_OF_DAY") {
-          // TOD#h:m:s.ms -> ms since midnight
-          int h = 0, mi = 0, sec = 0, ms = 0;
-          if (sscanf(s.c_str(), "%d:%d:%d.%d", &h, &mi, &sec, &ms) >= 3)
+          // TOD#h:m:s.ms -> ms since midnight (awlsim float msec semantics)
+          int h = 0, mi = 0;
+          double fsec = 0.0;
+          if (sscanf(s.c_str(), "%d:%d:%lf", &h, &mi, &fsec) >= 2) {
+            int sec = (int)fsec;
+            int ms = (int)(fsec * 1000) - sec * 1000;
             v = ((int64_t)h * 3600 + mi * 60 + sec) * 1000 + ms;
+          }
+        } else if (t.ident == "DT" || t.ident == "DATE_AND_TIME") {
+          // DT#y-mo-d-h:mi:s.ms -> 8 bytes, BCD-packed, little-endian in
+          // the integer (byte 0 = year BCD, ... byte 7 = ms-low + dow)
+          int y = 0, mo = 0, d = 0, h = 0, mi = 0, sec = 0;
+          double fsec = 0.0;
+          if (sscanf(s.c_str(), "%d-%d-%d-%d:%d:%lf", &y, &mo, &d, &h, &mi,
+                     &fsec) >= 3) {
+            // awlsim semantics: msec = int(fsec*1000) - int(fsec)*1000
+            sec = (int)fsec;
+            int ms = (int)(fsec * 1000) - sec * 1000;
+            auto bcd = [](int n) { return ((n / 10) << 4) | (n % 10); };
+            auto daysFromCivil = [](int yy, int m, int dd) -> int64_t {
+              yy -= m <= 2;
+              int64_t era = (yy >= 0 ? yy : yy - 399) / 400;
+              unsigned yoe = (unsigned)(yy - era * 400);
+              unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + dd - 1;
+              unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+              return era * 146097 + (int64_t)doe - 719468;
+            };
+            int64_t days = daysFromCivil(y, mo, d);
+            int dow = (int)((days + 4) % 7) + 1; // 1=Sunday .. 7=Saturday (1970-01-01 = Thursday = 5)
+            uint64_t b[8] = {(uint64_t)bcd(y % 100), (uint64_t)bcd(mo),
+                             (uint64_t)bcd(d), (uint64_t)bcd(h),
+                             (uint64_t)bcd(mi), (uint64_t)bcd(sec),
+                             (uint64_t)bcd(ms / 10),
+                             (uint64_t)bcd(ms % 10) * 16 + (uint64_t)dow};
+            v = 0;
+            for (int i = 0; i < 8; ++i)
+              v |= (int64_t)b[i] << (8 * (7 - i));
+          }
         } else if (t.ident == "D" || t.ident == "DATE") {
           int y = 0, mo = 0, d = 0;
           if (sscanf(s.c_str(), "%d-%d-%d", &y, &mo, &d) == 3) {
@@ -297,6 +406,13 @@ private:
         }
         t.intVal = v;
         t.tok = Tok::integer;
+        // width for zero-extension into ACCU: DATE=16-bit, T#/TOD=32-bit,
+        // DT/DATE_AND_TIME stays 64-bit (litWidth 0 -> i64 in parseConst)
+        t.litWidth = (t.ident == "D" || t.ident == "DATE")
+                         ? 16
+                         : (t.ident == "DT" || t.ident == "DATE_AND_TIME")
+                               ? 0
+                               : 32;
         return t;
       }
       // Pointer literal P#... — S7 32-bit pointer format:
@@ -688,13 +804,17 @@ struct MemberInfo {
   bool isBit = false;
   uint8_t section = 0; // 0=IN 1=OUT 2=INOUT 3=STAT 4=TEMP
   std::string type;      // base type name (BOOL, INT, ARRAY, UDT name, ...)
-  int32_t count = 1;     // ARRAY element count
+  int32_t count = 1;     // ARRAY element count (all dims multiplied)
   int32_t stride = 0;    // ARRAY element size in bytes
   std::string elemType;  // ARRAY element type
+  int32_t lo = 1;        // ARRAY lower bound of the first dimension
+  int32_t elemSize = 0;  // ARRAY element size in bytes
+  std::vector<std::pair<int32_t, int32_t>> dims; // ARRAY (lo, hi) per dim
 };
 
 struct Layout {
   std::map<std::string, MemberInfo> members;
+  std::map<std::string, std::string> memberInit; // raw ":= ..." initializer text
   int32_t size = 0;      // total size in bytes (rounded to even)
   int32_t bitCursor = 0; // absolute bit offset for the next member (BOOL packing)
 };
@@ -718,8 +838,11 @@ static void typeInfo(const std::string &ty, const std::map<std::string, Layout> 
     size = 2; align = 2; widthBits = 16; return;
   }
   if (ty == "DWORD" || ty == "DINT" || ty == "REAL" || ty == "TOD" ||
-      ty == "TIME_OF_DAY" || ty == "DT" || ty == "DATE_AND_TIME") {
+      ty == "TIME_OF_DAY") {
     size = 4; align = 2; widthBits = 32; return;
+  }
+  if (ty == "DT" || ty == "DATE_AND_TIME") {
+    size = 8; align = 2; widthBits = 64; return; // 8 BCD bytes
   }
   if (ty.rfind("STRING", 0) == 0) { // STRING[n]: n+2 bytes
     int n = 254;
@@ -771,10 +894,16 @@ static void parseStructBody(Lexer &lx, Layout &layout,
       lx.next();
       if (t == "ARRAY" && lx.getCurToken() == Tok::lbracket) {
         lx.next();
-        int64_t lo = 0, hi = -1;
-        if (lx.getCurToken() == Tok::integer) { lo = lx.getInteger(); lx.next(); }
-        while (lx.getCurToken() == Tok::dot) lx.next();
-        if (lx.getCurToken() == Tok::integer) { hi = lx.getInteger(); lx.next(); }
+        // all dimensions: ARRAY [lo .. hi, lo .. hi, ...] OF elem
+        while (lx.getCurToken() != Tok::rbracket && lx.getCurToken() != Tok::eof) {
+          int64_t lo = 0, hi = -1;
+          if (lx.getCurToken() == Tok::integer) { lo = lx.getInteger(); lx.next(); }
+          while (lx.getCurToken() == Tok::dot) lx.next();
+          if (lx.getCurToken() == Tok::integer) { hi = lx.getInteger(); lx.next(); }
+          m.dims.push_back({(int32_t)lo, (int32_t)hi});
+          if (lx.getCurToken() == Tok::comma) { lx.next(); continue; }
+          break;
+        }
         while (lx.getCurToken() != Tok::rbracket && lx.getCurToken() != Tok::eof)
           lx.next();
         if (lx.getCurToken() == Tok::rbracket) lx.next();
@@ -787,15 +916,30 @@ static void parseStructBody(Lexer &lx, Layout &layout,
         typeInfo(et, udts, esize, ealign, ewidth, ebit);
         m.type = "ARRAY";
         m.elemType = et;
-        m.count = (int32_t)(hi - lo + 1);
+        m.count = 1;
+        for (auto &d : m.dims)
+          m.count *= (int32_t)(d.second - d.first + 1);
         if (m.count < 0) m.count = 0;
-        m.stride = esize ? esize : 2;
-        m.widthBits = ewidth;
-        m.isBit = false;
-        bit = (bit + 7) & ~7;              // byte align
-        if (m.stride >= 2) bit = (bit + 15) & ~15; // even align
-        m.byte = bit / 8;
-        bit += m.count * m.stride * 8;
+        m.lo = m.dims.empty() ? 1 : m.dims[0].first;
+        if (ebit) {
+          // ARRAY OF BOOL: bit-packed, one bit per element
+          m.elemSize = 0;
+          m.stride = 0;
+          m.widthBits = 1;
+          m.isBit = true;
+          m.byte = bit / 8;
+          m.bit = bit % 8;
+          bit += m.count;
+        } else {
+          m.elemSize = esize ? esize : 2;
+          m.stride = m.elemSize;
+          m.widthBits = ewidth;
+          m.isBit = false;
+          bit = (bit + 7) & ~7;              // byte align
+          if (m.stride >= 2) bit = (bit + 15) & ~15; // even align
+          m.byte = bit / 8;
+          bit += m.count * m.stride * 8;
+        }
       } else {
         if (t == "STRING" && lx.getCurToken() == Tok::lbracket) {
           lx.next();
@@ -827,7 +971,19 @@ static void parseStructBody(Lexer &lx, Layout &layout,
       }
       m.section = (uint8_t)section;
       layout.members[name] = m;
-      // skip initializer to ';'
+      // capture the raw initializer text (up to ';'), then skip to ';'
+      if (lx.getCurToken() == Tok::colon || lx.getCurToken() == Tok::assign) {
+        llvm::StringRef raw = lx.raw();
+        size_t pos = raw.find(';');
+        std::string slice =
+            pos == llvm::StringRef::npos ? raw.str() : raw.take_front(pos).str();
+        // strip the leading ":" / ":=" / "=" remnants
+        size_t i = 0;
+        while (i < slice.size() && (slice[i] == ':' || slice[i] == '=' ||
+                                    slice[i] == ' ' || slice[i] == '\t'))
+          ++i;
+        layout.memberInit[name] = slice.substr(i);
+      }
       while (lx.getCurToken() != Tok::semi && lx.getCurToken() != Tok::eof)
         lx.next();
       continue;
@@ -1055,6 +1211,11 @@ public:
             if (s == "STRUCT") {
               lx.next();
               parseStructBody(lx, dbLayouts[db], udtLayouts, {"END_STRUCT"});
+              continue;
+            }
+            if (s == "VAR") {
+              lx.next();
+              parseStructBody(lx, dbLayouts[db], udtLayouts, {"END_VAR"});
               continue;
             }
             if (s == "FB" || s == "FC" || s == "SFB") {
@@ -1356,6 +1517,23 @@ private:
         builder.create<awl::SetDbSizeOp>(
             loc(), builder.getI32IntegerAttr(db),
             builder.getI32IntegerAttr(lit->second.size));
+      // declaration initializers (STRUCT/VAR member := value) first
+      if (lit != dbLayouts.end()) {
+        for (auto &kv : lit->second.memberInit) {
+          const MemberInfo *mi = nullptr;
+          auto mit = lit->second.members.find(kv.first);
+          if (mit != lit->second.members.end())
+            mi = &mit->second;
+          for (const std::string &assign : expandMemberInit(kv.first, kv.second, mi)) {
+            Lexer sub(assign, "<dbinit>"); // assign must outlive sub
+            sub.start();
+            Lexer savedLexer = lexer;
+            lexer = sub;
+            parseDbInitLine();
+            lexer = savedLexer;
+          }
+        }
+      }
     }
     while (lexer.getCurToken() != Tok::eof) {
       if (lexer.getCurToken() == Tok::ident &&
@@ -1376,6 +1554,94 @@ private:
       builder.create<awl::BeOp>(loc());
     }
     return true;
+  }
+
+  // Expand a declaration initializer into one "NAME[i,...] := value;" text
+  // per element. Handles "v, v, ..." and the "N (v, ...)" repeat form.
+  // Array indices are emitted with the first dimension most significant
+  // (row-major), matching consumeArrayIndices.
+  static std::vector<std::string> expandMemberInit(const std::string &name,
+                                                   const std::string &slice,
+                                                   const MemberInfo *mi) {
+    std::vector<std::string> out;
+    // strip outer whitespace
+    std::string s = slice;
+    auto isws = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+    size_t b = 0, e = s.size();
+    while (b < e && isws(s[b])) ++b;
+    while (e > b && isws(s[e - 1])) --e;
+    s = s.substr(b, e - b);
+    int repeat = 1;
+    std::string list = s;
+    // "N (v, v, ...)" repeat form
+    {
+      size_t i = 0;
+      int64_t n = 0;
+      bool digits = false;
+      while (i < s.size() && isdigit((unsigned char)s[i])) {
+        n = n * 10 + (s[i++] - '0');
+        digits = true;
+      }
+      size_t j = i;
+      while (j < s.size() && isws(s[j])) ++j;
+      if (digits && j < s.size() && s[j] == '(' && s.back() == ')') {
+        repeat = (int)n;
+        list = s.substr(j + 1, s.size() - j - 2);
+      }
+    }
+    // split the value list on top-level commas
+    std::vector<std::string> vals;
+    {
+      int depth = 0;
+      size_t start = 0;
+      for (size_t i = 0; i <= list.size(); ++i) {
+        if (i == list.size() || (list[i] == ',' && depth == 0)) {
+          std::string v = list.substr(start, i - start);
+          size_t vb = 0, ve = v.size();
+          while (vb < ve && isws(v[vb])) ++vb;
+          while (ve > vb && isws(v[ve - 1])) --ve;
+          if (ve > vb)
+            vals.push_back(v.substr(vb, ve - vb));
+          start = i + 1;
+        } else if (list[i] == '(') {
+          ++depth;
+        } else if (list[i] == ')') {
+          --depth;
+        }
+      }
+    }
+    if (vals.empty())
+      vals.push_back("0");
+    if (!mi || mi->dims.empty()) {
+      out.push_back(name + " := " + vals[0] + ";");
+      return out;
+    }
+    // per-dimension sizes
+    std::vector<int32_t> n(mi->dims.size());
+    int32_t total = 1;
+    for (size_t d = 0; d < mi->dims.size(); ++d) {
+      n[d] = mi->dims[d].second - mi->dims[d].first + 1;
+      if (n[d] < 1) n[d] = 1;
+      total *= n[d];
+    }
+    int64_t count = (int64_t)repeat * (int64_t)vals.size();
+    if (count > total)
+      count = total;
+    for (int64_t k = 0; k < count; ++k) {
+      std::string idx;
+      int64_t rem = k;
+      for (size_t d = 0; d < mi->dims.size(); ++d) {
+        int64_t radix = 1;
+        for (size_t j = d + 1; j < mi->dims.size(); ++j)
+          radix *= n[j];
+        int64_t i = rem / radix;
+        rem %= radix;
+        idx += (d ? ", " : "[") + std::to_string(mi->dims[d].first + (int32_t)i);
+      }
+      idx += "]";
+      out.push_back(name + idx + " := " + vals[k % vals.size()] + ";");
+    }
+    return out;
   }
 
   /// One init assignment: <operand> := <value>   (e.g. DB1.DBX 0.0 := TRUE,
@@ -1417,6 +1683,8 @@ private:
           byte = it->second.byte;
           bit = it->second.bit;
           width = it->second.widthBits ? it->second.widthBits : 16;
+          if (lexer.getCurToken() == Tok::lbracket)
+            addBits(byte, bit, consumeArrayIndices(&it->second));
         }
       }
       addr = mkDirect(mlir::scl::DirectArea::DataBlock, effDb(dbOverride), byte,
@@ -1807,9 +2075,19 @@ private:
   }
 
   bool parseIdentInstruction(const std::string &m, const std::string &blockName) {
-    if (m == "BE" || m == "BEA" || m == "BEB" || m == "BEC") { // BEA/BEB/BEC variants
+    if (m == "BE" || m == "BEA" || m == "BEU") {
       builder.create<awl::BeOp>(loc());
       blockEnded = true;
+      return true;
+    }
+    if (m == "BEB" || m == "BEC") {
+      // BEB: end block if RLO = 1; BEC: end block if RLO = 0
+      if (!ensureRlo())
+        return false;
+      auto op = builder.create<awl::BeIfOp>(loc(), rlo, mlir::UnitAttr());
+      if (m == "BEC")
+        op->setAttr("negate", builder.getUnitAttr());
+      rloActive = false;
       return true;
     }
     if (m == "NOP") {
@@ -2271,8 +2549,39 @@ private:
         rlo = builder.create<awl::NotOp>(loc(), i1, rlo);
       return true;
     }
-    if (m == "SPL")
-      return parseJump("SPA"); // jump via label list: treated as SPA
+    if (m == "SPL") {
+      // SPL is a jump table: `SPL <default>` followed by a list of
+      // `SPA <label>` entries; the low byte of ACCU1 selects the entry
+      // (awlsim: lookup = accu1.getByte() + 1, default if out of range)
+      if (lexer.getCurToken() != Tok::ident)
+        return error("expected label after SPL");
+      std::string def = upperIdent();
+      lexer.next();
+      std::vector<std::string> table;
+      {
+        Lexer ahead = lexer;
+        while (ahead.getCurToken() == Tok::ident &&
+               upperStr(ahead.getIdent()) == "SPA") {
+          ahead.next();
+          if (ahead.getCurToken() != Tok::ident)
+            break;
+          table.push_back(upperStr(ahead.getIdent()));
+          ahead.next();
+        }
+      }
+      mlir::Value accVal =
+          acc.empty() ? constInt(builder.getI32Type(), 0) : acc.back();
+      mlir::Value accB = zextAcc(castTo(accVal, builder.getI8Type()));
+      auto i32 = builder.getI32Type();
+      for (size_t i = 0; i < table.size(); ++i) {
+        mlir::Value r = builder.create<awl::CmpEqOp>(
+            loc(), builder.getI1Type(), accB, constInt(i32, (int64_t)i));
+        builder.create<awl::JumpIfOp>(loc(), r, builder.getStringAttr(table[i]));
+      }
+      builder.create<awl::JumpOp>(loc(), builder.getStringAttr(def));
+      rloActive = false;
+      return true;
+    }
     if (m == "SPBNB" || m == "SPBI" || m == "SPBIN" || m == "JNB" ||
         m == "JNBI" || m == "SPO" || m == "SOS" || m == "SPU" || m == "JCN")
       return parseJump("SPN");
@@ -2356,6 +2665,17 @@ private:
     if (v.getType() == t)
       return v;
     return builder.create<awl::CastOp>(loc(), t, v);
+  }
+
+  // loads of BYTE/WORD into an accumulator zero-extend (awlsim: W/B are
+  // unsigned; the ACCU holds 0..65535)
+  mlir::Value zextAcc(mlir::Value v) {
+    if (v.getType().isInteger(8) || v.getType().isInteger(16)) {
+      auto op = builder.create<awl::CastOp>(loc(), builder.getI32Type(), v);
+      op->setAttr("zext", builder.getUnitAttr());
+      return op;
+    }
+    return v;
   }
 
   mlir::Value constInt(mlir::Type ty, int64_t v) {
@@ -2473,7 +2793,7 @@ private:
   // create a direct operand, clamping whole-UDT/STRING widths to 32
   mlir::Value mkDirect(mlir::scl::DirectArea area, int32_t db, int32_t byte,
                        int32_t bit, int32_t width) {
-    if (width != 1 && width != 8 && width != 16 && width != 32)
+    if (width != 1 && width != 8 && width != 16 && width != 32 && width != 64)
       width = 32;
     return builder.create<awl::DirectOp>(loc(), area, db, byte, bit, width);
   }
@@ -2586,6 +2906,47 @@ private:
     return db == 0 && dbOverride >= 0 ? dbOverride : db;
   }
 
+  // Consume "[i, j, ...]" array index suffixes and return the offset in
+  // BITS relative to the member base (per-dimension lower bounds applied;
+  // BOOL arrays use one bit per element).
+  int32_t consumeArrayIndices(const MemberInfo *mi) {
+    int32_t off = 0;
+    size_t dim = 0;
+    while (lexer.getCurToken() == Tok::lbracket) {
+      lexer.next();
+      while (lexer.getCurToken() != Tok::rbracket &&
+             lexer.getCurToken() != Tok::eof) {
+        if (lexer.getCurToken() == Tok::integer && mi) {
+          int64_t idx = lexer.getInteger();
+          lexer.next();
+          int32_t lo = mi->lo;
+          int64_t mult = (mi->elemSize ? mi->elemSize * 8 : 1);
+          if (dim < mi->dims.size()) {
+            lo = mi->dims[dim].first;
+            for (size_t j = dim + 1; j < mi->dims.size(); ++j)
+              mult *= mi->dims[j].second - mi->dims[j].first + 1;
+          } else {
+            mult = mi->stride ? mi->stride * 8 : 8;
+          }
+          off += (int32_t)((idx - lo) * mult);
+          ++dim;
+        } else {
+          lexer.next(); // comma etc.
+        }
+      }
+      if (lexer.getCurToken() == Tok::rbracket)
+        lexer.next();
+    }
+    return off;
+  }
+
+  // apply an index-bit offset to a byte/bit pair
+  static void addBits(int32_t &byte, int32_t &bit, int32_t bits) {
+    int32_t total = bit + bits;
+    byte += total / 8;
+    bit = total % 8;
+  }
+
   mlir::Value parseOperand(bool bitContext = false) {
     // operand starting with '[': fully indirect U [AR1, P#0.0]
     if (lexer.getCurToken() == Tok::lbracket)
@@ -2634,19 +2995,9 @@ private:
         while (lexer.getCurToken() == Tok::lbracket ||
                lexer.getCurToken() == Tok::dot) {
           if (lexer.getCurToken() == Tok::lbracket) {
-            lexer.next();
-            if (lexer.getCurToken() == Tok::integer) {
-              int64_t idx = lexer.getInteger();
-              lexer.next();
-              byte += (int32_t)(idx * (stride > 0 ? stride : 1));
-              if (!mi->elemType.empty())
-                type = mi->elemType; // array element type for .sub chains
-            }
-            while (lexer.getCurToken() != Tok::rbracket &&
-                   lexer.getCurToken() != Tok::eof)
-              lexer.next();
-            if (lexer.getCurToken() == Tok::rbracket)
-              lexer.next();
+            addBits(byte, bit, consumeArrayIndices(mi));
+            if (!mi->elemType.empty())
+              type = mi->elemType; // array element type for .sub chains
           } else {
             lexer.next(); // '.'
             if (lexer.getCurToken() == Tok::ident ||
@@ -2843,18 +3194,8 @@ private:
         }
         while (true) {
           // [i] index?
-          while (lexer.getCurToken() == Tok::lbracket) {
-            lexer.next();
-            if (lexer.getCurToken() == Tok::integer && mi && mi->stride) {
-              byte += (int32_t)lexer.getInteger() * mi->stride;
-              lexer.next();
-            }
-            while (lexer.getCurToken() != Tok::rbracket &&
-                   lexer.getCurToken() != Tok::eof)
-              lexer.next();
-            if (lexer.getCurToken() == Tok::rbracket)
-              lexer.next();
-          }
+          if (lexer.getCurToken() == Tok::lbracket)
+            addBits(byte, bit, consumeArrayIndices(mi));
           if (lexer.getCurToken() == Tok::dot) {
             lexer.next();
             if (lexer.getCurToken() == Tok::ident ||
@@ -3075,19 +3416,29 @@ private:
     }
     if (lexer.getCurToken() == Tok::integer) {
       int64_t v = lexer.getInteger();
+      int lw = lexer.getLitWidth();
       lexer.next();
       if (neg)
         v = -v;
       mlir::Type ty;
       int64_t val;
-      if (v >= -32768 && v <= 32767) {
-        ty = builder.getI16Type();
-        val = v;
-      } else if (v >= 0 && v <= 65535) {
-        ty = builder.getI16Type();
-        val = v - 65536; // 16-bit bit pattern
-      } else {
+      if (lw == 8) { // B#.. : unsigned byte, zero-extended into ACCU
         ty = builder.getI32Type();
+        val = (v % 256 + 256) % 256;
+      } else if (lw == 16) { // W#../DATE : unsigned word, zero-extended
+        ty = builder.getI32Type();
+        val = (v % 65536 + 65536) % 65536;
+      } else if (lw == 32) { // L#../TIME/TOD : 32-bit pattern
+        ty = builder.getI32Type();
+        val = (int32_t)(uint32_t)v;
+      } else if (v >= -32768 && v <= 32767) {
+        ty = builder.getI32Type();
+        val = (v % 65536 + 65536) % 65536; // 16-bit value, zero-extended
+      } else if (v >= -2147483648LL && v <= 4294967295LL) {
+        ty = builder.getI32Type();
+        val = (int32_t)(uint32_t)v; // 32-bit bit pattern
+      } else {
+        ty = builder.getI64Type();
         val = v;
       }
       return builder.create<awl::ConstOp>(
@@ -3173,12 +3524,12 @@ private:
         } else {
           mlir::Value loaded = builder.create<awl::LoadIndirectOp>(
               loc(), builder.getI64Type(), addr, builder.getI32IntegerAttr(w));
-          v = castTo(loaded, builder.getIntegerType(w));
+          v = zextAcc(castTo(loaded, builder.getIntegerType(w)));
         }
       } else {
         // pseudo operands (DBLG/DBNO/DILG) already yield a constant
         v = mlir::isa<mlir::scl::DirectType>(addr.getType())
-                ? (mlir::Value)builder.create<awl::LoadOp>(loc(), addr)
+                ? zextAcc(builder.create<awl::LoadOp>(loc(), addr))
                 : addr;
       }
     }
@@ -3955,6 +4306,33 @@ private:
     struct OutParam {
       const MemberInfo *m;
       mlir::Value target;
+      bool array = false;
+    };
+    // Whole-array parameter copy: `P := DB2.ARR` copies all elements
+    // between the source operand and the callee's interface area.
+    auto copyArrayParam = [&](const MemberInfo *m, int32_t baseByte,
+                              mlir::Value srcDirect,
+                              mlir::scl::DirectArea dstArea, int32_t dstDb,
+                              bool toCallee) {
+      auto sdt = mlir::cast<mlir::scl::DirectType>(srcDirect.getType());
+      int32_t elemBits = m->elemSize ? m->elemSize * 8 : 1;
+      int32_t ew = m->widthBits ? m->widthBits : 16;
+      for (int32_t k = 0; k < m->count; ++k) {
+        int32_t sbits = sdt.getBit() + k * elemBits;
+        auto saddr = builder.create<awl::DirectOp>(
+            loc(), sdt.getArea(), sdt.getDb(), sdt.getByte() + sbits / 8,
+            sbits % 8, ew);
+        int32_t dbits = m->bit + k * elemBits;
+        auto daddr =
+            mkDirect(dstArea, dstDb, baseByte + dbits / 8, dbits % 8, ew);
+        if (toCallee) {
+          mlir::Value v = builder.create<awl::LoadOp>(loc(), saddr);
+          builder.create<awl::StoreOp>(loc(), v, daddr);
+        } else {
+          mlir::Value v = builder.create<awl::LoadOp>(loc(), daddr);
+          builder.create<awl::StoreOp>(loc(), v, saddr);
+        }
+      }
     };
     llvm::SmallVector<OutParam, 4> outParams;
     if (lexer.getCurToken() == Tok::lparen) {
@@ -4011,23 +4389,34 @@ private:
                                  : mlir::scl::DirectArea::Marker;
         int32_t byte = kind == "FB" ? m->byte : kLocalBase + m->byte;
         int32_t width = m->widthBits ? m->widthBits : 16;
+        bool isArray = m->type == "ARRAY" && m->count > 1;
         if (!isOutput) {
           mlir::Value target;
           mlir::Value v = parseCallParamValue(&target);
           if (!v)
             return false;
-          auto addr = mkDirect(area, kind == "FB" ? (int32_t)dbNum : 0, byte,
-                               m->bit, width);
-          builder.create<awl::StoreOp>(loc(), v, addr);
+          if (isArray && target &&
+              mlir::isa<mlir::scl::DirectType>(target.getType())) {
+            copyArrayParam(m, byte, target, area,
+                           kind == "FB" ? (int32_t)dbNum : 0, true);
+          } else {
+            auto addr = mkDirect(area, kind == "FB" ? (int32_t)dbNum : 0,
+                                 byte, m->bit, width);
+            builder.create<awl::StoreOp>(loc(), v, addr);
+          }
           // by-reference parameter: an operand RHS is written back after
           // the call (awlsim passes FC/FB params by reference)
           if (target)
-            outParams.push_back({m, target});
+            outParams.push_back(
+                {m, target, isArray && mlir::isa<mlir::scl::DirectType>(
+                                          target.getType())});
         } else {
           mlir::Value target = parseOperand(false);
           if (!target)
             return false;
-          outParams.push_back({m, target});
+          outParams.push_back(
+              {m, target, isArray && mlir::isa<mlir::scl::DirectType>(
+                                        target.getType())});
         }
       }
       if (lexer.getCurToken() == Tok::rparen)
@@ -4043,6 +4432,11 @@ private:
                                : mlir::scl::DirectArea::Marker;
       int32_t byte = kind == "FB" ? op.m->byte : kLocalBase + op.m->byte;
       int32_t width = op.m->widthBits ? op.m->widthBits : 16;
+      if (op.array && mlir::isa<mlir::scl::DirectType>(op.target.getType())) {
+        copyArrayParam(op.m, byte, op.target, area,
+                       kind == "FB" ? (int32_t)dbNum : 0, false);
+        continue;
+      }
       auto addr = mkDirect(area, kind == "FB" ? (int32_t)dbNum : 0, byte,
                            op.m->bit, width);
       mlir::Value v = builder.create<awl::LoadOp>(loc(), addr);

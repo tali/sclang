@@ -208,11 +208,12 @@ struct TextPrinter {
               uint64_t code = (v >> 12) & 3, bcd = v & 0xFFF;
               uint64_t val =
                   ((bcd >> 8) & 0xF) * 100 + ((bcd >> 4) & 0xF) * 10 + (bcd & 0xF);
-              // print with the short units the lexer understands:
-              // MS = 10ms (code 0), S = 1s (code 2); codes 1/3 fold x10
-              uint64_t eff = (code == 1 || code == 3) ? val * 10 : val;
-              s5Text[res] = "S5T#" + std::to_string(eff) +
-                            (code <= 1 ? "MS" : "S");
+              // decode to milliseconds, then print with the short units the
+              // lexer understands (MS/S), so the output round-trips
+              static const uint64_t baseMs[4] = {10, 100, 1000, 10000};
+              uint64_t eff = val * baseMs[code];
+              s5Text[res] = "S5T#" + std::to_string(eff / (eff % 1000 == 0 ? 1000 : 1)) +
+                            (eff % 1000 == 0 ? "S" : "MS");
             }
           }
         }

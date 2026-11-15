@@ -36,7 +36,8 @@ using namespace mlir::func;
 
 /// Convert an int/float value to `ty` (ext/trunc/sitofp/fptosi).
 /// Defined further below; declared here for DialectCastOpLowering.
-static Value convertScalarTo(OpBuilder &b, Location loc, Value v, Type ty);
+static Value convertScalarTo(OpBuilder &b, Location loc, Value v, Type ty,
+                             bool zext = false);
 
 namespace {
 
@@ -2069,7 +2070,8 @@ using ConstantDateAndTimeOpLowering = TimeConstantOpLowering<scl::ConstantDateAn
 // blocks.
 
 /// Convert an int/float value to `ty` (ext/trunc/sitofp/fptosi).
-static Value convertScalarTo(OpBuilder &b, Location loc, Value v, Type ty) {
+static Value convertScalarTo(OpBuilder &b, Location loc, Value v, Type ty,
+                             bool zext) {
   Type src = v.getType();
   if (src == ty)
     return v;
@@ -2086,8 +2088,9 @@ static Value convertScalarTo(OpBuilder &b, Location loc, Value v, Type ty) {
     return b.create<arith::SIToFPOp>(loc, ty, v);
   if (src.isa<IntegerType>() && ty.isa<IntegerType>()) {
     if (src.getIntOrFloatBitWidth() < ty.getIntOrFloatBitWidth()) {
-      // a bit (i1) is an unsigned 0/1, not a sign bit
-      if (src.getIntOrFloatBitWidth() == 1)
+      // a bit (i1) is an unsigned 0/1, not a sign bit; zext forces
+      // zero-extension for unsigned loads (BYTE/WORD into the ACCU)
+      if (src.getIntOrFloatBitWidth() == 1 || zext)
         return b.create<arith::ExtUIOp>(loc, ty, v);
       return b.create<arith::ExtSIOp>(loc, ty, v);
     }
@@ -2422,7 +2425,8 @@ struct AwlCastOpLowering : public OpConversionPattern<awl::CastOp> {
     auto resTy = typeConverter->convertType(op.getType());
     if (!resTy)
       return failure();
-    Value v = convertScalarTo(rewriter, op.getLoc(), adaptor.getValue(), resTy);
+    Value v = convertScalarTo(rewriter, op.getLoc(), adaptor.getValue(), resTy,
+                              op.getZext().has_value());
     if (!v)
       return failure();
     rewriter.replaceOp(op, v);
@@ -2476,6 +2480,12 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
       auto i32 = rewriter.getI32Type();
       args.push_back(rewriter.create<arith::ConstantOp>(
           op.getLoc(), i32, rewriter.getI32IntegerAttr(dbAttr.value())));
+      // the instance DB becomes the DI register for the callee (AUF DI)
+      ModuleOp mod = op->getParentOfType<ModuleOp>();
+      auto diFn = getOrInsertRtFunc(rewriter, mod, "scl_rt_set_current_di",
+                                    rewriter.getFunctionType({i32}, {}));
+      rewriter.create<func::CallOp>(op.getLoc(), diFn, TypeRange{},
+                                    ValueRange{args.back()});
     }
     // Cross-file / system block callee (not defined in this module): create
     // an empty stub so single files of a multi-file project still lower and
@@ -3011,7 +3021,7 @@ struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
     SmallVector<Operation *, 16> cuts;
     for (auto &o : flat->getOperations())
       if (isa<awl::LabelOp, awl::JumpOp, awl::JumpIfOp, awl::JumpIfNotOp,
-              awl::BeOp>(&o) ||
+              awl::BeOp, awl::BeIfOp>(&o) ||
           (isa<awl::CallOp>(&o) && cast<awl::CallOp>(&o).getRlo()))
         cuts.push_back(&o);
     DenseMap<Operation *, Block *> cutBlock;
@@ -3098,6 +3108,29 @@ struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
       } else if (auto be = dyn_cast<awl::BeOp>(cut)) {
         rewriter.setInsertionPointToEnd(b);
         rewriter.create<func::ReturnOp>(loc);
+        rewriter.eraseOp(be);
+      } else if (auto be = dyn_cast<awl::BeIfOp>(cut)) {
+        // BEB/BEC: conditional block end -> cond_br(rlo, retBlock, fall)
+        auto nextIt = std::next(be->getIterator());
+        Block *fall =
+            nextIt != b->end() ? rewriter.splitBlock(b, nextIt) : b->getNextNode();
+        if (!fall) {
+          emitError(be.getLoc()) << "be_if without fallthrough block";
+          return failure();
+        }
+        Block *retB = rewriter.createBlock(&func.getBody());
+        rewriter.setInsertionPointToEnd(retB);
+        rewriter.create<func::ReturnOp>(loc);
+        rewriter.setInsertionPointToEnd(b);
+        mlir::Value cond = be.getRlo();
+        if (be.getNegate().has_value()) {
+          auto one = rewriter.create<arith::ConstantOp>(
+              loc, rewriter.getI1Type(), rewriter.getIntegerAttr(
+                                             rewriter.getI1Type(), 1));
+          cond = rewriter.create<arith::XOrIOp>(loc, cond, one);
+        }
+        rewriter.create<cf::CondBranchOp>(loc, cond, retB, ValueRange{}, fall,
+                                          ValueRange{});
         rewriter.eraseOp(be);
       }
     }

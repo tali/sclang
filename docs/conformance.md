@@ -64,12 +64,12 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 
 ## Current results (LLVM 17 build, this writing)
 
-- AWL compile: **109/116 pass (94%)**
-- SCL single file: **13/22 pass (59%)**
-- SCL per project: **11/17 pass (65%)**
-- JIT smoke (files with OB 1, full pipeline + execution): **69/77 pass (90%)**
+- AWL compile: **105/116 pass (91%)**
+- SCL single file: **15/15 pass (100%)**
+- SCL per project: **16/17 pass (94%)**
+- JIT smoke (files with OB 1, full pipeline + execution): **54/77 pass (70%)**
 - Oracle (`__ASSERT` files with OB 1, value-level, exit code must be 0):
-  **10/53 pass (19%)** — see "Oracle tier" below
+  **9/53 pass (17%)** — see "Oracle tier" below
 
 ## Remaining failures = documented gaps
 

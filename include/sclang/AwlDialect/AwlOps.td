@@ -165,7 +165,7 @@ def NegOp : AwlOp<"neg"> {
 
 def CastOp : AwlOp<"cast"> {
   let summary = "cast between accumulator widths/types";
-  let arguments = (ins AnyType:$value);
+  let arguments = (ins AnyType:$value, OptionalAttr<UnitAttr>:$zext);
   let results = (outs AnyType:$result);
   let assemblyFormat = "attr-dict $value `:` type($value) `to` type($result)";
 }
@@ -310,6 +310,13 @@ def NopOp : AwlOp<"nop"> {
 def BeOp : AwlOp<"be", [Terminator]> {
   let summary = "BE: block end";
   let assemblyFormat = "attr-dict";
+}
+
+// BEB/BEC: conditional block end (negate set for BEC: end if RLO = 0)
+def BeIfOp : AwlOp<"be_if"> {
+  let summary = "BEB/BEC: end the block if RLO matches";
+  let arguments = (ins Awl_Bool:$rlo, OptionalAttr<UnitAttr>:$negate);
+  let assemblyFormat = "attr-dict $rlo (`negate` $negate^)? `:` type($rlo)";
 }
 
 // MARK: DB register / address registers / indirect access (ABI v5)

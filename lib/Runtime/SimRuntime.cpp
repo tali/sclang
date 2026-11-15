@@ -188,6 +188,8 @@ int64_t scl_rt_read(uint8_t area, uint32_t db, uint32_t byteOff,
     fprintf(stderr, "scl_rt_read: invalid width %u (area '%c' db %u byte %u)\n", widthBytes, area, db, byteOff);
     abort();
   }
+  if (area == SCL_RT_AREA_DB && db == 0xFFFF)
+    db = state().currentDi; // DI-area pointer: DB from the DI register
   if (area == SCL_RT_AREA_DB && db == 0 && state().currentDb != 0)
     db = state().currentDb; // DB 0 operand = current DB (AUF/OPN)
   // Timers/counters: the value is computed from the sim state (remaining
@@ -235,6 +237,8 @@ void scl_rt_write(uint8_t area, uint32_t db, uint32_t byteOff,
     fprintf(stderr, "scl_rt_write: invalid width %u\n", widthBytes);
     abort();
   }
+  if (area == SCL_RT_AREA_DB && db == 0xFFFF)
+    db = state().currentDi; // DI-area pointer: DB from the DI register
   if (area == SCL_RT_AREA_DB && db == 0 && state().currentDb != 0)
     db = state().currentDb; // DB 0 operand = current DB (AUF/OPN)
   // Writing a counter value (e.g. SCL `%Cn := v`) sets the count; writing a
@@ -270,6 +274,8 @@ bool scl_rt_read_bit(uint8_t area, uint32_t db, uint32_t byteOff,
     fprintf(stderr, "scl_rt_read_bit: invalid bit %u\n", bit);
     abort();
   }
+  if (area == SCL_RT_AREA_DB && db == 0xFFFF)
+    db = state().currentDi; // DI-area pointer: DB from the DI register
   if (area == SCL_RT_AREA_DB && db == 0 && state().currentDb != 0)
     db = state().currentDb; // DB 0 operand = current DB (AUF/OPN)
   // Timer/counter status bit (AWL `U T n` / `U Z n`).
@@ -293,6 +299,8 @@ void scl_rt_write_bit(uint8_t area, uint32_t db, uint32_t byteOff,
     fprintf(stderr, "scl_rt_write_bit: invalid bit %u\n", bit);
     abort();
   }
+  if (area == SCL_RT_AREA_DB && db == 0xFFFF)
+    db = state().currentDi; // DI-area pointer: DB from the DI register
   if (area == SCL_RT_AREA_DB && db == 0 && state().currentDb != 0)
     db = state().currentDb; // DB 0 operand = current DB (AUF/OPN)
   auto &buf = bufferFor(area, db, byteOff, 1);
@@ -695,34 +703,20 @@ uint64_t scl_rt_ar_get(uint8_t ar) {
   return 0;
 }
 
+// [ARn, P#x.y] addressing: returns ARn + offset WITHOUT modifying ARn
+// (the offset form is a temporary, per awlsim's operand evaluation).
 uint64_t scl_rt_ar_add(uint8_t ar, uint32_t offBits) {
   auto &s = state();
   if (s.vtable && s.vtable->ar_add)
     return s.vtable->ar_add(ar, offBits);
   uint64_t p = scl_rt_ar_get(ar);
   // raw P#x.y pointer (area byte 0, value = byte*8+bit): plain add
-  if (ptrArea(p) == 0) {
-    uint8_t s7 = (uint8_t)((p >> 24) & 0xFF);
-    if (p < 0x100000000ull && s7 >= 0x80 && s7 <= 0x86) {
-      // S7 pointer: add to the byte/bit fields
-      uint64_t np = p + offBits; // area<<24|db<<16|(byte*8+bit) + offBits
-      if (ar >= 1 && ar <= 2)
-        s.ars[ar - 1] = np;
-      return np;
-    }
-    uint64_t np = p + offBits;
-    if (ar >= 1 && ar <= 2)
-      s.ars[ar - 1] = np;
-    return np;
-  }
+  if (ptrArea(p) == 0)
+    return p + offBits;
   uint32_t bit = ptrBit(p) + offBits;
   uint32_t byte = ptrByte(p) + bit / 8;
   bit %= 8;
-  uint64_t np = packPtr(ptrArea(p), ptrDb(p), byte, (uint8_t)bit,
-                        (uint8_t)(p & 0xFF));
-  if (ar >= 1 && ar <= 2)
-    s.ars[ar - 1] = np;
-  return np;
+  return packPtr(ptrArea(p), ptrDb(p), byte, (uint8_t)bit, (uint8_t)(p & 0xFF));
 }
 
 // A raw pointer (area byte 0) addresses the marker area: value = byte*8+bit.
@@ -733,9 +727,10 @@ static uint64_t rawToPacked(uint64_t p) {
     return p;
   uint8_t s7 = (uint8_t)((p >> 24) & 0xFF);
   if (p < 0x100000000ull && s7 >= 0x80 && s7 <= 0x86) {
-    static const uint8_t s7area[7] = {'P', 'I', 'Q', 'M', 'D', 'P', 'L'};
+    static const uint8_t s7area[7] = {'P', 'I', 'Q', 'M', 'D', 'D', 'L'};
     uint8_t area = s7area[s7 - 0x80];
-    uint32_t db = (uint32_t)((p >> 16) & 0xFF);
+    // 0x85 = DI area: the DB number comes from the DI register (db=0xFFFF)
+    uint32_t db = s7 == 0x85 ? 0xFFFF : (uint32_t)((p >> 16) & 0xFF);
     uint32_t byte = (uint32_t)((p >> 3) & 0x1FFF);
     uint8_t bit = (uint8_t)(p & 7);
     return packPtr(area, db, byte, bit, 0);
@@ -780,15 +775,18 @@ void scl_rt_write_bit_indirect(uint64_t ptr, bool value) {
 }
 
 // MARK: test oracles (ABI v4)
-
+// awlsim semantics: operands are compared as scalars masked to their width
+// (asScalar), i.e. the 32-bit ACCU and literals compare as unsigned 32-bit
+// bit patterns. 64-bit-exact equality is also accepted (pointer/DT values).
 static bool assertCheck(uint8_t op, int64_t actual, int64_t expected) {
+  uint32_t a = (uint32_t)actual, b = (uint32_t)expected;
   switch (op) {
-  case 0: return actual == expected;
-  case 1: return actual != expected;
-  case 2: return actual > expected;
-  case 3: return actual < expected;
-  case 4: return actual >= expected;
-  default: return actual <= expected;
+  case 0: return actual == expected || a == b;
+  case 1: return actual != expected && a != b;
+  case 2: return a > b;
+  case 3: return a < b;
+  case 4: return a >= b;
+  default: return a <= b;
   }
 }
 

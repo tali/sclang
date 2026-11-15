@@ -49,8 +49,8 @@ LogicalResult DirectOp::verify() {
       getWidth() != dt.getWidth())
     return emitOpError("attributes do not match the result !scl.direct type");
   if (dt.getWidth() != 1 && dt.getWidth() != 8 && dt.getWidth() != 16 &&
-      dt.getWidth() != 32)
-    return emitOpError("width must be 1, 8, 16 or 32 bits");
+      dt.getWidth() != 32 && dt.getWidth() != 64)
+    return emitOpError("width must be 1, 8, 16, 32 or 64 bits");
   if (dt.getBit() < 0 || dt.getBit() > 7)
     return emitOpError("bit must be in 0..7");
   return success();

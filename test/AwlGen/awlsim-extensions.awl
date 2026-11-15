@@ -8,10 +8,10 @@ TITLE = "test"
 VERSION : 0.1
 BEGIN
 	L		S5T#1M30S
-	// CHECK: awl.const 12297 : i16
+	// CHECK: awl.const 6400 : i32
 	L		123
 	T		LD 0		// local data -> marker area
-	// CHECK: awl.store %{{.*}}, %{{.*}} : i16, !scl.direct<L, 0, 0, 0, 32>
+	// CHECK: awl.store %{{.*}}, %{{.*}} : i32, !scl.direct<L, 0, 0, 0, 32>
 	UN	L 0.0
 	// CHECK: awl.rlo_and %{{.*}}, %{{.*}} negate : i1, !scl.direct<L, 0, 0, 0, 1> -> i1
 	U	TRUE
