@@ -290,7 +290,8 @@ public:
 
   /// Return the value of a number literal, as raw string value.
   llvm::StringRef getStringValue() {
-    assert(curTok == tok_string_literal || curTok == tok_real_number_literal);
+    assert(curTok == tok_string_literal || curTok == tok_real_number_literal ||
+           curTok == tok_integer_literal);
     return stringValue;
   }
 
@@ -348,11 +349,23 @@ private:
   Token getReservedWordTok() {
     stringValue = (char)lastChar;
     std::string lower{(char)tolower(lastChar)};
-    while (isalnum((lastChar = Token(getNextChar()))) || lastChar == '_') {
+    while (isalnum((lastChar = Token(getNextChar()))) || lastChar == '_' ||
+           (lastChar != EOF && (unsigned char)lastChar >= 0x80)) { // UTF-8 bytes
       stringValue += (char)lastChar;
       lower += (char)tolower(lastChar);
     }
     stringLowerValue = lower;
+
+    // TIA REGION markers are documentary only; the region name may contain
+    // spaces, so skip the rest of the line.
+    if (lower == "region" || lower == "end_region") {
+      while (lastChar != '\n' && lastChar != EOF)
+        lastChar = Token(getNextChar());
+      return tok_linecomment;
+    }
+    // ENO (error-no-output flag): always false in the simulator.
+    if (lower == "eno")
+      return tok_false;
 
     if (lower == "and")
       return tok_and;
@@ -392,6 +405,12 @@ private:
       return tok_date;
     if (lower == "date_and_time")
       return tok_date_and_time;
+    // TIA Portal type aliases (DTL/LDT are 12 bytes in TIA; they are stored
+    // as 8-byte DATE_AND_TIME here — a documented gap)
+    if (lower == "dt" || lower == "dtl" || lower == "ldt")
+      return tok_date_and_time;
+    if (lower == "tod")
+      return tok_time_of_day;
     if (lower == "dint")
       return tok_dint;
     if (lower == "div")
@@ -480,6 +499,15 @@ private:
       return tok_s5time;
     if (lower == "string")
       return tok_string;
+    // TIA unsigned/signed aliases (same storage width as their base type)
+    if (lower == "usint")
+      return tok_byte;
+    if (lower == "uint")
+      return tok_word;
+    if (lower == "udint" || lower == "ulint")
+      return tok_dword; // no 64-bit int yet; approximate
+    if (lower == "sint")
+      return tok_char;
     if (lower == "struct")
       return tok_struct;
     if (lower == "then")
@@ -683,7 +711,9 @@ private:
 
     stringValue = "";
     char c;
-    while (isprint(c = getNextChar()) && c != '\'') {
+    // accept UTF-8 bytes (>= 0x80) in string literals, e.g. 'Pufferplätze'
+    while ((c = getNextChar()) != EOF && c != '\'' &&
+           (isprint((unsigned char)c) || (unsigned char)c >= 0x80)) {
       if (c == '$') {
         c = getNextChar();
         switch (c) {
@@ -731,7 +761,9 @@ private:
     assert(lastChar == '"');
 
     stringValue = "";
-    while (isprint(lastChar = Token(getNextChar())) && lastChar != '"')
+    while ((lastChar = Token(getNextChar())) != EOF && lastChar != '"' &&
+           (isprint((unsigned char)lastChar) ||
+            (unsigned char)lastChar >= 0x80))
       stringValue += (char)lastChar;
     if (lastChar != '"' || stringValue.empty())
       return tok_error_symbol;
@@ -955,9 +987,21 @@ private:
     yearVal = monVal = dayVal = 0;
     hourVal = minVal = secVal = msecVal = 0;
 
+    // TIA Portal local-variable prefix: '#name' lexes as the identifier
+    // 'name', even when the word is a reserved word (e.g. #TIME, #Time)
+    // ('#' inside number literals, e.g. 16#FF, is handled by
+    // getNumberLiteralTok and never reaches here).
+    bool hashEscaped = false;
+    if (lastChar == '#') {
+      hashEscaped = true;
+      lastChar = Token(getNextChar());
+    }
+
     // reserved word or identifier or typed literal
     if (isalpha(lastChar) || lastChar == '_') {
       Token tok = getReservedWordTok();
+      if (hashEscaped)
+        return tok_identifier;
       if (lastChar == Token('#')) {
         return getTypedLiteralTok(tok);
       }
@@ -1061,7 +1105,12 @@ private:
 class LexerBuffer final : public Lexer {
 public:
   LexerBuffer(const char *begin, const char *end, std::string filename)
-      : Lexer(std::move(filename)), current(begin), end(end) {}
+      : Lexer(std::move(filename)), current(begin), end(end) {
+    // skip a UTF-8 BOM (TIA Portal exports start with one)
+    if (end - begin >= 3 && (unsigned char)begin[0] == 0xEF &&
+        (unsigned char)begin[1] == 0xBB && (unsigned char)begin[2] == 0xBF)
+      current = begin + 3;
+  }
 
 private:
   /// Provide one line at a time to the Lexer, return an empty string when
@@ -1073,6 +1122,9 @@ private:
     if (current <= end && *current)
       ++current;
     llvm::StringRef result{begin, static_cast<size_t>(current - begin)};
+    // skip a UTF-8 BOM at the start of any line (not just of the buffer)
+    if (result.starts_with("\xEF\xBB\xBF"))
+      result = result.drop_front(3);
     return result;
   }
   const char *current, *end;

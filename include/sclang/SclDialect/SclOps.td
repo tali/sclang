@@ -225,7 +225,9 @@ def IntegerCastOp : SclOp<"int.cast", [DeclareOpInterfaceMethods<CastOpInterface
   // an IntegerType of the same width during lowering. The optional `zext`
   // attribute requests zero-extension on widening (unsigned source, e.g.
   // byte/word); the default is sign-extension (signed int/dint).
-  let arguments = (ins AnyTypeOf<[Scl_IntegerType, Scl_LogicalType]>:$value,
+  let arguments = (ins AnyTypeOf<[Scl_IntegerType, Scl_LogicalType,
+                                  Scl_S5TimeType, Scl_TimeType, Scl_TimeOfDayType,
+                                  Scl_DateType, Scl_DateAndTimeType]>:$value,
                        OptionalAttr<UnitAttr>:$zext);
   let results = (outs Scl_IntegerType:$result);
   let assemblyFormat = "attr-dict $value `:` type($value) `to` type($result)";

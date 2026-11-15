@@ -575,6 +575,9 @@ public:
   llvm::ArrayRef<std::unique_ptr<InstructionAST>> getInstructions() const {
     return instructions;
   }
+  std::vector<std::unique_ptr<InstructionAST>> &getInstructions() {
+    return instructions;
+  }
 };
 
 // MARK: Function Calls
@@ -1044,6 +1047,7 @@ public:
 
 private:
   Var_Kind kind;
+  bool constant = false; // TIA `VAR CONSTANT`: declarations are constants
   std::vector<std::unique_ptr<VariableDeclarationAST>> values;
 
 public:
@@ -1054,6 +1058,8 @@ public:
         values(std::move(values)) {}
 
   Var_Kind getKind() const { return kind; }
+  bool isConstant() const { return constant; }
+  void setConstant(bool c) { constant = c; }
   llvm::ArrayRef<std::unique_ptr<VariableDeclarationAST>> getValues() const {
     return values;
   }

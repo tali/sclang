@@ -73,6 +73,12 @@ private:
   // MARK: B.1 Identifiers
 
   std::string ParseIdentifier() {
+    // TIA Portal exports quote names ("name"); accept symbols as identifiers.
+    if (lexer.getCurToken() == tok_symbol) {
+      std::string identifier(lexer.getSymbol());
+      lexer.consume(tok_symbol);
+      return identifier;
+    }
     if (lexer.getCurToken() != tok_identifier) {
       llvm::errs() << "expected identifier, got " << lexer.getCurToken()
                    << "\n";
@@ -82,6 +88,20 @@ private:
     lexer.consume(tok_identifier);
 
     return identifier;
+  }
+
+  /// Skip a braced TIA system-attribute block `{ Name := value; ... }`.
+  void skipAttributeBlock() {
+    if (lexer.getCurToken() != tok_bracket_open)
+      return;
+    int depth = 0;
+    do {
+      if (lexer.getCurToken() == tok_bracket_open)
+        ++depth;
+      else if (lexer.getCurToken() == tok_bracket_close)
+        --depth;
+      lexer.getNextToken();
+    } while (depth > 0 && lexer.getCurToken() != tok_eof);
   }
 
   // Appendix C - Syntac Rules
@@ -242,18 +262,36 @@ private:
     if (identifier.empty())
       return nullptr;
     auto attrs = ParseBlockAttributes();
-    auto type = ParseDataTypeSpec();
-    if (!type)
-      return parseError<UnitAST>("data type", "for data block");
+    // TIA non-optimized DB: `NON_RETAIN` then VAR sections (the type is the
+    // implicit struct of the declared members) instead of a type name.
+    if (lexer.getCurToken() == tok_identifier &&
+        lexer.getIdentifierLower() == "non_retain")
+      lexer.consume(tok_identifier);
+    std::unique_ptr<DataTypeSpecAST> type;
+    std::unique_ptr<DeclarationSectionAST> decls;
+    if (lexer.getCurToken() == tok_var || lexer.getCurToken() == tok_var_temp ||
+        lexer.getCurToken() == tok_var_input ||
+        lexer.getCurToken() == tok_var_output ||
+        lexer.getCurToken() == tok_var_in_out) {
+      decls = ParseDeclarationSection();
+      if (!decls)
+        return nullptr;
+    } else {
+      type = ParseDataTypeSpec();
+      if (!type)
+        return parseError<UnitAST>("data type", "for data block");
+      while (lexer.getCurToken() == tok_semicolon) // e.g. after END_STRUCT;
+        lexer.consume(tok_semicolon);
+      decls = NoDeclarationSection(loc);
+    }
 
     if (lexer.getCurToken() == tok_begin)
       lexer.consume(tok_begin);
     auto assignments = ParseCodeSection();
 
-    auto nodecls = NoDeclarationSection(loc);
     auto unit = std::make_unique<DataBlockAST>(
         std::move(identifier), std::move(loc), std::move(attrs),
-        std::move(nodecls), std::move(type), std::move(assignments));
+        std::move(decls), std::move(type), std::move(assignments));
 
     if (lexer.getCurToken() != tok_end_data_block)
       return parseError<DataBlockAST>(tok_end_data_block, "to end data block");
@@ -275,6 +313,7 @@ private:
     auto identifier = ParseIdentifier();
     if (identifier.empty())
       return nullptr;
+    ParseBlockAttributes(); // TIA VERSION lines / braced attrs
     auto type = ParseDataTypeSpec(); // TODO: STRUCT
     auto attrs = ParseBlockAttributes();
 
@@ -283,6 +322,8 @@ private:
         std::move(identifier), std::move(loc), std::move(attrs),
         std::move(nodecls), std::move(type));
 
+    while (lexer.getCurToken() == tok_semicolon) // TIA writes END_STRUCT;
+      lexer.consume(tok_semicolon);
     if (lexer.getCurToken() != tok_end_type)
       return parseError<UserDefinedTypeAST>(tok_end_type,
                                             "to end user defined type");
@@ -302,6 +343,7 @@ private:
     lexer.consume(tok);
 
     std::string value;
+    auto valueLine = lexer.getLastLocation().line;
     switch (lexer.getCurToken()) {
     default:
       return parseError<AttributeAST>(tok_string_literal, "attribute");
@@ -317,6 +359,29 @@ private:
       value = std::string(lexer.getStringValue());
       lexer.consume(tok_real_number_literal);
       break;
+    }
+
+    // TIA Portal exports allow unquoted multi-word values, e.g.
+    // "TITLE = Valve Control"; glue together everything on the same line.
+    while (lexer.getLastLocation().line == valueLine) {
+      switch (lexer.getCurToken()) {
+      default:
+        return std::make_unique<AttributeAST>(std::move(loc), std::move(name),
+                                              std::move(value));
+      case tok_identifier:
+        value += " " + std::string(lexer.getIdentifier());
+        lexer.consume(tok_identifier);
+        break;
+      case tok_string_literal:
+        value += " " + std::string(lexer.getStringValue());
+        lexer.consume(tok_string_literal);
+        break;
+      case tok_real_number_literal:
+      case tok_integer_literal:
+        value += " " + std::string(lexer.getStringValue());
+        lexer.consume(lexer.getCurToken());
+        break;
+      }
     }
 
     return std::make_unique<AttributeAST>(std::move(loc), std::move(name),
@@ -352,8 +417,16 @@ private:
   std::vector<std::unique_ptr<AttributeAST>> ParseBlockAttributes() {
     std::vector<std::unique_ptr<AttributeAST>> attrs;
 
-    while (auto attr = ParseBlockAttribute())
+    while (true) {
+      if (lexer.getCurToken() == tok_bracket_open) {
+        skipAttributeBlock(); // { S7_Optimized_Access := 'TRUE' } etc.
+        continue;
+      }
+      auto attr = ParseBlockAttribute();
+      if (!attr)
+        break;
       attrs.push_back(std::move(attr));
+    }
 
     return attrs;
   }
@@ -389,6 +462,20 @@ private:
   std::unique_ptr<DeclarationSubsectionAST> ParseDeclarationSubsection() {
     switch (lexer.getCurToken()) {
     default:
+      // TIA export sugar: braced attribute blocks and VERSION lines between
+      // subsections are skipped.
+      if (lexer.getCurToken() == tok_bracket_open) {
+        skipAttributeBlock();
+        return ParseDeclarationSubsection();
+      }
+      if (lexer.getCurToken() == tok_identifier &&
+          lexer.getIdentifierLower() == "version") {
+        lexer.consume(tok_identifier);
+        if (lexer.getCurToken() == tok_colon)
+          lexer.consume(tok_colon);
+        lexer.getNextToken(); // the version number
+        return ParseDeclarationSubsection();
+      }
       return nullptr;
     case tok_semicolon:
       lexer.consume(lexer.getCurToken());
@@ -516,12 +603,23 @@ private:
   std::unique_ptr<VariableDeclarationSubsectionAST> ParseVariableSubsection() {
     auto loc = lexer.getLastLocation();
     VariableDeclarationSubsectionAST::Var_Kind kind;
+    bool isConstant = false;
     switch (lexer.getCurToken()) {
     default:
       assert(false);
     case tok_var:
       kind = VariableDeclarationSubsectionAST::Var;
       lexer.consume(tok_var);
+      // TIA: VAR RETAIN / VAR NON_RETAIN / VAR CONSTANT modifiers
+      if (lexer.getCurToken() == tok_identifier) {
+        auto mod = lexer.getIdentifierLower();
+        if (mod == "retain" || mod == "non_retain")
+          lexer.consume(tok_identifier);
+        else if (mod == "constant") {
+          lexer.consume(tok_identifier);
+          isConstant = true;
+        }
+      }
       break;
     case tok_var_temp:
       kind = VariableDeclarationSubsectionAST::VarTemp;
@@ -551,8 +649,10 @@ private:
     }
     lexer.consume(tok_end_var);
 
-    return std::make_unique<VariableDeclarationSubsectionAST>(loc, kind,
-                                                              std::move(vars));
+    auto subsection = std::make_unique<VariableDeclarationSubsectionAST>(
+        loc, kind, std::move(vars));
+    subsection->setConstant(isConstant);
+    return subsection;
   }
 
   /// Parse the identifier and system attributes of a Variable Declaration
@@ -568,10 +668,13 @@ private:
                                                "as variable name");
     std::vector<std::unique_ptr<AttributeAST>> attributes;
 
-    if (lexer.getCurToken() == tok_bracket_open) {
-      lexer.consume(tok_bracket_open);
-      // TODO: parse attributes
-      lexer.consume(tok_bracket_close);
+    skipAttributeBlock(); // { S7_SetPoint := 'False'; ... } (ignored)
+    // TIA absolute-address declaration: `name {attrs} AT ADDR_1 : T;`
+    if (lexer.getCurToken() == tok_identifier && lexer.getIdentifierLower() == "at") {
+      lexer.consume(tok_identifier);
+      if (lexer.getCurToken() == tok_identifier ||
+          lexer.getCurToken() == tok_symbol)
+        lexer.consume(lexer.getCurToken()); // the address name
     }
     return std::make_unique<VariableIdentifierAST>(
         std::move(loc), std::move(identifier), std::move(attributes));
@@ -693,8 +796,9 @@ private:
       return ParseArrayDataTypeSpec();
     case tok_struct:
       return ParseStructDataTypeSpec();
-    // user-defined type
+    // user-defined type (TIA exports quote the name)
     case tok_identifier:
+    case tok_symbol:
       return ParseUserDefinedDataType();
     // parameter types
     case tok_timer:
@@ -844,6 +948,7 @@ private:
     auto loc = lexer.getLastLocation();
 
     auto name = ParseIdentifier();
+    skipAttributeBlock(); // TIA { ... } attributes on struct components
 
     if (lexer.getCurToken() != tok_colon)
       return parseError<ComponentDeclarationAST>(
@@ -877,13 +982,17 @@ private:
     lexer.consume(tok_struct);
 
     std::vector<std::unique_ptr<ComponentDeclarationAST>> components;
-    do {
+    while (true) {
+      while (lexer.getCurToken() == tok_semicolon)
+        lexer.consume(tok_semicolon);
+      if (lexer.getCurToken() == tok_end_struct)
+        break;
       auto component = ParseComponentDeclaration();
       if (!component)
         return parseError<StructDataTypeSpecAST>("component declaration",
                                                  "for struct specification");
       components.push_back(std::move(component));
-    } while (lexer.getCurToken() != tok_end_struct);
+    }
     lexer.consume(tok_end_struct);
 
     return std::make_unique<StructDataTypeSpecAST>(std::move(loc),
@@ -929,6 +1038,21 @@ private:
       if (lexer.getCurToken() == tok_semicolon) {
         lexer.consume(tok_semicolon);
         continue;
+      }
+      if (lexer.getCurToken() == tok_bracket_open) {
+        skipAttributeBlock();
+        continue;
+      }
+      // TIA REGION markers are purely documentary
+      if (lexer.getCurToken() == tok_identifier) {
+        auto id = lexer.getIdentifierLower();
+        if (id == "region" || id == "end_region") {
+          lexer.consume(tok_identifier);
+          if (id == "region" && (lexer.getCurToken() == tok_symbol ||
+                                 lexer.getCurToken() == tok_identifier))
+            lexer.consume(lexer.getCurToken()); // region name
+          continue;
+        }
       }
 
       auto instr = ParseInstruction();
@@ -1218,6 +1342,36 @@ private:
         return fail();
       char a = upper[0];
       pos = 1;
+      if (a == 'X') {
+        // relative bit access `var.%Xn` (only valid as the right side of '.')
+        // n is the bit index within the variable (0..31); split into the
+        // byte offset and the bit within that byte.
+        area = "X";
+        width = 1;
+        if (!parseNum(bit) || pos != upper.size() || bit > 31)
+          return fail();
+        int32_t n = bit;
+        bit = n % 8;
+        byte = n / 8;
+        return std::make_unique<DirectVariableAST>(
+            std::move(loc), std::move(text), std::move(area), 0, byte, bit,
+            width);
+      }
+      if (a == 'B' || a == 'W' || a == 'D') {
+        // relative width access `var.%Bn` / `.%Wn` / `.%Dn` (byte offset
+        // within the base variable, only valid as the right side of '.')
+        switch (a) {
+        case 'B': width = 8; break;
+        case 'W': width = 16; break;
+        case 'D': width = 32; break;
+        }
+        area = std::string(1, a);
+        if (!parseNum(byte) || pos != upper.size())
+          return fail();
+        return std::make_unique<DirectVariableAST>(
+            std::move(loc), std::move(text), std::move(area), 0, byte, 0,
+            width);
+      }
       if (a == 'I' || a == 'Q' || a == 'M' || a == 'T' || a == 'C')
         area = std::string(1, a);
       else
@@ -1583,6 +1737,8 @@ private:
     std::optional<std::unique_ptr<CodeSectionAST>> elseBlock;
     if (lexer.getCurToken() == tok_else) {
       lexer.consume(tok_else);
+      if (lexer.getCurToken() == tok_colon) // TIA writes `ELSE:`
+        lexer.consume(tok_colon);
 
       elseBlock = ParseCodeSection();
       if (!elseBlock)
@@ -1613,9 +1769,21 @@ private:
     if (!code)
       return parseError<CaseOfAST>("code section", "for case");
 
+    // Inside CASE...OF a `name:` label is a case label, not a jump label.
+    for (auto &instr : code->getInstructions()) {
+      if (auto *jump = llvm::dyn_cast<JumpLabelAST>(instr.get())) {
+        std::vector<std::unique_ptr<ExpressionAST>> values;
+        values.push_back(std::make_unique<SimpleVariableAST>(
+            jump->loc(), std::string(jump->getLabel()), false));
+        instr = std::make_unique<CaseLabelAST>(jump->loc(), std::move(values));
+      }
+    }
+
     std::optional<std::unique_ptr<CodeSectionAST>> elseBlock;
     if (lexer.getCurToken() == tok_else) {
       lexer.consume(tok_else);
+      if (lexer.getCurToken() == tok_colon) // TIA writes `ELSE:`
+        lexer.consume(tok_colon);
 
       elseBlock = ParseCodeSection();
       if (!elseBlock)
