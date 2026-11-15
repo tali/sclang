@@ -136,11 +136,38 @@ typedef struct SclRtVTable {
                      int64_t expected);
   void (*assert_cmp_r)(uint32_t id, uint8_t op, double actual,
                        double expected);
+  /* Appended for the DB register / address registers / indirect access
+     (v5). May be NULL in older host runtimes; the sim then handles them
+     itself. */
+  void (*set_current_db)(uint32_t db);
+  uint32_t (*current_db)(void);
+  void (*ar_set)(uint8_t ar, uint64_t ptr);
+  uint64_t (*ar_add)(uint8_t ar, uint32_t offBits); // returns new ptr
+  int64_t (*read_indirect)(uint64_t ptr, uint8_t widthBytes);
+  void (*write_indirect)(uint64_t ptr, int64_t value, uint8_t widthBytes);
+  bool (*read_bit_indirect)(uint64_t ptr);
+  void (*write_bit_indirect)(uint64_t ptr, bool value);
 } SclRtVTable;
 
 /// Register a host vtable; all subsequent ABI calls forward through it.
 /// Pass NULL to return to the built-in simulation.
 void scl_rt_register(const SclRtVTable *vtable);
+
+/// DB register and address registers (ABI v5), for AWL AUF/OPN, LAR1/LAR2
+/// and indirect operands `B [AR1, P#…]`. A packed pointer is
+/// area<<56 | db<<40 | byte<<16 | bit<<8 | widthBits. A DB operand with
+/// db == 0 refers to the current DB (set by AUF/OPN DB n).
+void scl_rt_set_current_db(uint32_t db);
+uint32_t scl_rt_current_db(void);
+void scl_rt_ar_set(uint8_t ar, uint64_t ptr);
+uint64_t scl_rt_ar_get(uint8_t ar);
+/// Pointer = AR<ar> + offBits (added to the byte/bit field), repacked.
+uint64_t scl_rt_ar_add(uint8_t ar, uint32_t offBits);
+/// Indirect access through a packed pointer.
+int64_t scl_rt_read_indirect(uint64_t ptr, uint8_t widthBytes);
+void scl_rt_write_indirect(uint64_t ptr, int64_t value, uint8_t widthBytes);
+bool scl_rt_read_bit_indirect(uint64_t ptr);
+void scl_rt_write_bit_indirect(uint64_t ptr, bool value);
 
 /// Test oracles (ABI v4): awlsim-style __ASSERT checks lowered from the AWL
 /// frontend. op: 0 ==, 1 !=, 2 >, 3 <, 4 >=, 5 <=. The sim counts failures

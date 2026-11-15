@@ -286,4 +286,70 @@ def BeOp : AwlOp<"be", [Terminator]> {
   let assemblyFormat = "attr-dict";
 }
 
+// MARK: DB register / address registers / indirect access (ABI v5)
+
+// AUF/OPN DB n: set the current DB register (DB 0 operands then refer to it).
+def SetDbOp : AwlOp<"set_db"> {
+  let summary = "AUF/OPN DB n: set the current DB register";
+  let arguments = (ins I32Attr:$db);
+  let assemblyFormat = "attr-dict $db";
+}
+
+// LAR1/LAR2 <operand>: load a packed pointer (i64, as produced by awl.direct)
+// into address register 1 or 2.
+def ArSetOp : AwlOp<"ar_set"> {
+  let summary = "LAR1/LAR2/TAR1: set address register from a packed pointer";
+  // AnyType: a !scl.direct operand (LAR1 DB1.DBW 4) converts to the packed
+  // i64 during lowering; an integer ACCU value (TAR1) is extended to i64.
+  let arguments = (ins I32Attr:$ar, AnyType:$ptr);
+  let assemblyFormat = "attr-dict $ar `,` $ptr `:` type($ptr)";
+}
+
+// Read address register ar (awlsim __AR n assert pseudo-operand).
+def ArGetOp : AwlOp<"ar_get", [Pure]> {
+  let summary = "read address register ar as i64";
+  let arguments = (ins I32Attr:$ar);
+  let results = (outs I64:$result);
+  let assemblyFormat = "attr-dict $ar `->` type($result)";
+}
+
+// B/W/D [AR1, P#x.y] etc.: packed pointer = AR<ar> + offBits (bit offset),
+// returned as i64 (also stored back into the AR).
+def IndirectOp : AwlOp<"indirect", [Pure]> {
+  let summary = "[AR1, P#x.y]: address register plus bit offset";
+  let arguments = (ins I32Attr:$ar, I32Attr:$offBits);
+  let results = (outs I64:$result);
+  let assemblyFormat = "attr-dict $ar `,` $offBits `->` type($result)";
+}
+
+// L [AR1, P#x.y] / LC: indirect load of widthBits bits through a packed ptr.
+def LoadIndirectOp : AwlOp<"load_indirect"> {
+  let summary = "L/LC [AR1, ...]: indirect load through a packed pointer";
+  let arguments = (ins I64:$ptr, I32Attr:$widthBits);
+  let results = (outs I64:$result);
+  let assemblyFormat = "attr-dict $ptr `,` $widthBits `->` type($result)";
+}
+
+// T [AR1, P#x.y]: indirect store of widthBits bits through a packed pointer.
+def StoreIndirectOp : AwlOp<"store_indirect"> {
+  let summary = "T [AR1, ...]: indirect store through a packed pointer";
+  let arguments = (ins I64:$value, I64:$ptr, I32Attr:$widthBits);
+  let assemblyFormat = "attr-dict $value `,` $ptr `,` $widthBits `:` type($value) `,` type($ptr)";
+}
+
+// U/O [AR1, P#x.y]: indirect bit load through a packed pointer.
+def LoadBitIndirectOp : AwlOp<"load_bit_indirect", [Pure]> {
+  let summary = "U/O [AR1, ...]: indirect bit load through a packed pointer";
+  let arguments = (ins I64:$ptr);
+  let results = (outs Awl_Bool:$result);
+  let assemblyFormat = "attr-dict $ptr `:` type($ptr) `->` type($result)";
+}
+
+// S/R [AR1, P#x.y]: indirect bit store through a packed pointer.
+def WriteBitIndirectOp : AwlOp<"write_bit_indirect"> {
+  let summary = "S/R [AR1, ...]: indirect bit store through a packed pointer";
+  let arguments = (ins Awl_Bool:$value, I64:$ptr);
+  let assemblyFormat = "attr-dict $value `,` $ptr `:` type($value) `,` type($ptr)";
+}
+
 #endif // AWL_OPS

@@ -2606,6 +2606,177 @@ struct AwlCounterOpLowering : public OpConversionPattern<awl::CounterOp> {
   }
 };
 
+// MARK: ABI v5 lowerings (DB register / address registers / indirect access)
+
+// AUF/OPN DB n -> @scl_rt_set_current_db(db: i32)
+struct AwlSetDbOpLowering : public OpConversionPattern<awl::SetDbOp> {
+  using OpConversionPattern<awl::SetDbOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::SetDbOp op, awl::SetDbOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i32 = rewriter.getI32Type();
+    Value dbC = rewriter.create<arith::ConstantOp>(
+        loc, i32, rewriter.getI32IntegerAttr(op.getDb()));
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_set_current_db",
+                                rewriter.getFunctionType({i32}, {}));
+    rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{dbC});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// LAR1/LAR2 <packed ptr> -> @scl_rt_ar_set(ar: i8, ptr: i64)
+struct AwlArSetOpLowering : public OpConversionPattern<awl::ArSetOp> {
+  using OpConversionPattern<awl::ArSetOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::ArSetOp op, awl::ArSetOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i8 = rewriter.getI8Type();
+    auto i64 = rewriter.getI64Type();
+    Value arC = rewriter.create<arith::ConstantOp>(
+        loc, i8, rewriter.getI8IntegerAttr(op.getAr()));
+    // a !scl.direct operand arrives already converted to the packed i64
+    Value ptr = adaptor.getPtr();
+    if (ptr.getType() != i64)
+      ptr = convertScalarTo(rewriter, loc, ptr, i64);
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_ar_set",
+                                rewriter.getFunctionType({i8, i64}, {}));
+    rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{arC, ptr});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// read AR -> @scl_rt_ar_get(ar: i8) -> i64
+struct AwlArGetOpLowering : public OpConversionPattern<awl::ArGetOp> {
+  using OpConversionPattern<awl::ArGetOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::ArGetOp op, awl::ArGetOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i8 = rewriter.getI8Type();
+    Value arC = rewriter.create<arith::ConstantOp>(
+        loc, i8, rewriter.getI8IntegerAttr(op.getAr()));
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_ar_get",
+                                rewriter.getFunctionType({i8}, {rewriter.getI64Type()}));
+    rewriter.replaceOpWithNewOp<func::CallOp>(
+        op, fn, TypeRange{rewriter.getI64Type()}, ValueRange{arC});
+    return success();
+  }
+};
+
+// [AR1, P#x.y] -> @scl_rt_ar_add(ar: i8, offBits: i32) -> i64 packed ptr
+struct AwlIndirectOpLowering : public OpConversionPattern<awl::IndirectOp> {
+  using OpConversionPattern<awl::IndirectOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::IndirectOp op, awl::IndirectOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i8 = rewriter.getI8Type();
+    auto i32 = rewriter.getI32Type();
+    Value arC = rewriter.create<arith::ConstantOp>(
+        loc, i8, rewriter.getI8IntegerAttr(op.getAr()));
+    Value offC = rewriter.create<arith::ConstantOp>(
+        loc, i32, rewriter.getI32IntegerAttr(op.getOffBits()));
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_ar_add",
+                                rewriter.getFunctionType({i8, i32}, {rewriter.getI64Type()}));
+    rewriter.replaceOpWithNewOp<func::CallOp>(
+        op, fn, TypeRange{rewriter.getI64Type()}, ValueRange{arC, offC});
+    return success();
+  }
+};
+
+// L [AR1, ...] -> @scl_rt_read_indirect(ptr: i64, widthBytes: i8) -> i64
+struct AwlLoadIndirectOpLowering
+    : public OpConversionPattern<awl::LoadIndirectOp> {
+  using OpConversionPattern<awl::LoadIndirectOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::LoadIndirectOp op,
+                  awl::LoadIndirectOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i8 = rewriter.getI8Type();
+    Value widthC = rewriter.create<arith::ConstantOp>(
+        loc, i8, rewriter.getI8IntegerAttr(op.getWidthBits() / 8));
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_read_indirect",
+                                rewriter.getFunctionType({rewriter.getI64Type(), i8},
+                                                         {rewriter.getI64Type()}));
+    rewriter.replaceOpWithNewOp<func::CallOp>(
+        op, fn, TypeRange{rewriter.getI64Type()},
+        ValueRange{adaptor.getPtr(), widthC});
+    return success();
+  }
+};
+
+// T [AR1, ...] -> @scl_rt_write_indirect(ptr: i64, value: i64, widthBytes: i8)
+struct AwlStoreIndirectOpLowering
+    : public OpConversionPattern<awl::StoreIndirectOp> {
+  using OpConversionPattern<awl::StoreIndirectOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::StoreIndirectOp op,
+                  awl::StoreIndirectOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i8 = rewriter.getI8Type();
+    auto i64 = rewriter.getI64Type();
+    Value v = convertScalarTo(rewriter, loc, adaptor.getValue(), i64);
+    Value widthC = rewriter.create<arith::ConstantOp>(
+        loc, i8, rewriter.getI8IntegerAttr(op.getWidthBits() / 8));
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_write_indirect",
+                                rewriter.getFunctionType({i64, i64, i8}, {}));
+    rewriter.create<func::CallOp>(loc, fn, TypeRange{},
+                                  ValueRange{adaptor.getPtr(), v, widthC});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// U/O [AR1, ...] -> @scl_rt_read_bit_indirect(ptr: i64) -> i1
+struct AwlLoadBitIndirectOpLowering
+    : public OpConversionPattern<awl::LoadBitIndirectOp> {
+  using OpConversionPattern<awl::LoadBitIndirectOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::LoadBitIndirectOp op,
+                  awl::LoadBitIndirectOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_read_bit_indirect",
+                                rewriter.getFunctionType({rewriter.getI64Type()},
+                                                         {rewriter.getI1Type()}));
+    rewriter.replaceOpWithNewOp<func::CallOp>(
+        op, fn, TypeRange{rewriter.getI1Type()}, ValueRange{adaptor.getPtr()});
+    return success();
+  }
+};
+
+// S/R [AR1, ...] -> @scl_rt_write_bit_indirect(ptr: i64, value: i1)
+struct AwlWriteBitIndirectOpLowering
+    : public OpConversionPattern<awl::WriteBitIndirectOp> {
+  using OpConversionPattern<awl::WriteBitIndirectOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::WriteBitIndirectOp op,
+                  awl::WriteBitIndirectOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_write_bit_indirect",
+                                rewriter.getFunctionType({rewriter.getI64Type(),
+                                                          rewriter.getI1Type()},
+                                                         {}));
+    rewriter.create<func::CallOp>(op.getLoc(), fn, TypeRange{},
+                                  ValueRange{adaptor.getPtr(), adaptor.getValue()});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 /// Lower `awl.block` to `func.func`: split the flat block at labels/jumps,
 /// wire cf branches, `awl.be` -> `func.return`. The remaining awl ops are
 /// converted by their own patterns afterwards (conversion is pre-order).
@@ -2819,7 +2990,11 @@ void SclToStdLoweringPass::runOnOperation() {
       AwlConstOpLowering, AwlCounterOpLowering, AwlDirectOpLowering,
       AwlDivLowering, AwlLoadOpLowering, AwlMulLowering, AwlNegOpLowering,
       AwlNopOpLowering, AwlNotOpLowering, AwlOrLowering,
-      AwlRealMathOpLowering, AwlShiftOpLowering,
+      AwlArGetOpLowering, AwlArSetOpLowering, AwlIndirectOpLowering,
+      AwlLoadBitIndirectOpLowering,
+      AwlLoadIndirectOpLowering, AwlRealMathOpLowering, AwlSetDbOpLowering,
+      AwlShiftOpLowering, AwlStoreIndirectOpLowering,
+      AwlWriteBitIndirectOpLowering,
       AwlRloLowering<awl::RloAndOp, false>,
       AwlRloLowering<awl::RloOrOp, true>, AwlSetResetLowering<awl::ResetOp, false>,
       AwlSetResetLowering<awl::SetOp, true>, AwlStoreOpLowering, AwlSubLowering,

@@ -322,6 +322,16 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_timer_fb", (void *)&scl_rt_timer_fb);
     add("scl_rt_assert_cmp", (void *)&scl_rt_assert_cmp);
     add("scl_rt_assert_cmp_r", (void *)&scl_rt_assert_cmp_r);
+    // ABI v5: DB register / address registers / indirect access
+    add("scl_rt_set_current_db", (void *)&scl_rt_set_current_db);
+    add("scl_rt_current_db", (void *)&scl_rt_current_db);
+    add("scl_rt_ar_set", (void *)&scl_rt_ar_set);
+    add("scl_rt_ar_get", (void *)&scl_rt_ar_get);
+    add("scl_rt_ar_add", (void *)&scl_rt_ar_add);
+    add("scl_rt_read_indirect", (void *)&scl_rt_read_indirect);
+    add("scl_rt_write_indirect", (void *)&scl_rt_write_indirect);
+    add("scl_rt_read_bit_indirect", (void *)&scl_rt_read_bit_indirect);
+    add("scl_rt_write_bit_indirect", (void *)&scl_rt_write_bit_indirect);
     // memref.copy lowers to a call to the MLIR C runner helper.
     add("memrefCopy", (void *)&memrefCopy);
     return map;
@@ -428,6 +438,14 @@ int runJit(mlir::ModuleOp module) {
   if (!configureRuntimeBinding())
     return -1;
   bindRuntimeSymbols(*engine);
+
+  // Run the DB initialization block once (DATA_BLOCK initial values from
+  // AWL, if the frontend emitted an awl.block "__scl_db_init").
+  if (auto initFn =
+          engine->lookupPacked("_mlir_ciface___scl_db_init")) {
+    if (auto err = engine->invokePacked("_mlir_ciface___scl_db_init", {}))
+      llvm::errs() << "JIT db-init invocation failed\n" << err << "\n";
+  }
 
   // Invoke the JIT-compiled function once per scan cycle, advancing the
   // virtual clock between scans (drives %T timers / %C counters).

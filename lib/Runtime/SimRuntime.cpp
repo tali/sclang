@@ -52,6 +52,10 @@ struct SimState {
   };
   std::map<uint64_t, TimerFbState> timerFbs;
   uint64_t assertFailures = 0; // failed __ASSERT oracle checks
+  // ABI v5: DB register (AUF/OPN) and address registers AR1/AR2 holding
+  // packed pointers (area<<56|db<<40|byte<<16|bit<<8|widthBits).
+  uint32_t currentDb = 0; // 0 = none (DB 0 operands stay literal)
+  uint64_t ars[2] = {0, 0};
 };
 
 /// Decode an S5TIME-encoded 16-bit value to milliseconds.
@@ -140,6 +144,8 @@ int64_t scl_rt_read(uint8_t area, uint32_t db, uint32_t byteOff,
     fprintf(stderr, "scl_rt_read: invalid width %u\n", widthBytes);
     abort();
   }
+  if (area == SCL_RT_AREA_DB && db == 0 && state().currentDb != 0)
+    db = state().currentDb; // DB 0 operand = current DB (AUF/OPN)
   // Timers/counters: the value is computed from the sim state (remaining
   // time in ms / counter value), not stored in the area buffer.
   if (area == SCL_RT_AREA_T && widthBytes > 1) {
@@ -177,6 +183,8 @@ void scl_rt_write(uint8_t area, uint32_t db, uint32_t byteOff,
     fprintf(stderr, "scl_rt_write: invalid width %u\n", widthBytes);
     abort();
   }
+  if (area == SCL_RT_AREA_DB && db == 0 && state().currentDb != 0)
+    db = state().currentDb; // DB 0 operand = current DB (AUF/OPN)
   // Writing a counter value (e.g. SCL `%Cn := v`) sets the count; writing a
   // timer value (e.g. `%TWn := v`) sets the preset (TV).
   if (area == SCL_RT_AREA_C && widthBytes > 1) {
@@ -201,6 +209,8 @@ bool scl_rt_read_bit(uint8_t area, uint32_t db, uint32_t byteOff,
     fprintf(stderr, "scl_rt_read_bit: invalid bit %u\n", bit);
     abort();
   }
+  if (area == SCL_RT_AREA_DB && db == 0 && state().currentDb != 0)
+    db = state().currentDb; // DB 0 operand = current DB (AUF/OPN)
   // Timer/counter status bit (AWL `U T n` / `U Z n`).
   if (bit == 0 && area == SCL_RT_AREA_T)
     return timerStatus(state().timers[byteOff], state().clockMs);
@@ -220,6 +230,8 @@ void scl_rt_write_bit(uint8_t area, uint32_t db, uint32_t byteOff,
     fprintf(stderr, "scl_rt_write_bit: invalid bit %u\n", bit);
     abort();
   }
+  if (area == SCL_RT_AREA_DB && db == 0 && state().currentDb != 0)
+    db = state().currentDb; // DB 0 operand = current DB (AUF/OPN)
   auto &buf = bufferFor(area, db, byteOff, 1);
   if (value)
     buf[byteOff] |= (uint8_t)(1u << bit);
@@ -398,6 +410,8 @@ void scl_rt_sim_reset(void) {
     sz = 0;
   s.dbs.clear();
   s.dbSize.clear();
+  s.currentDb = 0;
+  s.ars[0] = s.ars[1] = 0;
   s.clockMs = 0;
   for (auto &t : s.timers)
     t = TimerState{};
@@ -406,6 +420,116 @@ void scl_rt_sim_reset(void) {
 }
 
 uint64_t scl_rt_sim_clock_ms(void) { return state().clockMs; }
+
+// MARK: DB register / address registers / indirect access (ABI v5)
+
+static uint8_t ptrArea(uint64_t p) { return (uint8_t)(p >> 56); }
+static uint32_t ptrDb(uint64_t p) { return (uint32_t)((p >> 40) & 0xFFFF); }
+static uint32_t ptrByte(uint64_t p) { return (uint32_t)((p >> 16) & 0xFFFF); }
+static uint8_t ptrBit(uint64_t p) { return (uint8_t)((p >> 8) & 0xFF); }
+static uint64_t packPtr(uint8_t area, uint32_t db, uint32_t byte, uint8_t bit,
+                        uint8_t widthBits) {
+  return ((uint64_t)area << 56) | ((uint64_t)db << 40) |
+         ((uint64_t)byte << 16) | ((uint64_t)bit << 8) | widthBits;
+}
+
+void scl_rt_set_current_db(uint32_t db) {
+  auto &s = state();
+  if (s.vtable && s.vtable->set_current_db) {
+    s.vtable->set_current_db(db);
+    return;
+  }
+  s.currentDb = db;
+}
+
+uint32_t scl_rt_current_db(void) {
+  auto &s = state();
+  if (s.vtable && s.vtable->current_db)
+    return s.vtable->current_db();
+  return s.currentDb;
+}
+
+void scl_rt_ar_set(uint8_t ar, uint64_t ptr) {
+  auto &s = state();
+  if (s.vtable && s.vtable->ar_set) {
+    s.vtable->ar_set(ar, ptr);
+    return;
+  }
+  if (ar >= 1 && ar <= 2)
+    s.ars[ar - 1] = ptr;
+}
+
+uint64_t scl_rt_ar_get(uint8_t ar) {
+  auto &s = state();
+  if (ar >= 1 && ar <= 2)
+    return s.ars[ar - 1];
+  return 0;
+}
+
+uint64_t scl_rt_ar_add(uint8_t ar, uint32_t offBits) {
+  auto &s = state();
+  if (s.vtable && s.vtable->ar_add)
+    return s.vtable->ar_add(ar, offBits);
+  uint64_t p = scl_rt_ar_get(ar);
+  // raw P#x.y pointer (area byte 0, value = byte*8+bit): plain add
+  if (ptrArea(p) == 0) {
+    uint64_t np = p + offBits;
+    if (ar >= 1 && ar <= 2)
+      s.ars[ar - 1] = np;
+    return np;
+  }
+  uint32_t bit = ptrBit(p) + offBits;
+  uint32_t byte = ptrByte(p) + bit / 8;
+  bit %= 8;
+  uint64_t np = packPtr(ptrArea(p), ptrDb(p), byte, (uint8_t)bit,
+                        (uint8_t)(p & 0xFF));
+  if (ar >= 1 && ar <= 2)
+    s.ars[ar - 1] = np;
+  return np;
+}
+
+// A raw pointer (area byte 0) addresses the marker area: value = byte*8+bit.
+static uint64_t rawToPacked(uint64_t p) {
+  if (ptrArea(p) != 0)
+    return p;
+  return packPtr(SCL_RT_AREA_M, 0, (uint32_t)(p / 8), (uint8_t)(p % 8), 0);
+}
+
+int64_t scl_rt_read_indirect(uint64_t ptr, uint8_t widthBytes) {
+  auto &s = state();
+  if (s.vtable && s.vtable->read_indirect)
+    return s.vtable->read_indirect(ptr, widthBytes);
+  uint64_t p = rawToPacked(ptr);
+  return scl_rt_read(ptrArea(p), ptrDb(p), ptrByte(p), widthBytes);
+}
+
+void scl_rt_write_indirect(uint64_t ptr, int64_t value, uint8_t widthBytes) {
+  auto &s = state();
+  if (s.vtable && s.vtable->write_indirect) {
+    s.vtable->write_indirect(ptr, value, widthBytes);
+    return;
+  }
+  uint64_t p = rawToPacked(ptr);
+  scl_rt_write(ptrArea(p), ptrDb(p), ptrByte(p), widthBytes, (uint64_t)value);
+}
+
+bool scl_rt_read_bit_indirect(uint64_t ptr) {
+  auto &s = state();
+  if (s.vtable && s.vtable->read_bit_indirect)
+    return s.vtable->read_bit_indirect(ptr);
+  uint64_t p = rawToPacked(ptr);
+  return scl_rt_read_bit(ptrArea(p), ptrDb(p), ptrByte(p), ptrBit(p));
+}
+
+void scl_rt_write_bit_indirect(uint64_t ptr, bool value) {
+  auto &s = state();
+  if (s.vtable && s.vtable->write_bit_indirect) {
+    s.vtable->write_bit_indirect(ptr, value);
+    return;
+  }
+  uint64_t p = rawToPacked(ptr);
+  scl_rt_write_bit(ptrArea(p), ptrDb(p), ptrByte(p), ptrBit(p), value);
+}
 
 // MARK: test oracles (ABI v4)
 

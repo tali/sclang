@@ -222,7 +222,8 @@ private:
       // __ASSERT... is kept as an ident — the parser lowers it to a runtime
       // oracle check (awl.assert), see parseAssert.
       if (t.ident.starts_with("__") && !t.ident.starts_with("__ASSERT") &&
-          t.ident != "__ACCU" && t.ident != "__STW") {
+          t.ident != "__ACCU" && t.ident != "__STW" && t.ident != "__AR" &&
+          t.ident != "__DBR") {
         while (!cur.empty() && cur.front() != '\n')
           cur = cur.drop_front();
         return scan();
@@ -634,6 +635,22 @@ public:
                                   attrs);
       builder.create<awl::BeOp>(wrapLoc);
     }
+    // Same for the DATA_BLOCK init block, if one was emitted.
+    if (dbInitBlock) {
+      auto wrapLoc = loc();
+      builder.setInsertionPointToEnd(module.getBody());
+      auto wrap = builder.create<awl::BlockOp>(
+          wrapLoc, builder.getStringAttr("_mlir_ciface___scl_db_init"));
+      auto *entry = builder.createBlock(&wrap.getBody());
+      builder.setInsertionPointToStart(entry);
+      SmallVector<mlir::NamedAttribute, 1> attrs;
+      attrs.push_back(builder.getNamedAttr(
+          "callee", mlir::FlatSymbolRefAttr::get(builder.getContext(),
+                                                 "__scl_db_init")));
+      builder.create<awl::CallOp>(wrapLoc, mlir::TypeRange{}, mlir::ValueRange{},
+                                  attrs);
+      builder.create<awl::BeOp>(wrapLoc);
+    }
     if (failed(mlir::verify(module))) {
       module.emitError("module verification error");
       return nullptr;
@@ -658,6 +675,14 @@ private:
   };
   llvm::SmallVector<Bracket, 4> brackets;
   bool sawOB1 = false;
+  // awl.block "__scl_db_init" collecting DATA_BLOCK initial values, created
+  // lazily; the JIT driver invokes it once before the first scan cycle.
+  awl::BlockOp dbInitBlock = nullptr;
+  // width (bits) of the most recent indirect [ARn, P#x.y] operand
+  int32_t lastIndirectWidth = 0;
+  // DB number of the DATA_BLOCK currently being parsed (-1 = none): bare
+  // DBX/DBB/DBW/DBD operands in its init section address this DB
+  int32_t dbOverride = -1;
 
   mlir::Location loc() {
     return mlir::FileLineColLoc::get(builder.getStringAttr(file), lexer.curLine(),
@@ -715,7 +740,7 @@ private:
         continue;
       }
       if (w == "DATA_BLOCK") {
-        if (!skipDataBlock())
+        if (!parseDataBlock())
           return false;
         continue;
       }
@@ -788,19 +813,34 @@ private:
     return true;
   }
 
-  /// Skip a DATA_BLOCK DB n [STRUCT ... END_STRUCT] [BEGIN ... END_DATA_BLOCK]
-  /// header; the declaration/initializer contents are not modelled (DB
-  /// storage is runtime memory, ADR 002).
-  bool skipDataBlock() {
+  /// Parse a DATA_BLOCK DB n [STRUCT ... END_STRUCT] [BEGIN ... END_DATA_BLOCK].
+  /// The STRUCT declaration only sizes the DB (runtime memory, ADR 002); the
+  /// BEGIN section holds initial values (`DBn.DBW 2 := 16#00FF`), which are
+  /// emitted as stores into an awl.block "__scl_db_init" that the JIT driver
+  /// runs once before the first scan.
+  bool parseDataBlock() {
     lexer.next(); // DATA_BLOCK
-    if (lexer.getCurToken() == Tok::ident && upperIdent() == "DB")
+    int32_t db = 0;
+    if (lexer.getCurToken() == Tok::ident && upperIdent() == "DB") {
       lexer.next();
-    if (lexer.getCurToken() == Tok::integer)
+      if (lexer.getCurToken() == Tok::integer) {
+        db = (int32_t)lexer.getInteger();
+        lexer.next();
+      }
+    } else if (lexer.getCurToken() == Tok::integer) {
+      db = (int32_t)lexer.getInteger();
       lexer.next();
+    }
     while (lexer.getCurToken() != Tok::eof) {
-      if (lexer.getCurToken() == Tok::ident && upperIdent() == "END_DATA_BLOCK") {
+      if (lexer.getCurToken() == Tok::ident &&
+          upperIdent() == "END_DATA_BLOCK") {
         lexer.next();
         return true;
+      }
+      if (lexer.getCurToken() == Tok::ident && upperIdent() == "BEGIN") {
+        lexer.next();
+        // the init section consumes the closing END_DATA_BLOCK
+        return parseDbInitSection(db);
       }
       if (lexer.getCurToken() == Tok::ident && isHeaderKw(upperIdent())) {
         lexer.nextLine();
@@ -809,6 +849,116 @@ private:
       lexer.next();
     }
     return error("unterminated DATA_BLOCK");
+  }
+
+  /// Parse the BEGIN ... END_DATA_BLOCK initial-value section of a DATA_BLOCK
+  /// into the __scl_db_init block (created lazily at module level).
+  bool parseDbInitSection(int32_t db) {
+    if (!dbInitBlock) {
+      builder.setInsertionPointToEnd(module.getBody());
+      dbInitBlock = builder.create<awl::BlockOp>(
+          loc(), builder.getStringAttr("__scl_db_init"));
+      builder.createBlock(&dbInitBlock.getBody());
+    }
+    OpBuilder::InsertionGuard guard(builder);
+    Block *entry = &dbInitBlock.getBody().front();
+    // a previous DATA_BLOCK already added the terminator: insert before it
+    bool hadTerm = !entry->empty() && isa<awl::BeOp>(entry->back());
+    if (hadTerm)
+      builder.setInsertionPoint(&entry->back());
+    else
+      builder.setInsertionPointToEnd(entry);
+    int32_t savedOverride = dbOverride;
+    dbOverride = db;
+    while (lexer.getCurToken() != Tok::eof) {
+      if (lexer.getCurToken() == Tok::ident &&
+          upperIdent() == "END_DATA_BLOCK") {
+        lexer.next();
+        break;
+      }
+      if (lexer.getCurToken() == Tok::semi) {
+        lexer.next();
+        continue;
+      }
+      if (!parseDbInitLine())
+        return false;
+    }
+    dbOverride = savedOverride;
+    if (!hadTerm) {
+      builder.setInsertionPointToEnd(entry);
+      builder.create<awl::BeOp>(loc());
+    }
+    return true;
+  }
+
+  /// One init assignment: <operand> := <value>   (e.g. DB1.DBX 0.0 := TRUE,
+  /// DB1.DBW 2 := 16#00FF, DBW 4 := -1). Unrecognized lines are skipped.
+  bool parseDbInitLine() {
+    if (lexer.getCurToken() != Tok::ident || lexer.curQuoted()) {
+      lexer.nextLine();
+      return true;
+    }
+    // only real operands are handled here; symbolic member names
+    // (TIMER_VAR, TEST1_A, ...) are approximated as DB word 0 via the
+    // DBn branch of parseOperand — detect those by shape and skip the line
+    {
+      std::string w0 = upperIdent();
+      bool looksOperand =
+          w0.rfind("DB", 0) == 0 ||
+          (isAreaLetter(w0[0]) &&
+           (w0.size() == 1 || isdigit((unsigned char)w0[1]) ||
+            w0[1] == 'B' || w0[1] == 'W' || w0[1] == 'D'));
+      if (!looksOperand) {
+        lexer.nextLine();
+        return true;
+      }
+    }
+    mlir::Value addr = parseOperand(false);
+    if (!addr) {
+      lexer.nextLine();
+      return true;
+    }
+    // :=
+    if (lexer.getCurToken() == Tok::colon)
+      lexer.next();
+    if (lexer.getCurToken() != Tok::assign) {
+      lexer.nextLine();
+      return true;
+    }
+    lexer.next(); // =
+    mlir::Value val;
+    if (lexer.getCurToken() == Tok::ident) {
+      std::string w = upperIdent();
+      if (w == "TRUE" || w == "FALSE") {
+        auto i1 = builder.getI1Type();
+        val = builder.create<awl::ConstOp>(
+            loc(), i1, builder.getIntegerAttr(i1, w == "TRUE" ? 1 : 0));
+        lexer.next();
+      } else {
+        lexer.nextLine();
+        return true;
+      }
+    } else if (lexer.getCurToken() == Tok::integer ||
+               lexer.getCurToken() == Tok::real ||
+               lexer.getCurToken() == Tok::minus) {
+      val = parseConst();
+      if (!val)
+        return false;
+    } else {
+      lexer.nextLine();
+      return true;
+    }
+    if (auto dt = mlir::dyn_cast<mlir::scl::DirectType>(addr.getType())) {
+      if (dt.getWidth() == 1)
+        val = castTo(val, builder.getI1Type());
+      builder.create<awl::StoreOp>(loc(), val, addr);
+    } else if (addr.getType().isInteger(64)) {
+      builder.create<awl::StoreIndirectOp>(
+          loc(), castTo(val, builder.getI64Type()), addr,
+          builder.getI32IntegerAttr(lastIndirectWidth));
+    }
+    // assignments are self-delimiting; the next token starts the next line
+    return true;
   }
 
   // block := ("OB"|"FB"|"FC") number instruction* "BE"
@@ -1127,13 +1277,26 @@ private:
       rloActive = true;
       return true;
     }
-    if (m == "AUF") { // AUF DB n / AUF DI n: open data block (default DB for
-      // subsequent DB operands); accepted, not modelled (runtime memory)
-      if (lexer.getCurToken() == Tok::ident)
-        lexer.next(); // DB or DI
-      if (lexer.getCurToken() == Tok::integer)
+    if (m == "AUF") { // AUF DB n / AUF DI n: open data block -> set the
+      // current DB register (DB 0 operands then address it, ABI v5)
+      if (lexer.getCurToken() == Tok::ident) {
+        std::string w = upperIdent();
+        if (w == "DB" || w == "DI")
+          lexer.next();
+        else if ((w.rfind("DB", 0) == 0 || w.rfind("DI", 0) == 0) &&
+                 w.size() > 2) {
+          // attached number: AUF DB1 / OPN DI12
+          builder.create<awl::SetDbOp>(
+              loc(), builder.getI32IntegerAttr(atoi(w.c_str() + 2)));
+          lexer.next();
+          return true;
+        }
+      }
+      if (lexer.getCurToken() == Tok::integer) {
+        int64_t db = lexer.getInteger();
         lexer.next();
-      if (lexer.getCurToken() == Tok::lbracket) { // AUF DB [LW 0]
+        builder.create<awl::SetDbOp>(loc(), builder.getI32IntegerAttr((int32_t)db));
+      } else if (lexer.getCurToken() == Tok::lbracket) { // AUF DB [LW 0]
         lexer.next();
         while (lexer.getCurToken() != Tok::rbracket &&
                lexer.getCurToken() != Tok::eof)
@@ -1143,21 +1306,84 @@ private:
       }
       return true;
     }
-    if (m.rfind("LAR", 0) == 0 || m.rfind("+AR", 0) == 0 ||
-        m.rfind("TAR", 0) == 0) {
-      // address register ops (LAR1 P#..., TAR1 LD 0, ...): pointer
-      // arithmetic is not modelled; skip an optional pointer/local operand
-      // (an ident here is only an operand if it is a local-data name)
-      if (lexer.getCurToken() == Tok::integer) {
+    if (m.rfind("LAR", 0) == 0 || m.rfind("+AR", 0) == 0) {
+      // LAR1/LAR2 <operand>: load a pointer into address register 1/2.
+      // P#x.y literal -> raw byte*8+bit value; a direct operand (DB1.DBW 4,
+      // M 10.0) -> packed pointer; no operand -> ACCU1 (as TARn).
+      int ar = (m.size() >= 4 && isdigit(m[3])) ? m[3] - '0'
+               : (m == "+AR2")                  ? 2
+                                                : 1;
+      mlir::Value ptr;
+      if (lexer.getCurToken() == Tok::integer ||
+          lexer.getCurToken() == Tok::real) {
+        int64_t off = lexer.getInteger(); // P#x.y lexes as byte*8+bit
         lexer.next();
-      } else if (lexer.getCurToken() == Tok::ident) {
+        ptr = constInt(builder.getI64Type(), off);
+      } else if (lexer.getCurToken() == Tok::ident && !lexer.curQuoted()) {
         std::string w = upperIdent();
-        if (w == "LD" || w == "LW" || (w.size() > 1 && w[0] == 'L')) {
+        bool looksOperand =
+            w.rfind("DB", 0) == 0 ||
+            (isAreaLetter(w[0]) &&
+             (w.size() == 1 || isdigit((unsigned char)w[1]) ||
+              w[1] == 'B' || w[1] == 'W' || w[1] == 'D'));
+        if (!looksOperand)
+          ptr = nullptr; // bare LARn: take ACCU1 below
+        else if (w.size() <= 2 && w[0] == 'L') { // LD/LW/LB: local data
           lexer.next();
-          if (lexer.getCurToken() == Tok::integer)
+          int32_t byte = 0;
+          if (lexer.getCurToken() == Tok::integer) {
+            byte = (int32_t)lexer.getInteger();
             lexer.next();
+          }
+          ptr = builder.create<awl::DirectOp>(
+              loc(), mlir::scl::DirectArea::Marker, 0, byte, 0, 16);
+        } else {
+          ptr = parseOperand(false); // DB1.DBW 4, M 10.0, ...
+          if (!ptr)
+            return true;
         }
       }
+      if (!ptr)
+        ptr = castTo(popAcc(), builder.getI64Type()); // bare LARn = TARn
+      builder.create<awl::ArSetOp>(loc(), builder.getI32IntegerAttr(ar), ptr);
+      return true;
+    }
+    if (m.rfind("TAR", 0) == 0) {
+      // TAR1/TAR2 [operand]: AR := pointer operand, or ACCU1 if none
+      int ar = (m.size() >= 4 && isdigit(m[3])) ? m[3] - '0' : 1;
+      mlir::Value ptr;
+      if (lexer.getCurToken() == Tok::integer ||
+          lexer.getCurToken() == Tok::real) {
+        int64_t off = lexer.getInteger(); // P#x.y
+        lexer.next();
+        ptr = constInt(builder.getI64Type(), off);
+      } else if (lexer.getCurToken() == Tok::ident && !lexer.curQuoted()) {
+        std::string w = upperIdent();
+        bool looksOperand =
+            w.rfind("DB", 0) == 0 ||
+            (isAreaLetter(w[0]) &&
+             (w.size() == 1 || isdigit((unsigned char)w[1]) ||
+              w[1] == 'B' || w[1] == 'W' || w[1] == 'D'));
+        if (looksOperand) {
+          if (w.size() <= 2 && w[0] == 'L') { // LD/LW/LB: local data
+            lexer.next();
+            int32_t byte = 0;
+            if (lexer.getCurToken() == Tok::integer) {
+              byte = (int32_t)lexer.getInteger();
+              lexer.next();
+            }
+            ptr = builder.create<awl::DirectOp>(
+                loc(), mlir::scl::DirectArea::Marker, 0, byte, 0, 16);
+          } else {
+            ptr = parseOperand(false);
+            if (!ptr)
+              return true;
+          }
+        }
+      }
+      if (!ptr)
+        ptr = castTo(popAcc(), builder.getI64Type()); // no operand: ACCU1
+      builder.create<awl::ArSetOp>(loc(), builder.getI32IntegerAttr(ar), ptr);
       return true;
     }
     if (lexer.getCurToken() == Tok::lparen &&
@@ -1225,18 +1451,34 @@ private:
       rloActive = true;
       return true;
     }
-    if (m == "TDB") { // TDB: transfer DB register — not modelled
-      if (lexer.getCurToken() == Tok::ident)
-        lexer.next();
+    if (m == "TDB") { // TDB [DB n]: transfer DB register — not modelled
+      if (lexer.getCurToken() == Tok::ident) {
+        std::string w = upperIdent();
+        if (w == "DB" || w == "DI")
+          lexer.next();
+      }
       if (lexer.getCurToken() == Tok::integer)
         lexer.next();
       return true;
     }
-    if (m == "OPN") { // OPN DB n / OPN DI n: open data block (like AUF)
-      if (lexer.getCurToken() == Tok::ident)
+    if (m == "OPN") { // OPN DB n / OPN DI n / OPN DB1: open data block (like AUF)
+      if (lexer.getCurToken() == Tok::ident) {
+        std::string w = upperIdent();
+        if (w == "DB" || w == "DI")
+          lexer.next();
+        else if ((w.rfind("DB", 0) == 0 || w.rfind("DI", 0) == 0) &&
+                 w.size() > 2) {
+          builder.create<awl::SetDbOp>(
+              loc(), builder.getI32IntegerAttr(atoi(w.c_str() + 2)));
+          lexer.next();
+          return true;
+        }
+      }
+      if (lexer.getCurToken() == Tok::integer) {
+        int64_t db = lexer.getInteger();
         lexer.next();
-      if (lexer.getCurToken() == Tok::integer)
-        lexer.next();
+        builder.create<awl::SetDbOp>(loc(), builder.getI32IntegerAttr((int32_t)db));
+      }
       return true;
     }
     if (m == "LC") // LC Z n: load counter value into ACCU1
@@ -1590,27 +1832,45 @@ private:
   // Parse an operand: E/A/M/T/Z [B|W|D] byte [.bit] or DBn.DB[XBWD] byte [.bit]
   // `bitContext`: for T/Z operands without a size letter, `U T0`-style bit
   // access yields the status bit (width 1, bit 0); otherwise the 16-bit value.
-  mlir::Value parseOperand(bool bitContext = false) {
-    // operand starting with '[': fully indirect U [AR1, P#0.0] — address
-    // registers are not modelled; use the P# byte offset in the marker area
-    if (lexer.getCurToken() == Tok::lbracket) {
-      int32_t byte = 0, bit = 0;
-      lexer.next();
-      while (lexer.getCurToken() != Tok::rbracket &&
-             lexer.getCurToken() != Tok::eof) {
-        if (lexer.getCurToken() == Tok::integer) {
-          int64_t v = lexer.getInteger();
-          byte = (int32_t)(v / 8);
-          bit = (int32_t)(v % 8);
-        }
+  /// Parse `[AR1, P#x.y]` (or AR2) into an awl.indirect op yielding the
+  /// packed pointer (i64). `widthBits` records the access width for the
+  /// load/store that consumes the pointer (lastIndirectWidth).
+  mlir::Value parseIndirectBracket(int32_t widthBits) {
+    int32_t ar = 1, offBits = 0;
+    lexer.next(); // [
+    while (lexer.getCurToken() != Tok::rbracket &&
+           lexer.getCurToken() != Tok::eof) {
+      if (lexer.getCurToken() == Tok::ident) {
+        std::string w = upperIdent();
+        if (w.rfind("AR", 0) == 0 && w.size() == 3 && isdigit(w[2]))
+          ar = w[2] - '0';
         lexer.next();
+      } else if (lexer.getCurToken() == Tok::integer) {
+        // P#x.y lexes as one integer token: byte*8 + bit
+        offBits = (int32_t)lexer.getInteger();
+        lexer.next();
+      } else {
+        lexer.next(); // comma etc.
       }
-      if (lexer.getCurToken() == Tok::rbracket)
-        lexer.next();
-      return builder.create<awl::DirectOp>(
-          loc(), mlir::scl::DirectArea::Marker, 0, byte, bit,
-          bitContext ? 1 : 16);
     }
+    if (lexer.getCurToken() == Tok::rbracket)
+      lexer.next();
+    lastIndirectWidth = widthBits;
+    return builder.create<awl::IndirectOp>(
+        loc(), builder.getI64Type(), builder.getI32IntegerAttr(ar),
+        builder.getI32IntegerAttr(offBits));
+  }
+
+  // DB number for a DB operand without an explicit number: inside a
+  // DATA_BLOCK init section that is the DATA_BLOCK's own number.
+  int32_t effDb(int32_t db) const {
+    return db == 0 && dbOverride >= 0 ? dbOverride : db;
+  }
+
+  mlir::Value parseOperand(bool bitContext = false) {
+    // operand starting with '[': fully indirect U [AR1, P#0.0]
+    if (lexer.getCurToken() == Tok::lbracket)
+      return parseIndirectBracket(bitContext ? 1 : 16);
     // #name: awlsim local variable, mapped to a marker bit by name hash
     if (lexer.getCurToken() == Tok::localvar) {
       std::string name = std::string(lexer.getIdent());
@@ -1646,18 +1906,10 @@ private:
     // brackets in the marker area
     if (w == "B" || w == "W" || w == "D") {
       int32_t width = w[0] == 'B' ? 8 : w[0] == 'W' ? 16 : 32;
+      if (lexer.getCurToken() == Tok::lbracket)
+        return parseIndirectBracket(width); // B/W/D [AR1, P#x.y]
       int32_t byte = 0;
-      if (lexer.getCurToken() == Tok::lbracket) {
-        lexer.next();
-        while (lexer.getCurToken() != Tok::rbracket &&
-               lexer.getCurToken() != Tok::eof) {
-          if (lexer.getCurToken() == Tok::integer)
-            byte = (int32_t)lexer.getInteger();
-          lexer.next();
-        }
-        if (lexer.getCurToken() == Tok::rbracket)
-          lexer.next();
-      } else if (lexer.getCurToken() == Tok::integer) {
+      if (lexer.getCurToken() == Tok::integer) {
         byte = (int32_t)lexer.getInteger();
         lexer.next();
       }
@@ -1672,6 +1924,8 @@ private:
       int32_t byte = w.size() > 3 ? atoi(w.c_str() + 3) : -1, bit = 0;
       bool hasBit = false;
       double realBit = -1;
+      if (byte < 0 && lexer.getCurToken() == Tok::lbracket)
+        return parseIndirectBracket(width); // DBW [AR1, P#x.y]
       if (byte < 0 && lexer.getCurToken() == Tok::integer) {
         byte = (int32_t)lexer.getInteger();
         lexer.next();
@@ -1706,7 +1960,7 @@ private:
       if (width != 1 && hasBit)
         return (error("only DBX takes a bit number"), nullptr);
       return builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::DataBlock,
-                                            0, byte, bit, width);
+                                            effDb(0), byte, bit, width);
     }
 
     // DBn . DB[XBWD] byte [.bit]   (DB without a number = the instance DB
@@ -1749,7 +2003,7 @@ private:
           break;
         }
         return builder.create<awl::DirectOp>(
-            loc(), mlir::scl::DirectArea::DataBlock, db, 0, 0,
+            loc(), mlir::scl::DirectArea::DataBlock, effDb(db), 0, 0,
             bitContext ? 1 : 16);
       }
       int32_t width;
@@ -1803,7 +2057,7 @@ private:
       if (width != 1 && hasBit)
         return (error("only DBX takes a bit number"), nullptr);
       return builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::DataBlock,
-                                            db, byte, bit, width);
+                                            effDb(db), byte, bit, width);
     }
 
     // E/A/M/T/Z [B|W|D] [byte] [.bit]; P[E|A][B|W|D] = peripheral I/Q
@@ -1828,21 +2082,9 @@ private:
       byte = atoi(w.c_str() + p);
     }
     double realBit = -1;
-    bool indirect = false;
-    if (byte < 0 && lexer.getCurToken() == Tok::lbracket) {
-      // indirect access M [AR1, P#0.0]: address register not modelled,
-      // approximate with byte 0 / bit 0 of the area
-      while (lexer.getCurToken() == Tok::lbracket) {
-        lexer.next();
-        while (lexer.getCurToken() != Tok::rbracket &&
-               lexer.getCurToken() != Tok::eof)
-          lexer.next();
-        if (lexer.getCurToken() == Tok::rbracket)
-          lexer.next();
-      }
-      byte = 0;
-      indirect = true;
-    }
+    if (byte < 0 && lexer.getCurToken() == Tok::lbracket)
+      // indirect access M [AR1, P#0.0] / Q [AR2, P#x.y]
+      return parseIndirectBracket(width);
     if (byte < 0) {
       if (lexer.getCurToken() == Tok::integer) {
         byte = (int32_t)lexer.getInteger();
@@ -1858,7 +2100,7 @@ private:
       }
     }
     int32_t bit = 0;
-    bool hasBit = indirect && width == 1; // indirect bit access: bit 0
+    bool hasBit = false;
     if (realBit >= 0) {
       bit = (int32_t)(realBit * 10 + 0.5);
       hasBit = true;
@@ -1906,7 +2148,8 @@ private:
     mlir::Value v = parseOperand(true);
     if (!v)
       return nullptr;
-    if (!isBit(v))
+    // i64: indirect bit operand [AR1, P#x.y] (packed pointer)
+    if (!isBit(v) && !v.getType().isInteger(64))
       return (error("expected a bit operand (e.g. M 0.0)"), nullptr);
     return v;
   }
@@ -1972,10 +2215,23 @@ private:
       mlir::Value addr = parseOperand(false);
       if (!addr)
         return false;
-      // pseudo operands (DBLG/DBNO/DILG) already yield a constant
-      v = mlir::isa<mlir::scl::DirectType>(addr.getType())
-              ? (mlir::Value)builder.create<awl::LoadOp>(loc(), addr)
-              : addr;
+      if (addr.getType().isInteger(64)) {
+        // indirect load L/LC [AR1, P#x.y] through the packed pointer
+        int32_t w = lastIndirectWidth;
+        if (w == 1) {
+          v = builder.create<awl::LoadBitIndirectOp>(
+              loc(), builder.getI1Type(), addr);
+        } else {
+          mlir::Value loaded = builder.create<awl::LoadIndirectOp>(
+              loc(), builder.getI64Type(), addr, builder.getI32IntegerAttr(w));
+          v = castTo(loaded, builder.getIntegerType(w));
+        }
+      } else {
+        // pseudo operands (DBLG/DBNO/DILG) already yield a constant
+        v = mlir::isa<mlir::scl::DirectType>(addr.getType())
+                ? (mlir::Value)builder.create<awl::LoadOp>(loc(), addr)
+                : addr;
+      }
     }
     if (!v)
       return false;
@@ -1988,15 +2244,18 @@ private:
     mlir::Value addr = parseOperand(false);
     if (!addr)
       return false;
-    if (!mlir::isa<mlir::scl::DirectType>(addr.getType())) {
-      if (!acc.empty())
-        popAcc(); // store to a pseudo operand: value dropped
-      rloActive = false;
-      return true;
-    }
     // T does not pop ACCU1 (S7 semantics): several T can store the same value
     mlir::Value v = acc.empty() ? constInt(builder.getI32Type(), 0) : acc.back();
-    builder.create<awl::StoreOp>(loc(), v, addr);
+    if (addr.getType().isInteger(64)) {
+      // indirect store T [AR1, P#x.y]
+      builder.create<awl::StoreIndirectOp>(
+          loc(), castTo(v, builder.getI64Type()), addr,
+          builder.getI32IntegerAttr(lastIndirectWidth));
+    } else if (mlir::isa<mlir::scl::DirectType>(addr.getType())) {
+      builder.create<awl::StoreOp>(loc(), v, addr);
+    } else {
+      popAcc(); // store to a pseudo operand: value dropped
+    }
     rloActive = false;
     return true;
   }
@@ -2028,6 +2287,16 @@ private:
     bool isOr = (m == "O" || m == "ON");
     bool neg = (m == "UN" || m == "ON");
     auto i1 = builder.getI1Type();
+    if (addr.getType().isInteger(64)) {
+      // U/O [AR1, P#x.y]: indirect bit through the packed pointer
+      mlir::Value bit =
+          builder.create<awl::LoadBitIndirectOp>(loc(), i1, addr);
+      if (neg)
+        bit = builder.create<awl::NotOp>(loc(), i1, bit);
+      rlo = isOr ? (mlir::Value)builder.create<awl::OrOp>(loc(), i1, rlo, bit)
+                 : (mlir::Value)builder.create<awl::AndOp>(loc(), i1, rlo, bit);
+      return true;
+    }
     llvm::SmallVector<mlir::NamedAttribute, 1> attrs;
     if (neg)
       attrs.push_back(
@@ -2062,7 +2331,10 @@ private:
       return false;
     if (!ensureRlo())
       return false;
-    builder.create<awl::AssignOp>(loc(), rlo, addr);
+    if (addr.getType().isInteger(64))
+      builder.create<awl::WriteBitIndirectOp>(loc(), rlo, addr);
+    else
+      builder.create<awl::AssignOp>(loc(), rlo, addr);
     rloActive = false;
     return true;
   }
@@ -2071,7 +2343,21 @@ private:
     mlir::Value v = parseOperand(false);
     if (!v)
       return false;
-    auto dt = v.getType().cast<mlir::scl::DirectType>();
+    auto dt = v.getType().dyn_cast<mlir::scl::DirectType>();
+    if (!dt && v.getType().isInteger(64)) {
+      // S/R [AR1, P#x.y]: indirect bit store
+      auto i1 = builder.getI1Type();
+      builder.create<awl::WriteBitIndirectOp>(
+          loc(), builder.create<awl::ConstOp>(
+                     loc(), i1, builder.getIntegerAttr(i1, set ? 1 : 0)),
+          v);
+      rlo = builder.create<awl::ConstOp>(
+          loc(), i1, builder.getIntegerAttr(i1, set ? 1 : 0));
+      rloActive = true;
+      return true;
+    }
+    if (!dt)
+      return error("expected a direct or indirect operand");
     // `S C n` sets the counter to ACC1, `R C n` resets it to 0
     if (dt.getArea() == mlir::scl::DirectArea::Counter && dt.getWidth() != 1) {
       mlir::Value val;
@@ -2166,11 +2452,15 @@ private:
     mlir::Value t = parseOperand(false);
     if (!t)
       return false;
-    // symbolic operands map to marker bits; coerce to a valid timer index
-    if (auto dt = mlir::dyn_cast<mlir::scl::DirectType>(t.getType()))
+    // symbolic/indirect operands: coerce to a valid timer index
+    if (auto dt = mlir::dyn_cast<mlir::scl::DirectType>(t.getType())) {
       if (dt.getArea() != mlir::scl::DirectArea::Timer)
         t = builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::Timer,
                                           0, 0, 0, 16);
+    } else {
+      t = builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::Timer,
+                                        0, 0, 0, 16);
+    }
     int mode = m == "SP" ? 0 : m == "SE" ? 1 : m == "SS" ? 2 : m == "SV" ? 3 : 4;
     llvm::SmallVector<mlir::NamedAttribute, 1> attrs;
     attrs.push_back(
@@ -2186,11 +2476,15 @@ private:
     mlir::Value c = parseOperand(false);
     if (!c)
       return false;
-    // symbolic operands map to marker bits; coerce to a valid counter index
-    if (auto dt = mlir::dyn_cast<mlir::scl::DirectType>(c.getType()))
+    // symbolic/indirect operands: coerce to a valid counter index
+    if (auto dt = mlir::dyn_cast<mlir::scl::DirectType>(c.getType())) {
       if (dt.getArea() != mlir::scl::DirectArea::Counter)
         c = builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::Counter,
                                           0, 0, 0, 16);
+    } else {
+      c = builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::Counter,
+                                        0, 0, 0, 16);
+    }
     auto i16 = builder.getI16Type();
     mlir::Value zero = builder.create<awl::ConstOp>(
         loc(), i16, builder.getIntegerAttr(i16, 0));
@@ -2322,9 +2616,12 @@ private:
     }
     lexer.next();
     bool isReal = false;
-    if (lexer.getCurToken() == Tok::ident && upperIdent() == "R") {
-      isReal = true;
-      lexer.next();
+    if (lexer.getCurToken() == Tok::ident) {
+      std::string w = upperIdent();
+      if (w == "R")
+        isReal = true;
+      if (w == "R" || w == "I" || w == "D") // optional width letter
+        lexer.next();
     }
     int op;
     switch (cmp) {
@@ -2339,9 +2636,20 @@ private:
     if (lexer.getCurToken() == Tok::ident) {
       std::string w = upperIdent();
       if (w == "__STW" || w == "BIE" || w == "OV" || w == "OS" || w == "VKE" ||
-          w == "A0" || w == "A1" || w == "RLO") {
-        lexer.nextLine(); // status-word bits not tracked by the sim: skip
+          w == "A0" || w == "A1" || w == "RLO" || w == "__DBR") {
+        lexer.nextLine(); // status-word / DB-register bits not tracked: skip
         return true;
+      }
+      if (w == "__AR") { // address register value (packed or raw P# pointer)
+        lexer.next();
+        int n = 1;
+        if (lexer.getCurToken() == Tok::integer) {
+          n = (int)lexer.getInteger();
+          lexer.next();
+        }
+        actual = builder.create<awl::ArGetOp>(loc(), builder.getI64Type(),
+                                              builder.getI32IntegerAttr(n));
+        goto haveLhs;
       }
       if (w == "__ACCU") {
         lexer.next();
@@ -2363,6 +2671,7 @@ private:
                      ? (mlir::Value)builder.create<awl::LoadOp>(loc(), addr)
                      : addr;
       }
+    haveLhs:;
     } else if (lexer.getCurToken() == Tok::integer ||
                lexer.getCurToken() == Tok::real ||
                lexer.getCurToken() == Tok::minus) {

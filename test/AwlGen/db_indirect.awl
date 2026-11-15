@@ -1,0 +1,40 @@
+// AWL DB register (AUF/OPN), address registers (LAR1/TAR) and indirect
+// access ([AR1, P#x.y]), plus DATA_BLOCK initial values run via the
+// synthesized __scl_db_init block (ABI v5).
+// RUN: sclang-gen -x awl --emit=mlir %s | FileCheck %s
+
+DATA_BLOCK DB 1
+BEGIN
+	DB1.DBW 0 := 16#0041
+	DB1.DBX 2.3 := TRUE
+	DB1.DBW 4 := -5
+END_DATA_BLOCK
+
+// CHECK: awl.block "__scl_db_init"
+// CHECK: awl.store %{{.*}}, %{{.*}} : i16, !scl.direct<DB, 1, 0, 0, 16>
+// CHECK: awl.store %{{.*}}, %{{.*}} : i1, !scl.direct<DB, 1, 2, 3, 1>
+ORGANIZATION_BLOCK OB 1
+BEGIN
+	AUF DB 1
+	// CHECK: awl.set_db 1
+	L DBW 0			// DB 0 operand -> current DB
+	// CHECK: awl.load %{{.*}} : !scl.direct<DB, 0, 0, 0, 16> -> i16
+	T MW 10
+	LAR1 DB1.DBW 4
+	// CHECK: awl.ar_set 1, %{{.*}} : !scl.direct<DB, 1, 4, 0, 16>
+	L W [AR1, P#0.0]
+	// CHECK: awl.indirect 1, 0 -> i64
+	// CHECK: awl.load_indirect %{{.*}}, 16 -> i64
+	T W [AR1, P#0.0]
+	// CHECK: awl.store_indirect %{{.*}}, %{{.*}}, 16 : i64, i64
+	U [AR1, P#16.3]
+	// CHECK: awl.load_bit_indirect %{{.*}} : i64 -> i1
+	S [AR1, P#16.3]
+	// CHECK: awl.write_bit_indirect %{{.*}}, %{{.*}} : i1, i64
+	LAR2 P#10.2
+	// CHECK: awl.ar_set 2, %{{.*}} : i64
+	OPN DI 1
+	// CHECK: awl.set_db 1
+	BE
+END_ORGANIZATION_BLOCK
+// CHECK: awl.block "_mlir_ciface___scl_db_init"
