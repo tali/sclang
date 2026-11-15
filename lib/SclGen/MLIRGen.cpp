@@ -1593,7 +1593,9 @@ private:
       const FunctionCallAST *fc,
       std::function<void (StringRef, mlir::Value)> fN,
       std::function<void (mlir::Value)> fNN,
-      const llvm::StringMap<mlir::Type> *paramTypes = nullptr) {
+      const llvm::StringMap<mlir::Type> *paramTypes = nullptr,
+      std::function<mlir::LogicalResult (StringRef, const StringConstantAST *)>
+          fStr = nullptr) {
     for (auto &arg : fc->getParameters()) {
       auto binary = dyn_cast<BinaryExpressionAST>(arg.get());
       if (binary && binary->getOp() == tok_assignment) {
@@ -1603,15 +1605,22 @@ private:
           emitError(loc(lhs->loc()), "invalid parameter name");
           return mlir::failure();
         }
-        mlir::Value value;
-        if (auto *str = dyn_cast<StringConstantAST>(binary->getRhs()))
-          value = mlirGenStringLiteralValue(loc(binary->getRhs()->loc()),
-                                            paramTypes, name->getName(), str);
-        else
-          value = mlirGenRValue(binary->getRhs());
-        if (!value)
-          return mlir::failure();
-        fN(name->getName(), value);
+        if (auto *str = dyn_cast<StringConstantAST>(binary->getRhs())) {
+          // FB calls can store the literal bytes directly into the IDB
+          // member (per-byte stores); FC calls need a whole-array value.
+          if (fStr && succeeded(fStr(name->getName(), str)))
+            continue;
+          mlir::Value value = mlirGenStringLiteralValue(
+              loc(binary->getRhs()->loc()), paramTypes, name->getName(), str);
+          if (!value)
+            return mlir::failure();
+          fN(name->getName(), value);
+        } else {
+          mlir::Value value = mlirGenRValue(binary->getRhs());
+          if (!value)
+            return mlir::failure();
+          fN(name->getName(), value);
+        }
       } else {
         if (!fNN) {
           emitError(loc(arg->loc()), "parameter without name");
@@ -1688,7 +1697,19 @@ private:
       auto elem = mlirGenElement(location, idbRef, name);
       builder.create<StoreOp>(location, elem, value);
       return mlir::success();
-    }, nullptr, paramTypes)))
+    }, nullptr, paramTypes,
+      [&] (StringRef name, const StringConstantAST *str)
+          -> mlir::LogicalResult {
+        auto elem = mlirGenElement(location, idbRef, name);
+        if (!elem)
+          return mlir::failure();
+        auto it = byteViewTypes.find(elem);
+        if (it == byteViewTypes.end() || !it->second.isa<ArrayType>())
+          return mlir::failure(); // not a string member: fall back to value
+        return mlirGenStoreStringBytes(location, elem,
+                                       it->second.cast<ArrayType>(),
+                                       str->getValue());
+      })))
         return mlir::failure();
 
     builder.create<CallFbOp>(location, fb, idbRef);
