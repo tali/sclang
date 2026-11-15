@@ -34,7 +34,7 @@ BEGIN
 	LAR2 P#10.2
 	// CHECK: awl.ar_set 2, %{{.*}} : i64
 	OPN DI 1
-	// CHECK: awl.set_db 1
+	// CHECK: awl.set_di 1
 	BE
 END_ORGANIZATION_BLOCK
 // CHECK: awl.block "_mlir_ciface___scl_db_init"

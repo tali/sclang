@@ -591,6 +591,8 @@ llvm::StringRef DirectType::areaName(DirectArea area) {
     return "Q";
   case DirectArea::Marker:
     return "M";
+  case DirectArea::Local:
+    return "L";
   case DirectArea::DataBlock:
     return "DB";
   case DirectArea::Timer:
@@ -608,6 +610,8 @@ std::optional<DirectArea> DirectType::areaFromName(llvm::StringRef name) {
     return DirectArea::Output;
   if (name == "M")
     return DirectArea::Marker;
+  if (name == "L")
+    return DirectArea::Local;
   if (name == "DB")
     return DirectArea::DataBlock;
   if (name == "T")

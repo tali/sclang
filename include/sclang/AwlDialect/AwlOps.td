@@ -37,7 +37,7 @@ def BlockOp : AwlTopLevelOp<"block", [Symbol]> {
         awl.be
       }
   }];
-  let arguments = (ins StrAttr:$sym_name);
+  let arguments = (ins StrAttr:$sym_name, OptionalAttr<I32Attr>:$lframe);
   let regions = (region AnyRegion:$body);
   let assemblyFormat = "$sym_name attr-dict-with-keyword $body";
   let hasVerifier = 1;
@@ -314,11 +314,53 @@ def BeOp : AwlOp<"be", [Terminator]> {
 
 // MARK: DB register / address registers / indirect access (ABI v5)
 
+// Configure the byte size of a DB (from its DATA_BLOCK declaration layout);
+// emitted at the start of __scl_db_init so DBLG/DILG report it.
+def SetDbSizeOp : AwlOp<"set_db_size"> {
+  let summary = "set the configured byte size of a DB";
+  let arguments = (ins I32Attr:$db, I32Attr:$bytes);
+  let assemblyFormat = "attr-dict $db `,` $bytes";
+}
+
+// DBLG/DBNO/DILG/DINO pseudo operands: DB info from the runtime.
+// kind: 0 = DBLG (DB size in bytes), 1 = DBNO (DB number), 2 = DILG
+// (instance DB size), 3 = DINO (instance DB number). db = 0 = current DB.
+def DbInfoOp : AwlOp<"db_info", [Pure]> {
+  let summary = "DBLG/DBNO/DILG/DINO: DB info from the runtime";
+  let arguments = (ins I32Attr:$kind, I32Attr:$db);
+  let results = (outs I64:$result);
+  let assemblyFormat = "attr-dict $kind `,` $db `->` type($result)";
+}
+
 // AUF/OPN DB n: set the current DB register (DB 0 operands then refer to it).
 def SetDbOp : AwlOp<"set_db"> {
   let summary = "AUF/OPN DB n: set the current DB register";
   let arguments = (ins I32Attr:$db);
   let assemblyFormat = "attr-dict $db";
+}
+
+// Build an S7 32-bit pointer value (area<<24|db<<16|byte<<3|bit) at runtime
+// from a dynamic DB number (e.g. `DB [MW 14]` as a CALL parameter value).
+def PackPtrOp : AwlOp<"pack_ptr"> {
+  let summary = "build an S7 pointer value from a dynamic DB number";
+  let arguments = (ins I32Attr:$area, I32Attr:$byte, I32Attr:$bit, I32:$db);
+  let results = (outs I64:$result);
+  let assemblyFormat = "attr-dict $area `,` $db `,` $byte `,` $bit `->` type($result)";
+}
+
+// AUF/OPN DI n: set the DI register (DINO/DILG read it).
+def SetDiOp : AwlOp<"set_di"> {
+  let summary = "AUF/OPN DI n: set the DI register";
+  let arguments = (ins I32Attr:$db);
+  let assemblyFormat = "attr-dict $db";
+}
+
+// AUF <value>: set the current DB register from a runtime value (e.g. a
+// BLOCK_DB parameter passed to an FC, or AUF DB [LW n]).
+def SetDbvOp : AwlOp<"set_dbv"> {
+  let summary = "AUF <operand>: set the current DB register from a value";
+  let arguments = (ins AnyType:$db);
+  let assemblyFormat = "attr-dict $db `:` type($db)";
 }
 
 // LAR1/LAR2 <operand>: load a packed pointer (i64, as produced by awl.direct)

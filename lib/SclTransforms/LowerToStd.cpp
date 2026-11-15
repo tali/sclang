@@ -359,6 +359,14 @@ static FlatSymbolRefAttr getOrInsertRtFunc(OpBuilder &b, ModuleOp module,
 static Value directDbValue(OpBuilder &b, Location loc, scl::DirectType dt,
                            Operation *op) {
   auto i32 = b.getI32Type();
+  if (dt.getArea() == scl::DirectArea::DataBlock && dt.getDb() == -1) {
+    // DI-area operand: the DB in the DI register
+    auto module = op ? op->getParentOfType<ModuleOp>() : ModuleOp();
+    auto fn = getOrInsertRtFunc(b, module, "scl_rt_current_di",
+                                b.getFunctionType({}, {i32}));
+    return b.create<func::CallOp>(loc, fn, TypeRange{i32}, ValueRange{})
+        .getResult(0);
+  }
   if (op && dt.getArea() == scl::DirectArea::DataBlock && dt.getDb() == 0) {
     if (auto func = op->template getParentOfType<func::FuncOp>()) {
       if (func.getSymName().startswith("FB") && func.getNumArguments() == 1 &&
@@ -2697,6 +2705,49 @@ struct AwlCounterOpLowering : public OpConversionPattern<awl::CounterOp> {
 
 // MARK: ABI v5 lowerings (DB register / address registers / indirect access)
 
+// set the DB size -> @scl_rt_sim_set_db_size(db: i32, bytes: i64)
+struct AwlSetDbSizeOpLowering : public OpConversionPattern<awl::SetDbSizeOp> {
+  using OpConversionPattern<awl::SetDbSizeOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::SetDbSizeOp op, awl::SetDbSizeOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i32 = rewriter.getI32Type();
+    auto i64 = rewriter.getI64Type();
+    Value dbC = rewriter.create<arith::ConstantOp>(
+        loc, i32, rewriter.getI32IntegerAttr(op.getDb()));
+    Value szC = rewriter.create<arith::ConstantOp>(
+        loc, i64, rewriter.getI64IntegerAttr(op.getBytes()));
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_sim_set_db_size",
+                                rewriter.getFunctionType({i32, i64}, {}));
+    rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{dbC, szC});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// DBLG/DBNO/DILG/DINO -> @scl_rt_db_info(kind: i32, db: i32) -> i64
+struct AwlDbInfoOpLowering : public OpConversionPattern<awl::DbInfoOp> {
+  using OpConversionPattern<awl::DbInfoOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::DbInfoOp op, awl::DbInfoOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i32 = rewriter.getI32Type();
+    Value kindC = rewriter.create<arith::ConstantOp>(
+        loc, i32, rewriter.getI32IntegerAttr(op.getKind()));
+    Value dbC = rewriter.create<arith::ConstantOp>(
+        loc, i32, rewriter.getI32IntegerAttr(op.getDb()));
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_db_info",
+                                rewriter.getFunctionType({i32, i32}, {rewriter.getI64Type()}));
+    rewriter.replaceOpWithNewOp<func::CallOp>(
+        op, fn, TypeRange{rewriter.getI64Type()}, ValueRange{kindC, dbC});
+    return success();
+  }
+};
+
 // AUF/OPN DB n -> @scl_rt_set_current_db(db: i32)
 struct AwlSetDbOpLowering : public OpConversionPattern<awl::SetDbOp> {
   using OpConversionPattern<awl::SetDbOp>::OpConversionPattern;
@@ -2711,6 +2762,72 @@ struct AwlSetDbOpLowering : public OpConversionPattern<awl::SetDbOp> {
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_set_current_db",
                                 rewriter.getFunctionType({i32}, {}));
     rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{dbC});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// AUF/OPN DI n -> @scl_rt_set_current_di(db: i32)
+struct AwlSetDiOpLowering : public OpConversionPattern<awl::SetDiOp> {
+  using OpConversionPattern<awl::SetDiOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::SetDiOp op, awl::SetDiOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i32 = rewriter.getI32Type();
+    Value dbC = rewriter.create<arith::ConstantOp>(
+        loc, i32, rewriter.getI32IntegerAttr(op.getDb()));
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_set_current_di",
+                                rewriter.getFunctionType({i32}, {}));
+    rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{dbC});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// pack_ptr -> @scl_rt_pack_s7(area: i32, db: i32, byte: i32, bit: i32) -> i64
+struct AwlPackPtrOpLowering : public OpConversionPattern<awl::PackPtrOp> {
+  using OpConversionPattern<awl::PackPtrOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::PackPtrOp op, awl::PackPtrOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i32 = rewriter.getI32Type();
+    auto i64 = rewriter.getI64Type();
+    Value dbV = adaptor.getDb();
+    if (!dbV.getType().isInteger(32))
+      dbV = rewriter.create<arith::TruncIOp>(loc, i32, dbV);
+    auto mk = [&](int32_t v) {
+      return rewriter.create<arith::ConstantOp>(
+          loc, i32, rewriter.getI32IntegerAttr(v));
+    };
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_pack_s7",
+                                rewriter.getFunctionType({i32, i32, i32, i32},
+                                                         {i64}));
+    rewriter.replaceOpWithNewOp<func::CallOp>(
+        op, fn, TypeRange{i64},
+        ValueRange{mk(op.getArea()), dbV, mk(op.getByte()), mk(op.getBit())});
+    return success();
+  }
+};
+
+// AUF <value> -> @scl_rt_set_current_db(db: i32)
+struct AwlSetDbvOpLowering : public OpConversionPattern<awl::SetDbvOp> {
+  using OpConversionPattern<awl::SetDbvOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::SetDbvOp op, awl::SetDbvOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i32 = rewriter.getI32Type();
+    Value dbV = adaptor.getDb();
+    if (!dbV.getType().isInteger(32))
+      dbV = rewriter.create<arith::TruncIOp>(loc, i32, dbV);
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_set_current_db",
+                                rewriter.getFunctionType({i32}, {}));
+    rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{dbV});
     rewriter.eraseOp(op);
     return success();
   }
@@ -3001,6 +3118,29 @@ struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
       rewriter.create<func::ReturnOp>(loc);
     }
 
+    // L-stack frame (S7 local data): push the block's frame at entry, pop it
+    // before every return, so L-area accesses of nested calls stay separate.
+    {
+      ModuleOp module = op->getParentOfType<ModuleOp>();
+      auto i32 = rewriter.getI32Type();
+      auto pushFn = getOrInsertRtFunc(rewriter, module, "scl_rt_l_push",
+                                      rewriter.getFunctionType({i32}, {}));
+      auto popFn = getOrInsertRtFunc(rewriter, module, "scl_rt_l_pop",
+                                     rewriter.getFunctionType({}, {}));
+      int32_t frameSize = op.getLframe() ? (int32_t)op.getLframe().value() : 0;
+      rewriter.setInsertionPointToStart(&func.getBody().front());
+      auto frameC = rewriter.create<arith::ConstantOp>(
+          loc, i32, rewriter.getI32IntegerAttr(frameSize));
+      rewriter.create<func::CallOp>(loc, pushFn, TypeRange{}, ValueRange{frameC});
+      for (Block &b : func.getBody())
+        for (auto &o : llvm::make_early_inc_range(b.getOperations()))
+          if (auto ret = dyn_cast<func::ReturnOp>(&o)) {
+            rewriter.setInsertionPoint(ret);
+            rewriter.create<func::CallOp>(loc, popFn, TypeRange{},
+                                          ValueRange{});
+          }
+    }
+
     rewriter.eraseOp(op);
     return success();
   }
@@ -3079,10 +3219,12 @@ void SclToStdLoweringPass::runOnOperation() {
       AwlConstOpLowering, AwlCounterOpLowering, AwlDirectOpLowering,
       AwlDivLowering, AwlFrOpLowering, AwlLoadOpLowering, AwlMulLowering,
       AwlNegOpLowering,
-      AwlNopOpLowering, AwlNotOpLowering, AwlOrLowering,
-      AwlArGetOpLowering, AwlArSetOpLowering, AwlIndirectOpLowering,
+      AwlNopOpLowering, AwlNotOpLowering, AwlOrLowering, AwlPackPtrOpLowering,
+      AwlArGetOpLowering, AwlArSetOpLowering, AwlDbInfoOpLowering,
+      AwlIndirectOpLowering,
       AwlLoadBitIndirectOpLowering,
       AwlLoadIndirectOpLowering, AwlRealMathOpLowering, AwlSetDbOpLowering,
+      AwlSetDbvOpLowering, AwlSetDbSizeOpLowering, AwlSetDiOpLowering,
       AwlShiftOpLowering, AwlSleepOpLowering, AwlStoreIndirectOpLowering,
       AwlTimerResetLowering, AwlWriteBitIndirectOpLowering,
       AwlRloLowering<awl::RloAndOp, false>,

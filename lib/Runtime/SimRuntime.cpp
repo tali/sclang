@@ -75,7 +75,12 @@ struct SimState {
   // ABI v5: DB register (AUF/OPN) and address registers AR1/AR2 holding
   // packed pointers (area<<56|db<<40|byte<<16|bit<<8|widthBits).
   uint32_t currentDb = 0; // 0 = none (DB 0 operands stay literal)
+  uint32_t currentDi = 0; // DI register (AUF/OPN DI n); DINO/DILG read it
   uint64_t ars[2] = {0, 0};
+  // L-stack (S7 local data): a stack of frame bases; L-area byte offsets
+  // are relative to lBase (the base of the innermost frame).
+  std::vector<uint64_t> lFrames;
+  uint64_t lBase = 0;
 };
 
 /// Decode an S5TIME-encoded 16-bit value to milliseconds.
@@ -154,6 +159,8 @@ std::vector<uint8_t> &bufferFor(uint8_t area, uint32_t db, uint32_t byteOff,
       buf.resize((uint64_t)byteOff + width, 0);
     return buf;
   }
+  if (area == SCL_RT_AREA_L)
+    byteOff += (uint32_t)s.lBase; // L-area access is frame-relative
   auto &buf = s.areaBytes[area];
   if (buf.empty()) {
     uint64_t size = s.areaSize[area] ? s.areaSize[area] : kDefaultAreaSize;
@@ -178,7 +185,7 @@ int64_t scl_rt_read(uint8_t area, uint32_t db, uint32_t byteOff,
   if (state().vtable)
     return state().vtable->read(area, db, byteOff, widthBytes);
   if (widthBytes == 0 || widthBytes > 8) {
-    fprintf(stderr, "scl_rt_read: invalid width %u\n", widthBytes);
+    fprintf(stderr, "scl_rt_read: invalid width %u (area '%c' db %u byte %u)\n", widthBytes, area, db, byteOff);
     abort();
   }
   if (area == SCL_RT_AREA_DB && db == 0 && state().currentDb != 0)
@@ -423,6 +430,52 @@ void scl_rt_timer_fr(uint32_t t, uint8_t in) {
   tm.prevFR = in != 0;
 }
 
+int64_t scl_rt_db_info(uint32_t kind, uint32_t db) {
+  auto &s = state();
+  switch (kind) {
+  case 0: { // DBLG: size of the DB in the DB register
+    uint32_t d = db == 0 ? s.currentDb : db;
+    auto sizeIt = s.dbSize.find(d);
+    if (sizeIt != s.dbSize.end())
+      return (int64_t)sizeIt->second;
+    auto it = s.dbs.find(d);
+    return it != s.dbs.end() ? (int64_t)it->second.size() : 0;
+  }
+  case 1: // DBNO: DB number in the DB register
+    return (int64_t)(db == 0 ? s.currentDb : db);
+  case 2: { // DILG: size of the DB in the DI register
+    uint32_t d = db == 0 ? s.currentDi : db;
+    auto sizeIt = s.dbSize.find(d);
+    if (sizeIt != s.dbSize.end())
+      return (int64_t)sizeIt->second;
+    auto it = s.dbs.find(d);
+    return it != s.dbs.end() ? (int64_t)it->second.size() : 0;
+  }
+  default: // DINO: DB number in the DI register
+    return (int64_t)(db == 0 ? s.currentDi : db);
+  }
+}
+
+uint64_t scl_rt_pack_s7(uint32_t area, uint32_t db, uint32_t byte,
+                        uint32_t bit) {
+  return ((uint64_t)(area & 0xFF) << 24) | ((uint64_t)(db & 0xFF) << 16) |
+         ((uint64_t)(byte & 0x1FFF) << 3) | (bit & 7);
+}
+
+void scl_rt_l_push(uint32_t bytes) {
+  auto &s = state();
+  s.lFrames.push_back(s.lBase);
+  s.lBase += (bytes + 1) & ~uint64_t(1); // frames are even-aligned
+}
+
+void scl_rt_l_pop(void) {
+  auto &s = state();
+  if (!s.lFrames.empty()) {
+    s.lBase = s.lFrames.back();
+    s.lFrames.pop_back();
+  }
+}
+
 void scl_rt_sleep(uint32_t ms) {
   auto &s = state();
   if (s.vtable && s.vtable->sleep) {
@@ -595,6 +648,15 @@ static uint64_t packPtr(uint8_t area, uint32_t db, uint32_t byte, uint8_t bit,
          ((uint64_t)byte << 16) | ((uint64_t)bit << 8) | widthBits;
 }
 
+void scl_rt_set_current_di(uint32_t db) {
+  auto &s = state();
+  if (s.vtable && s.vtable->set_current_db) {
+    // the vtable has no separate DI entry; hosts that care about DI
+    // registers implement set_current_db for both (documented in ADR)
+  }
+  s.currentDi = db;
+}
+
 void scl_rt_set_current_db(uint32_t db) {
   auto &s = state();
   if (s.vtable && s.vtable->set_current_db) {
@@ -602,6 +664,11 @@ void scl_rt_set_current_db(uint32_t db) {
     return;
   }
   s.currentDb = db;
+}
+
+uint32_t scl_rt_current_di(void) {
+  auto &s = state();
+  return s.currentDi;
 }
 
 uint32_t scl_rt_current_db(void) {
@@ -635,6 +702,14 @@ uint64_t scl_rt_ar_add(uint8_t ar, uint32_t offBits) {
   uint64_t p = scl_rt_ar_get(ar);
   // raw P#x.y pointer (area byte 0, value = byte*8+bit): plain add
   if (ptrArea(p) == 0) {
+    uint8_t s7 = (uint8_t)((p >> 24) & 0xFF);
+    if (p < 0x100000000ull && s7 >= 0x80 && s7 <= 0x86) {
+      // S7 pointer: add to the byte/bit fields
+      uint64_t np = p + offBits; // area<<24|db<<16|(byte*8+bit) + offBits
+      if (ar >= 1 && ar <= 2)
+        s.ars[ar - 1] = np;
+      return np;
+    }
     uint64_t np = p + offBits;
     if (ar >= 1 && ar <= 2)
       s.ars[ar - 1] = np;
@@ -651,9 +726,20 @@ uint64_t scl_rt_ar_add(uint8_t ar, uint32_t offBits) {
 }
 
 // A raw pointer (area byte 0) addresses the marker area: value = byte*8+bit.
+// An S7-format 32-bit pointer (area code 0x80-0x86 at bits 24-31, e.g. from
+// a P#DBX 0.0 literal) is decoded to the internal packed format.
 static uint64_t rawToPacked(uint64_t p) {
   if (ptrArea(p) != 0)
     return p;
+  uint8_t s7 = (uint8_t)((p >> 24) & 0xFF);
+  if (p < 0x100000000ull && s7 >= 0x80 && s7 <= 0x86) {
+    static const uint8_t s7area[7] = {'P', 'I', 'Q', 'M', 'D', 'P', 'L'};
+    uint8_t area = s7area[s7 - 0x80];
+    uint32_t db = (uint32_t)((p >> 16) & 0xFF);
+    uint32_t byte = (uint32_t)((p >> 3) & 0x1FFF);
+    uint8_t bit = (uint8_t)(p & 7);
+    return packPtr(area, db, byte, bit, 0);
+  }
   return packPtr(SCL_RT_AREA_M, 0, (uint32_t)(p / 8), (uint8_t)(p % 8), 0);
 }
 

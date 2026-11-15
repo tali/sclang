@@ -181,6 +181,7 @@ enum class DirectArea : uint8_t {
   Input = 'I',     // %I / AWL E
   Output = 'Q',    // %Q / AWL A
   Marker = 'M',    // %M / AWL M
+  Local = 'L',     // %L / AWL LW/LB/LD — per-call L-stack frame (see ADR)
   DataBlock = 'D', // %DBn / AWL DBn (db = DB number)
   Timer = 'T',     // %T / AWL T
   Counter = 'C',   // %C / AWL Z

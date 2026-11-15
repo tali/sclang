@@ -1078,7 +1078,7 @@ struct FuncConverter {
       nextBit = maxBit;
     }
     b.setInsertionPointToEnd(module.getBody());
-    blockOp = b.create<awl::BlockOp>(loc, strAttr(name));
+    blockOp = b.create<awl::BlockOp>(loc, strAttr(name), mlir::IntegerAttr());
     flat = b.createBlock(&blockOp.getBody());
     b.setInsertionPointToStart(flat);
     Region &body = funcOp->getRegion(0);

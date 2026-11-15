@@ -320,13 +320,20 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_timer_start", (void *)&scl_rt_timer_start);
     add("scl_rt_counter_op", (void *)&scl_rt_counter_op);
     add("scl_rt_timer_reset", (void *)&scl_rt_timer_reset);
+    add("scl_rt_db_info", (void *)&scl_rt_db_info);
+    add("scl_rt_sim_set_db_size", (void *)&scl_rt_sim_set_db_size);
     add("scl_rt_timer_fr", (void *)&scl_rt_timer_fr);
     add("scl_rt_sleep", (void *)&scl_rt_sleep);
+    add("scl_rt_l_push", (void *)&scl_rt_l_push);
+    add("scl_rt_l_pop", (void *)&scl_rt_l_pop);
     add("scl_rt_timer_fb", (void *)&scl_rt_timer_fb);
     add("scl_rt_assert_cmp", (void *)&scl_rt_assert_cmp);
     add("scl_rt_assert_cmp_r", (void *)&scl_rt_assert_cmp_r);
     // ABI v5: DB register / address registers / indirect access
     add("scl_rt_set_current_db", (void *)&scl_rt_set_current_db);
+    add("scl_rt_set_current_di", (void *)&scl_rt_set_current_di);
+    add("scl_rt_current_di", (void *)&scl_rt_current_di);
+    add("scl_rt_pack_s7", (void *)&scl_rt_pack_s7);
     add("scl_rt_current_db", (void *)&scl_rt_current_db);
     add("scl_rt_ar_set", (void *)&scl_rt_ar_set);
     add("scl_rt_ar_get", (void *)&scl_rt_ar_get);
@@ -448,6 +455,13 @@ int runJit(mlir::ModuleOp module) {
           engine->lookupPacked("_mlir_ciface___scl_db_init")) {
     if (auto err = engine->invokePacked("_mlir_ciface___scl_db_init", {}))
       llvm::errs() << "JIT db-init invocation failed\n" << err << "\n";
+  }
+
+  // S7 startup behavior: run OB 100 (if present) once before the cyclic
+  // scans (awlsim test harnesses do the same: OB100, then OB1).
+  if (engine->lookupPacked("OB100")) {
+    if (auto err = engine->invokePacked("OB100", {}))
+      llvm::errs() << "JIT OB100 invocation failed\n" << err << "\n";
   }
 
   // Invoke the JIT-compiled function once per scan cycle, advancing the

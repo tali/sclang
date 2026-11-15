@@ -50,6 +50,7 @@ enum SclRtArea {
   SCL_RT_AREA_I = 'I',  ///< inputs      (%I / AWL E)
   SCL_RT_AREA_Q = 'Q',  ///< outputs     (%Q / AWL A)
   SCL_RT_AREA_M = 'M',  ///< markers     (%M / AWL M)
+  SCL_RT_AREA_L = 'L',  ///< local data  (%L / AWL LW/LB/LD), per-call frame
   SCL_RT_AREA_DB = 'D', ///< data blocks (%DBn / AWL DBn), db = DB number
   SCL_RT_AREA_T = 'T',  ///< timers      (%T / AWL T)   (reserved)
   SCL_RT_AREA_C = 'C',  ///< counters    (%C / AWL Z)   (reserved)
@@ -109,6 +110,11 @@ void scl_rt_counter_op(uint32_t c, uint8_t op, uint64_t value, uint8_t in);
 
 /// Advance the virtual clock by `ms` (awlsim `__SLEEP n` test directive).
 void scl_rt_sleep(uint32_t ms);
+
+/// DB info pseudo operands (AWL DBLG/DBNO/DILG/DINO). kind: 0 = DBLG (DB
+/// size in bytes), 1 = DBNO (DB number), 2 = DILG, 3 = DINO. db = 0 refers
+/// to the current DB (set by AUF/OPN).
+int64_t scl_rt_db_info(uint32_t kind, uint32_t db);
 /// Builtin timer function blocks TON/TOF/TP (mode 0/1/2) operating on an
 /// instance DB buffer with the builtin layout (IN @0, PT @4 i32 BE ms,
 /// Q @8, ET @12 i32 BE ms).
@@ -197,6 +203,23 @@ void scl_rt_assert_cmp_r(uint32_t id, uint8_t op, double actual,
 /// Number of failed asserts so far (sim only; 0 when a host vtable without
 /// assert support is registered).
 uint64_t scl_rt_assert_failures(void);
+
+/// L-stack frames (S7 local data): every called block pushes a frame of
+/// `bytes` bytes; L-area accesses are relative to the current frame base.
+/// The block lowering emits scl_rt_l_push at function entry and
+/// scl_rt_l_pop before every return. Sim-only (a host vtable receives raw
+/// L offsets and manages its own frames).
+void scl_rt_l_push(uint32_t bytes);
+void scl_rt_l_pop(void);
+
+/// Set the DI register (AUF/OPN DI n). DINO/DILG read it. Sim-only.
+void scl_rt_set_current_di(uint32_t db);
+/// Read the DI register (DI-area operands DIX/DIB/DIW/DID). Sim-only.
+uint32_t scl_rt_current_di(void);
+
+/// Build an S7 32-bit pointer value (area<<24|db<<16|byte<<3|bit).
+uint64_t scl_rt_pack_s7(uint32_t area, uint32_t db, uint32_t byte,
+                        uint32_t bit);
 
 /// Simulation-only configuration (NOT part of the fixed ABI): set the size
 /// in bytes of a simulated area (I/Q/M/T/C). DB areas grow on demand unless
