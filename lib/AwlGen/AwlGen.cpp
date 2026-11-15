@@ -487,6 +487,23 @@ private:
           s += cur.front();
           cur = cur.drop_front();
         }
+        // scientific notation, e.g. 2.000000e+001
+        if (!cur.empty() && (cur.front() == 'e' || cur.front() == 'E') &&
+            cur.size() > 1 &&
+            (isdigit((unsigned char)cur[1]) ||
+             ((cur[1] == '+' || cur[1] == '-') && cur.size() > 2 &&
+              isdigit((unsigned char)cur[2])))) {
+          s += 'e';
+          cur = cur.drop_front();
+          if (!cur.empty() && (cur.front() == '+' || cur.front() == '-')) {
+            s += cur.front();
+            cur = cur.drop_front();
+          }
+          while (!cur.empty() && isdigit(cur.front())) {
+            s += cur.front();
+            cur = cur.drop_front();
+          }
+        }
         t.realVal = std::stod(s);
         t.tok = Tok::real;
         return t;
@@ -572,15 +589,11 @@ private:
         t.tok = Tok::localvar;
         return t;
       }
-      llvm::errs() << file << ":" << lineNo << ":" << colNo
-                   << ": unexpected character '" << c << "'\n";
-      t.tok = Tok::eof;
-      return t;
+      cur = cur.drop_front(); // skip unknown char (header text etc.)
+      return scan();
     default:
-      llvm::errs() << file << ":" << lineNo << ":" << colNo
-                   << ": unexpected character '" << c << "'\n";
-      t.tok = Tok::eof;
-      return t;
+      cur = cur.drop_front(); // skip unknown char (header text etc.)
+      return scan();
     }
   }
 
@@ -861,7 +874,8 @@ private:
         std::string w = upperIdent();
         if (w.rfind("END_", 0) == 0) {
           lexer.next();
-          builder.create<awl::BeOp>(loc());
+          if (!blockEnded)
+            builder.create<awl::BeOp>(loc());
           blockEnded = true;
           break;
         }
@@ -941,8 +955,35 @@ private:
       }
       if (!parseInstruction(name))
         return false;
-      if (blockEnded)
+      if (blockEnded) {
+        // dead code after BEA/BEB up to the END_* keyword: labels still
+        // exist (jumps may target them); other instructions are skipped
+        while (lexer.getCurToken() != Tok::eof) {
+          if (lexer.getCurToken() == Tok::ident &&
+              lexer.peekToken() == Tok::colon) {
+            auto label = upperIdent();
+            lexer.next();
+            lexer.next();
+            // keep the block ending in awl.be: insert dead-code labels
+            // before the terminator
+            Operation *term = &builder.getInsertionBlock()->back();
+            auto lab = builder.create<awl::LabelOp>(loc(),
+                                                    builder.getStringAttr(label));
+            lab->moveBefore(term);
+            continue;
+          }
+          if (lexer.getCurToken() == Tok::ident) {
+            std::string w2 = upperIdent();
+            // stop at the end keyword or at the next block's header
+            if (w2.rfind("END_", 0) == 0 || w2 == "ORGANIZATION_BLOCK" ||
+                w2 == "DATA_BLOCK" || w2 == "OB" || w2 == "FB" ||
+                w2 == "FC" || w2 == "SFB" || w2 == "SFC" || w2 == "DB")
+              break;
+          }
+          lexer.nextLine();
+        }
         break;
+      }
     }
     blockEnded = false;
     return true;
