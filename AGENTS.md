@@ -377,9 +377,8 @@ Memory areas `%I`/`%Q`/`%M`/`%DB…`/`%T`/`%C` are implemented (see above):
 `--runtime=host --runtime-lib=…`, OB scan-cycle hooks, big-endian.
 
 Remaining technical gaps:
-- SCL-side timer FBs (TON/TOF/TP): CALL FB now works (see above), but the
-  TON/TOF/TP semantics themselves are still only modeled via raw %T/%C areas
-  + AWL timer instructions.
+- SCL-side timer FBs TON/TOF/TP work as builtins (see the builtin bullet
+  above); raw %T/%C areas + AWL timer instructions also work.
 - Array-of-struct members (`a[i].x`) work (see above).
 - String literals in assignments to a string var (byte copy, zero-padded) or
   to a char (first byte) work; string literals elsewhere (e.g. as call
