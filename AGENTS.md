@@ -133,8 +133,11 @@ has no `\b` — use python3 for regex edits.
 - External conformance: `test/conformance/run_conformance.py` compiles public
   SCL/AWL corpora (default root $SCLANG_CONFORMANCE_CORPORA or
   /Users/martin/scl-external; SKIPs when absent) and enforces pass-rate floors.
-  Current: AWL 109/116 (94%), SCL single 13/22, SCL per-project 11/17.
-  Corpora + licenses + results + gap list: `docs/conformance.md`.
+  Two tiers: compile (--emit=mlir) and JIT smoke (--emit=jit --jit-cycles=2
+  on OB1 files; full lowering + ExecutionEngine, no value oracles).
+  Current: AWL 109/116 (94%), SCL single 13/22, SCL per-project 11/17,
+  JIT 69/77 (90%). Corpora + licenses + results + gap list:
+  `docs/conformance.md`.
   `check-sclang` includes `test/conformance` (added to test/CMakeLists.txt).
 
 ## Key design decisions (do not regress)

@@ -19,15 +19,28 @@ The corpora root defaults to `$SCLANG_CONFORMANCE_CORPORA` or
 (currently AWL >= 0.90, SCL single >= 0.55, SCL projects >= 0.60, see the
 constants in the script) and exits 1 on regression.
 
-What is run:
+What is run (two tiers):
 
-- every `*.awl`: dialect sniffed per file (awlsim project markers
-  `ORGANIZATION_BLOCK` / quoted block names / `DATA_BLOCK` => `-x=awl`,
-  SCL markers `FUNCTION` / unquoted `DATA_BLOCK` / `VAR_INPUT|OUTPUT|IN_OUT`
-  => `-x=scl`), compiled with `--emit=mlir`;
-- every `*.scl` (except `makefile.scl`) individually with `-x=scl`;
-- every directory of `.scl` files concatenated (newline-separated) as one
-  project with `-x=scl` (TIA exports are multi-file).
+- **compile tier** (`--emit=mlir`, frontend + MLIR verifier only):
+  - every `*.awl`: dialect sniffed per file (awlsim project markers
+    `ORGANIZATION_BLOCK` / quoted block names / `DATA_BLOCK` => `-x=awl`,
+    SCL markers `FUNCTION` / unquoted `DATA_BLOCK` / `VAR_INPUT|OUTPUT|IN_OUT`
+    => `-x=scl`);
+  - every `*.scl` (except `makefile.scl`) individually with `-x=scl`;
+  - every directory of `.scl` files concatenated (newline-separated) as one
+    project with `-x=scl` (TIA exports are multi-file);
+- **JIT tier** (`--emit=jit --jit-cycles=2`) on every file defining OB 1:
+  the full pipeline — LowerToStd, LowerToLLVM, ExecutionEngine — and two
+  scan cycles of `_mlir_ciface_OB1`. This is a *smoke test*: it proves the
+  program lowers and executes without crashing or missing symbols. It does
+  NOT check computed values against an oracle (the awlsim `__ASSERT==`
+  directives are test oracles and are skipped by the frontend). True
+  value-level checks live in the repo's own `test/sclang/jit_*` tests, which
+  FileCheck the `--dump-areas` memory image after JIT execution.
+
+To make the JIT tier work on single files of multi-file projects,
+`awl.call` to a callee not defined in the module now lowers to an empty stub
+function (documented approximation; system blocks SFC/SFB included).
 
 ## Corpora (cloned into /Users/martin/scl-external, licenses as noted)
 
@@ -43,9 +56,10 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 
 ## Current results (LLVM 17 build, this writing)
 
-- AWL: **109/116 pass (94%)**
+- AWL compile: **109/116 pass (94%)**
 - SCL single file: **13/22 pass (59%)**
 - SCL per project: **11/17 pass (65%)**
+- JIT (files with OB 1, full pipeline + execution): **69/77 pass (90%)**
 
 ## Remaining failures = documented gaps
 

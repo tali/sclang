@@ -1300,7 +1300,7 @@ private:
         return error("expected label after LOOP");
       std::string label = upperIdent();
       lexer.next();
-      mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
+        mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
       auto ty = a.getType();
       auto c = builder.create<awl::CmpNeOp>(loc(), builder.getI1Type(),
                                             castTo(a, ty), constInt(ty, 0));
@@ -1315,7 +1315,7 @@ private:
         return error("expected label after " + m);
       std::string label = upperIdent();
       lexer.next();
-      mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
+        mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
       auto ty = a.getType();
       auto i1 = builder.getI1Type();
       mlir::Value c;
@@ -2037,6 +2037,11 @@ private:
     mlir::Value t = parseOperand(false);
     if (!t)
       return false;
+    // symbolic operands map to marker bits; coerce to a valid timer index
+    if (auto dt = mlir::dyn_cast<mlir::scl::DirectType>(t.getType()))
+      if (dt.getArea() != mlir::scl::DirectArea::Timer)
+        t = builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::Timer,
+                                          0, 0, 0, 16);
     int mode = m == "SP" ? 0 : m == "SE" ? 1 : m == "SS" ? 2 : m == "SV" ? 3 : 4;
     llvm::SmallVector<mlir::NamedAttribute, 1> attrs;
     attrs.push_back(
@@ -2052,6 +2057,11 @@ private:
     mlir::Value c = parseOperand(false);
     if (!c)
       return false;
+    // symbolic operands map to marker bits; coerce to a valid counter index
+    if (auto dt = mlir::dyn_cast<mlir::scl::DirectType>(c.getType()))
+      if (dt.getArea() != mlir::scl::DirectArea::Counter)
+        c = builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::Counter,
+                                          0, 0, 0, 16);
     auto i16 = builder.getI16Type();
     mlir::Value zero = builder.create<awl::ConstOp>(
         loc(), i16, builder.getIntegerAttr(i16, 0));

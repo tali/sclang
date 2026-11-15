@@ -2319,6 +2319,23 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
       args.push_back(rewriter.create<arith::ConstantOp>(
           op.getLoc(), i32, rewriter.getI32IntegerAttr(dbAttr.value())));
     }
+    // Cross-file / system block callee (not defined in this module): create
+    // an empty stub so single files of a multi-file project still lower and
+    // JIT-run (the callee body is not modelled — documented approximation).
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    if (!module.lookupSymbol(op.getCallee())) {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToEnd(module.getBody());
+      SmallVector<Type, 4> argTys;
+      for (Value a : args)
+        argTys.push_back(a.getType());
+      auto fn = rewriter.create<func::FuncOp>(
+          op.getLoc(), op.getCallee(), rewriter.getFunctionType(argTys, {}));
+      fn.setVisibility(SymbolTable::Visibility::Private);
+      auto *entry = fn.addEntryBlock();
+      rewriter.setInsertionPointToStart(entry);
+      rewriter.create<func::ReturnOp>(op.getLoc());
+    }
     auto call = rewriter.create<func::CallOp>(op.getLoc(), op.getCallee(),
                                               TypeRange{}, args);
     rewriter.replaceOp(op, call.getResults());
@@ -2343,8 +2360,8 @@ struct AwlTimerStartLowering : public OpConversionPattern<awl::TimerStartOp> {
   matchAndRewrite(awl::TimerStartOp op, awl::TimerStartOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto dt = op.getTimer().getType().dyn_cast<scl::DirectType>();
-    if (!dt || dt.getArea() != scl::DirectArea::Timer)
-      return rewriter.notifyMatchFailure(op, "timer_start needs a T operand");
+    if (!dt)
+      return rewriter.notifyMatchFailure(op, "timer_start needs a direct operand");
     auto loc = op.getLoc();
     ModuleOp module = op->template getParentOfType<ModuleOp>();
     auto i8 = rewriter.getI8Type();
@@ -2371,8 +2388,8 @@ struct AwlCounterOpLowering : public OpConversionPattern<awl::CounterOp> {
   matchAndRewrite(awl::CounterOp op, awl::CounterOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto dt = op.getCounter().getType().dyn_cast<scl::DirectType>();
-    if (!dt || dt.getArea() != scl::DirectArea::Counter)
-      return rewriter.notifyMatchFailure(op, "counter needs a Z operand");
+    if (!dt)
+      return rewriter.notifyMatchFailure(op, "counter needs a direct operand");
     auto loc = op.getLoc();
     ModuleOp module = op->template getParentOfType<ModuleOp>();
     auto i8 = rewriter.getI8Type();
