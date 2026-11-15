@@ -1000,12 +1000,15 @@ static uint64_t rawToPacked(uint64_t p) {
   if (ptrArea(p) != 0)
     return p;
   uint8_t s7 = (uint8_t)((p >> 24) & 0xFF);
-  if (p < 0x100000000ull && s7 >= 0x80 && s7 <= 0x86) {
-    static const uint8_t s7area[7] = {'P', 'I', 'Q', 'M', 'D', 'D', 'L'};
+  if (p < 0x100000000ull && s7 >= 0x80 && s7 <= 0x87) {
+    static const uint8_t s7area[8] = {'P', 'I', 'Q', 'M', 'D', 'D', 'L', 'L'}; // 0x87 VL = L frame
     uint8_t area = s7area[s7 - 0x80];
     // 0x85 = DI area: the DB number comes from the DI register (db=0xFFFF)
     uint32_t db = s7 == 0x85 ? 0xFFFF : (uint32_t)((p >> 16) & 0xFF);
-    uint32_t byte = (uint32_t)((p >> 3) & 0x1FFF);
+    // VL (0x87) has no DB field, so its byte offset may use bits 3..23
+    // (the FC parameter area starts at kLocalBase = 8192 > 8191)
+    uint32_t byte = s7 == 0x87 ? (uint32_t)((p >> 3) & 0x1FFFFF)
+                               : (uint32_t)((p >> 3) & 0x1FFF);
     uint8_t bit = (uint8_t)(p & 7);
     return packPtr(area, db, byte, bit, 0);
   }
@@ -1141,7 +1144,7 @@ void scl_rt_sfc(uint32_t n) {
       outDb = dbNr;
       return 0;
     }
-    static const uint8_t s7area[7] = {'P', 'I', 'Q', 'M', 'D', 'D', 'L'};
+    static const uint8_t s7area[8] = {'P', 'I', 'Q', 'M', 'D', 'D', 'L', 'L'}; // 0x87 VL = L frame
     if (area >= 0x80 && area <= 0x86) {
       outArea = s7area[area - 0x80];
       outDb = 0;
@@ -1204,6 +1207,140 @@ void scl_rt_sfc(uint32_t n) {
     off += w;
   }
   scl_rt_write(SCL_RT_AREA_M, 0, kParamBase + RETV, 2, 0); // RET_VAL = 0
+}
+
+// MARK: IEC library FCs called by name (awlsim library/iec). The frontend
+// stages the parameters in the marker area at kParamBase (AwlGen
+// emitRtCall): LEN 21: S ANY @+0, RET_VAL i16 @+20; EQ_DT 9 / GE_DT 12:
+// DT1 ANY @+0, DT2 ANY @+10, RET_VAL bool @+20.0; DELETE 4: IN ANY @+0,
+// L i16 @+10, P i16 @+12, RET_VAL (OUT STRING) ANY @+20.
+void scl_rt_iec(uint32_t n) {
+  auto &s = state();
+  if (s.vtable && s.vtable->iec) {
+    s.vtable->iec(n);
+    return;
+  }
+  auto anyByte = [&](uint32_t base, uint32_t i) -> uint8_t {
+    return (uint8_t)scl_rt_read(SCL_RT_AREA_M, 0, kParamBase + base + i, 1);
+  };
+  auto anyWord = [&](uint32_t base, uint32_t i) -> uint32_t {
+    return ((uint32_t)anyByte(base, i) << 8) | anyByte(base, i + 1);
+  };
+  // decode a staged 10-byte ANY header into a runtime (area, db, byte, bit)
+  auto anyResolve = [&](uint32_t base, uint8_t &area, uint32_t &db,
+                        uint32_t &byte, uint8_t &bit) -> bool {
+    if (anyByte(base, 0) != 0x10)
+      return false;
+    uint64_t ptr = ((uint64_t)anyByte(base, 6) << 24) |
+                   ((uint64_t)anyByte(base, 7) << 16) |
+                   ((uint64_t)anyByte(base, 8) << 8) | anyByte(base, 9);
+    uint32_t s7 = (uint32_t)(ptr >> 24) & 0xFF;
+    byte = (uint32_t)(ptr >> 3) & 0x1FFF;
+    bit = (uint8_t)(ptr & 7);
+    static const uint8_t s7area[8] = {'P', 'I', 'Q', 'M', 'D', 'D', 'L', 'L'}; // 0x87 VL = L frame
+    if (s7 == 0x84 || s7 == 0x85) { // DB / DI: DB number from the header
+      uint32_t dbNr = anyWord(base, 4);
+      if (dbNr == 0 || dbNr >= 0x100)
+        return false;
+      area = SCL_RT_AREA_DB;
+      db = dbNr;
+      return true;
+    }
+    if (s7 >= 0x80 && s7 <= 0x87) {
+      area = s7area[s7 - 0x80];
+      db = 0;
+      return true;
+    }
+    return false;
+  };
+  auto readBytes = [&](uint8_t area, uint32_t db, uint32_t byte, uint32_t len,
+                       uint8_t *out) {
+    for (uint32_t i = 0; i < len; ++i)
+      out[i] = (uint8_t)scl_rt_read(area, db, byte + i, 1);
+  };
+  if (n == 21) { // LEN: RET_VAL := actual length of S (string byte 1)
+    uint8_t a, bit;
+    uint32_t d, b;
+    if (!anyResolve(0, a, d, b, bit))
+      return;
+    int len = (int)(uint8_t)scl_rt_read(a, d, b + 1, 1);
+    scl_rt_write(SCL_RT_AREA_M, 0, kParamBase + 20, 2,
+                 (uint64_t)(uint16_t)len);
+    return;
+  }
+  if (n == 9 || n == 12) { // EQ_DT / GE_DT: compare two DATE_AND_TIMEs
+    uint8_t a1, a2, bit1, bit2;
+    uint32_t d1, d2, b1, b2;
+    if (!anyResolve(0, a1, d1, b1, bit1) ||
+        !anyResolve(10, a2, d2, b2, bit2))
+      return;
+    uint8_t t1[8], t2[8];
+    readBytes(a1, d1, b1, 8, t1);
+    readBytes(a2, d2, b2, 8, t2);
+    bool res;
+    if (n == 9) {
+      res = memcmp(t1, t2, 8) == 0;
+    } else {
+      // awlsim fc12: invalid year BCD -> FAIL (RET_VAL untouched)
+      auto bcdOk = [](uint8_t b) {
+        return ((b >> 4) & 0xF) <= 9 && (b & 0xF) <= 9;
+      };
+      if (!bcdOk(t1[0]) || !bcdOk(t2[0]))
+        return;
+      // year correction (1990-1999 -> +1900, 2000-2089 -> +2000), then
+      // compare the remaining 7 bytes as BCD fields
+      auto yearKey = [](uint8_t bcd) {
+        int y = ((bcd >> 4) & 0xF) * 10 + (bcd & 0xF);
+        return y >= 90 ? 1900 + y : 2000 + y;
+      };
+      int y1 = yearKey(t1[0]), y2 = yearKey(t2[0]);
+      res = y1 > y2 || (y1 == y2 && memcmp(t1 + 1, t2 + 1, 7) >= 0);
+    }
+    scl_rt_write_bit(SCL_RT_AREA_M, 0, kParamBase + 20, 0, res);
+    return;
+  }
+  if (n == 4) { // DELETE: RET_VAL := IN with L chars deleted from position P
+    uint8_t ai, ar, biti, bitr;
+    uint32_t di, dr, bi, br;
+    if (!anyResolve(0, ai, di, bi, biti) ||
+        !anyResolve(20, ar, dr, br, bitr))
+      return;
+    int L = (int16_t)(uint16_t)scl_rt_read(SCL_RT_AREA_M, 0, kParamBase + 10, 2);
+    int P = (int16_t)(uint16_t)scl_rt_read(SCL_RT_AREA_M, 0, kParamBase + 12, 2);
+    int inLen = (int)(uint8_t)scl_rt_read(ai, di, bi + 1, 1);
+    int outMax = (int)(uint8_t)scl_rt_read(ar, dr, br, 1);
+    if (L < 0 || P < 0) { // awlsim ERR: RET_VAL actual length := 0
+      scl_rt_write(ar, dr, br + 1, 1, 0);
+      return;
+    }
+    int maxCopy = inLen < outMax ? inLen : outMax;
+    // byte offsets within the IN string (chars start at byte 2)
+    int delStart, delEnd, inEnd = inLen + 2;
+    if (L == 0 || P == 0 || P > maxCopy) {
+      delStart = delEnd = inEnd; // full copy, nothing deleted
+    } else {
+      delStart = P + 1; // P is 1-based
+      delEnd = delStart + L;
+      if (delEnd > inEnd)
+        delEnd = inEnd;
+    }
+    int limit = maxCopy + 2;
+    if (delStart > limit)
+      delStart = delEnd = limit;
+    int limit2 = limit + (delEnd - delStart);
+    if (inEnd > limit2)
+      inEnd = limit2;
+    // copy [2, delStart) and [delEnd, inEnd) to RET_VAL from byte 2 on
+    uint32_t w = 2;
+    for (int off = 2; off < delStart; ++off, ++w)
+      scl_rt_write(ar, dr, br + w, 1,
+                   (uint64_t)(uint8_t)scl_rt_read(ai, di, bi + off, 1));
+    for (int off = delEnd; off < inEnd; ++off, ++w)
+      scl_rt_write(ar, dr, br + w, 1,
+                   (uint64_t)(uint8_t)scl_rt_read(ai, di, bi + off, 1));
+    scl_rt_write(ar, dr, br + 1, 1, w - 2); // RET_VAL actual length
+    return;
+  }
 }
 
 // MARK: OB-temp presets (awlsim obtemp.OB1TempPresets; only OB 1 has them)

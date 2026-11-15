@@ -331,6 +331,7 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_param_out", (void *)&scl_rt_param_out);
     add("scl_rt_sfb", (void *)&scl_rt_sfb);
     add("scl_rt_sfc", (void *)&scl_rt_sfc);
+    add("scl_rt_iec", (void *)&scl_rt_iec);
     add("scl_rt_ob_start", (void *)&scl_rt_ob_start);
     add("scl_rt_feature", (void *)&scl_rt_feature);
     add("scl_rt_timer_fb", (void *)&scl_rt_timer_fb);

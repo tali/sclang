@@ -2530,11 +2530,19 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
         sfcN = sfcAttr.value();
       }
     }
+    // IEC library FC called by name (CALL "LEN"/"GE_DT"/...): run in the
+    // runtime (params staged in the marker area by the frontend)
+    bool iecRt = false;
+    int32_t iecN = 0;
+    if (auto iecAttr = op.getIec()) {
+      iecRt = true;
+      iecN = iecAttr.value();
+    }
     // Cross-file / system block callee (not defined in this module): create
     // an empty stub so single files of a multi-file project still lower and
     // JIT-run (the callee body is not modelled — documented approximation).
     ModuleOp module = op->getParentOfType<ModuleOp>();
-    if (!sfbRt && !sfcRt && !module.lookupSymbol(op.getCallee())) {
+    if (!sfbRt && !sfcRt && !iecRt && !module.lookupSymbol(op.getCallee())) {
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointToEnd(module.getBody());
       SmallVector<Type, 4> argTys;
@@ -2626,6 +2634,17 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
                                   rewriter.getFunctionType({i32}, {}));
       auto nC = rewriter.create<arith::ConstantOp>(
           op.getLoc(), i32, rewriter.getI32IntegerAttr(sfcN));
+      rewriter.create<func::CallOp>(op.getLoc(), fn, TypeRange{},
+                                    ValueRange{nC});
+      rewriter.eraseOp(op);
+      return success();
+    }
+    if (iecRt) {
+      auto i32 = rewriter.getI32Type();
+      auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_iec",
+                                  rewriter.getFunctionType({i32}, {}));
+      auto nC = rewriter.create<arith::ConstantOp>(
+          op.getLoc(), i32, rewriter.getI32IntegerAttr(iecN));
       rewriter.create<func::CallOp>(op.getLoc(), fn, TypeRange{},
                                     ValueRange{nC});
       rewriter.eraseOp(op);
@@ -3186,7 +3205,7 @@ struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
     auto loc = op.getLoc();
     // FB blocks take the instance DB number (from `CALL FB n, DB m`) as an
     // i32 argument; DB operands without a number inside the FB use it.
-    bool isFb = op.getSymName().startswith("FB");
+    bool isFb = op.getSymName().startswith("FB") || op.getFb().has_value();
     auto funcType = isFb ? rewriter.getFunctionType({rewriter.getI32Type()}, {})
                          : rewriter.getFunctionType({}, {});
     auto func = rewriter.create<func::FuncOp>(loc, op.getSymName(), funcType);

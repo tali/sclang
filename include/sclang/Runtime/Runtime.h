@@ -174,6 +174,9 @@ typedef struct SclRtVTable {
   void (*write_indirect)(uint64_t ptr, int64_t value, uint8_t widthBytes);
   bool (*read_bit_indirect)(uint64_t ptr);
   void (*write_bit_indirect)(uint64_t ptr, bool value);
+  /* Appended for IEC library FCs called by name (v6): LEN 21, EQ_DT 9,
+     GE_DT 12, DELETE 4 (params staged at the marker area, like SFCs). */
+  void (*iec)(uint32_t n);
 } SclRtVTable;
 
 /// Register a host vtable; all subsequent ABI calls forward through it.
@@ -228,6 +231,11 @@ void scl_rt_sfb(uint32_t n);
 /// parameter staging area in the marker area at kParamBase, like awlsim's
 /// systemblocks. Sim-only; hosts may override via the vtable.
 void scl_rt_sfc(uint32_t n);
+/// Run an IEC library FC called by name (awlsim library/iec: LEN 21,
+/// EQ_DT 9, GE_DT 12, DELETE 4) on the parameter staging area in the
+/// marker area at kParamBase, like the SFCs. Sim-only; hosts may override
+/// via the vtable.
+void scl_rt_iec(uint32_t n);
 /// Write the S7 OB-temp preset header (EV_CLASS/SCAN/PRIORITY/OB_NUMBR/
 /// cycle times/DATE_TIME) into the current L frame at OB entry
 /// (awlsim obtemp.OB1TempPresets; only OB 1 has presets). Sim-only.

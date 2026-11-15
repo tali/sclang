@@ -1079,7 +1079,7 @@ struct FuncConverter {
     }
     b.setInsertionPointToEnd(module.getBody());
     blockOp = b.create<awl::BlockOp>(loc, strAttr(name), mlir::IntegerAttr(),
-                                    mlir::IntegerAttr());
+                                    mlir::IntegerAttr(), mlir::UnitAttr());
     flat = b.createBlock(&blockOp.getBody());
     b.setInsertionPointToStart(flat);
     Region &body = funcOp->getRegion(0);

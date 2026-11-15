@@ -162,11 +162,17 @@ has no `\b` — use python3 for regex edits.
   awlsim's width-masked compare. DT#/DATE_AND_TIME is 8 BCD bytes (width-64
   direct), packed big-endian with awlsim's float-msec + weekday rules.
 - `[ARn, P#x.y]` addressing is a TEMPORARY offset: `scl_rt_ar_add` must NOT
-  write back into the AR register. DI-area S7 pointers (area 0x85) decode to
+  write back into the AR register (except explicit `+ARn` which does).
+  DI-area S7 pointers (area 0x85) decode to
   db=0xFFFF which resolves to the DI register; FB calls emit
   `scl_rt_set_current_di(db)` so `DIW…`/`P##var` work inside FBs.
 - Array members track per-dimension bounds (`MemberInfo.dims/lo/elemSize`);
   `consumeArrayIndices` returns a BIT offset (ARRAY OF BOOL is bit-packed).
+  STRING[n] members in a DATA_BLOCK get their max-len byte (byte 0)
+  initialized to n in `__scl_db_init` (`emitStringMaxlenInits`, recursing
+  into STRUCT/UDT/ARRAY members); a declaration-only DATA_BLOCK (no BEGIN
+  section) is still sized and initialized via parseDbInitSection. BOOL
+  RET_VAL occupies a full byte (bitCursor fix) so paramBytes > 0.
   Declaration initializers (`VAR : ARRAY[..] := 1, 2, 4 (…)`) are captured
   raw in `Layout.memberInit` and replayed per-element into `__scl_db_init`
   via a sub-lexer (the sub-lexer's input string must outlive it — dangling
@@ -214,9 +220,41 @@ has no `\b` — use python3 for regex edits.
     (VL, parent L frame, at kLocalBase+byte), TEMP -> 0x86 (own frame).
     `P#DBX` lexes as area 0x85. REAL-typed locals load as f32 (bitcast in
     `lowerDirectLoad`; `lastOperandType` tracks the member type).
+    VL (0x87) pointers decode in `rawToPacked` with a 21-bit byte field
+    (bits 3..23 — the DB field is unused for VL), because the FC param area
+    starts at kLocalBase = 8192 > 8191 (13-bit S7 byte field max).
+  - `P#DBn.SYM[.SUB][[i]]` symbolic pointer literals: the lexer captures the
+    member part in `Token.ptrSym` (+ `ptrTypeCode`/`ptrCount` for ANY
+    suffixes like `P#M 10.0 BYTE 7`); `consumePtrLiteral()` resolves the
+    byte/bit offset via `resolveDbMember` (sub-lexer over "DB<n>.<sym>").
+    Used at all P# consumption sites (LAR/TAR/`+AR`/indirect offsets).
+  - `+ARn P#x.y` (also `+ ARn P#x.y` after an arith operator) emits
+    `awl.indirect` (ar_add) + `awl.ar_set` — ARn += offset in bits.
+    LARn/TARn with no operand pop ACCU1 ZERO-extended to i64 (`zextTo64`):
+    S7 pointers are unsigned (0x84010000 must not sign-extend).
+  - By-reference CALL params (`isByRefParam`: ANY/STRING/DATE_AND_TIME):
+    ANY params stage a 10-byte ANY header (`emitAnyParamHeader`, incl.
+    `P#... TYPE n` literals via ptrTypeCode/ptrCount); STRING/DT params
+    stage a 6-byte POINTER (`emitPtrParamHeader`: DB-number word @+0, S7
+    pointer dword @+2) which the callee reads via `P##param`
+    (`L W [AR1, P#0.0]` = DB nr, `L D [AR1, P#2.0]` = ptr). Literal RHS
+    (`callRhsAddressable`/`byRefRhs`) falls back to by-value. No read-back
+    for by-ref OUT params (the callee writes through the pointer).
+  - `CALL "NAME"` of a user block (namedBlockNums) routes through the
+    common call path with the quoted symbol as callee and namedLayouts
+    layout (goto common_call_path); runtime builtins win first
+    (rtBuiltins: LEN/EQ_DT/GE_DT/DELETE/IEC + TIME_TCK->SFC64 -> emitRtCall,
+    callee IECn with `iec` attr, lowered to `scl_rt_iec(n)` in the runtime;
+    awlsim library/iec semantics: LEN = string act-len byte, EQ_DT = 8-byte
+    compare, GE_DT = year-BCD-validated BCD field compare with 1900/2000
+    year correction (FAIL leaves RET_VAL untouched), DELETE = substring
+    removal with awlsim's clamping, negative L/P -> empty result).
+    `awl.block` has a `fb` unit attr so NAMED FBs also get the i32
+    instance-DB argument (lowering checks `startswith("FB") || getFb()`).
   - `awl.call` attrs: `callee`, optional `rlo` (CC), `db` (FB instance DB;
     -1 = current DI for multi-instance), `instdb` (unit: explicit instance
-    DB -> AR2 set), `ar2off` (multi-instance base byte), `sfc` (SFB number).
+    DB -> AR2 set), `ar2off` (multi-instance base byte), `sfc` (SFB/SFC
+    number), `iec` (IEC library FC number).
 - UDT/inline-STRUCT handling: type names may contain a space (`TYPE UDT 1`);
   `parseStructBody` must compute `layout.size` even when it exits via an
   END keyword (goto done), must skip `STRUCT`/header-keyword lines, and

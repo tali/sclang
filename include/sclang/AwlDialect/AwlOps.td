@@ -38,7 +38,8 @@ def BlockOp : AwlTopLevelOp<"block", [Symbol]> {
       }
   }];
   let arguments = (ins StrAttr:$sym_name, OptionalAttr<I32Attr>:$lframe,
-                       OptionalAttr<I32Attr>:$paramBytes);
+                       OptionalAttr<I32Attr>:$paramBytes,
+                       OptionalAttr<UnitAttr>:$fb);
   let regions = (region AnyRegion:$body);
   let assemblyFormat = "$sym_name attr-dict-with-keyword $body";
   let hasVerifier = 1;
@@ -241,7 +242,8 @@ def CallOp : AwlOp<"call", [DeclareOpInterfaceMethods<CallOpInterface>]> {
   // only operand is the optional RLO of CC.
   let arguments = (ins FlatSymbolRefAttr:$callee, Optional<Awl_Bool>:$rlo,
                        OptionalAttr<I32Attr>:$db, OptionalAttr<UnitAttr>:$instdb,
-                       OptionalAttr<I32Attr>:$ar2off, OptionalAttr<I32Attr>:$sfc);
+                       OptionalAttr<I32Attr>:$ar2off, OptionalAttr<I32Attr>:$sfc,
+                       OptionalAttr<I32Attr>:$iec);
   let results = (outs);
   let assemblyFormat = "attr-dict $callee (`,` `rlo` $rlo^ `:` type($rlo))? (`,` `db` $db^)?";
 }

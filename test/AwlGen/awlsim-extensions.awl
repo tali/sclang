@@ -39,7 +39,7 @@ BEGIN
 	CALL	SFC47(WT:=0)
 	// CHECK: awl.call {sfc = 47 : i32} @SFC47
 	CALL	"GE_DT"
-	// CHECK: awl.call @GE_DT
+	// CHECK: awl.call {iec = 12 : i32} @IEC12
 	OPN	DI 1
 	// CHECK: awl.set_di 1
 	L		DB1.DBVAR0.VAR1_INT	// symbolic DB member -> DBW 0 of DB1

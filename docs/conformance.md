@@ -111,7 +111,18 @@ semantics incl. error codes 0x8124/0x8325/0x8122/0x8323/0x813A/0x833A/
 0x8128/0x8329 and BVAL wrap-around), SFC 47 (WAIT, WT in us) and SFC 64
 (TIME_TCK) run in the runtime (`scl_rt_sfc`); their params are staged as
 full ANY headers / scalars in the marker area at kLocalBase by the frontend
-(`CALL SFC` param parsing). ANY is 10 bytes and POINTER 6 bytes in layouts;
+(`CALL SFC` param parsing). IEC library FCs called by name run in the
+runtime too (`scl_rt_iec`: LEN 21, EQ_DT 9, GE_DT 12, DELETE 4, plus
+TIME_TCK->SFC 64; callee `IECn` with an `iec` attr, params staged by the
+shared `emitRtCall`) — `fc9_eq_dt` and `fc4_delete` pass all oracles.
+User blocks called by quoted name (`CALL "_STR_PRESET" (...)`) route through
+the common call path with staged params; by-reference params (ANY ->
+10-byte ANY header, STRING/DATE_AND_TIME -> 6-byte POINTER read via
+`P##param`) are passed as pointers. `P#DBn.SYM` symbolic pointers resolve
+through the DB layout, VL (0x87) pointers use a 21-bit byte field (the FC
+param area starts at 8192), `+ARn P#x.y` adds to the AR, LAR/TAR from ACCU
+zero-extend, STRING[n] DB members get their max-len byte initialized, and
+BOOL RET_VAL occupies a full byte. ANY is 10 bytes and POINTER 6 bytes in layouts;
 symbolic members of undeclared DBs (DB1.VAR0) are auto-assigned offsets in
 order of first use, and every DB's referenced extent is registered via
 `awl.set_db_ref` in `__scl_db_init` for ANY-pointer bounds checks.
@@ -120,8 +131,12 @@ Remaining oracle failures map to known gaps (each message names the line and
 actual/expected):
 
 - pointers/ANY/DB-pointer types (`pointer`, `anypointer`,
-  `any-to-instance-db`, `dbpointer`): `P#`-valued variables and ANY
-  pointer params are not yet modeled;
+  `any-to-instance-db`, `dbpointer`, `array:257`): remaining asserts are
+  `__ACCU`/`__AR` checks of raw pointer values (ACCU2-4 and AR save/restore
+  by library FCs are not modeled) and P## VL-area FC params read back as 0;
+- `fc21_len`/`fc12_ge_dt`: `__AR` asserts after the call (AR1/AR2 not set by
+  runtime builtins) and GE_DT BCD-FAIL cases where RET_VAL must stay
+  untouched;
 - `struct`, `udt`, `DB`, `latin1` pass: FB/FC interface sections are
   re-aligned at section boundaries (BOOL bit-packed, WORD/DWORD even),
   initializer skipping no longer eats members after `END_STRUCT` without
