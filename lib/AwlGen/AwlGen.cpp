@@ -464,15 +464,11 @@ private:
             db = db * 10 + (cur.front() - '0');
             cur = cur.drop_front();
           }
-          // DBX = the instance DB (DI area, code 0x85); other remaining
-          // letters of the area word (DBB/DBW/DBD) are skipped
-          if (!cur.empty() && toupper((unsigned char)cur.front()) == 'X') {
-            area = 0x85;
-            cur = cur.drop_front();
-          } else {
-            while (!cur.empty() && isalpha((unsigned char)cur.front()))
-              cur = cur.drop_front();
-          }
+          // DBX: db number 0 = current DB register (area stays 0x84,
+          // awlsim packs P#DBX 8.6 as DW#16#84000046); P#DIX is the DI
+          // register (0x85). Remaining letters (DBB/DBW/DBD) are skipped.
+          while (!cur.empty() && isalpha((unsigned char)cur.front()))
+            cur = cur.drop_front(); // skips the X of DBX (db stays 0)
         } else if (!cur.empty() && isalpha((unsigned char)cur.front())) {
           char a = (char)toupper((unsigned char)cur.front());
           cur = cur.drop_front();
@@ -5333,15 +5329,9 @@ private:
                                 cond ? mlir::ValueRange{rloVal}
                                      : mlir::ValueRange{},
                                 attrs);
-    // system function calls set BIE/BR = 1 on success (awlsim
-    // system_sfc_*/system_sfb_*: s.BIE = 1); IEC library FCs do not
-    if (!isIec) {
-      auto i1 = builder.getI1Type();
-      mlir::Value one = builder.create<awl::ConstOp>(
-          loc(), i1, builder.getIntegerAttr(i1, 1));
-      builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(8),
-                                       one);
-    }
+    // BIE/BR is set by the runtime (scl_rt_sfc/scl_rt_sfb: 1 on success,
+    // 0 on error paths, awlsim system_sfc_*/system_sfb_*); IEC library
+    // FCs set it per their AWL body (see scl_rt_iec)
     // output params: read back from the staging area
     for (auto &o : sfcOuts) {
       auto addr = mkDirect(mlir::scl::DirectArea::Marker, 0,
@@ -5929,15 +5919,7 @@ private:
                                   cond ? mlir::ValueRange{rloVal}
                                        : mlir::ValueRange{},
                                   attrs);
-      // CALL SFB n: system function block sets BIE/BR = 1 (awlsim
-      // system_sfb_*: s.BIE = 1)
-      if (kind == "SFB") {
-        auto i1 = builder.getI1Type();
-        mlir::Value one = builder.create<awl::ConstOp>(
-            loc(), i1, builder.getIntegerAttr(i1, 1));
-        builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(8),
-                                         one);
-      }
+      // CALL SFB n: scl_rt_sfb sets BIE/BR (1 on success, 0 on error)
     }
     // output params: read back from the callee's interface area
     for (auto &op : outParams) {

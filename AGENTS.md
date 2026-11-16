@@ -141,7 +141,7 @@ has no `\b` — use python3 for regex edits.
   line). sclang driver exits 2 when scl_rt_assert_failures() > 0 after the
   cycle loop.
   Current: AWL 116/116 (100%), SCL single 15/15, SCL per-project 16/17,
-  JIT smoke 74/77 (96%), oracle (__ASSERT value-level) 33/53 (62%).
+  JIT smoke 74/77 (96%), oracle (__ASSERT value-level) 37/53 (70%).
   lit is 114/114. OB-temp presets (OB1 header) are written at OB entry
   (scl_rt_ob_start); the JIT driver runs the startup OB (OB 102 on a
   4-accu CPU, else OB 100) before the OB 1 cycles; __FEATURE t [, v] is
@@ -288,6 +288,11 @@ has no `\b` — use python3 for regex edits.
   starts from the operand (awlsim NER=0 => VKE=STA; O-chains start from
   0, U/A from 1 — see parseRloLogic / stmtLogic). `U >=0`/`<=0` are !A0/!A1
   (so UO gives 0), `U >0`/`<0` are !A0&A1 / A0&!A1, UO is A0&A1.
+  BIE/BR: set by the runtime in scl_rt_sfc/scl_rt_sfb/scl_rt_timer_fb
+  (1 on success, 0 on error e.g. negative SFB PT or bad ANY magic in
+  SFC 21) and by scl_rt_iec per the library body; OS (bit 4) is cleared
+  at every awl.call entry (AwlCallOpLowering). P#DBX packs with area
+  0x84 and db field 0 (current DB register), P#DIX with 0x85.
 
 - `SclTypeConverter` maps `!scl.address<T>` to a **0-d memref with dynamic offset**
   (`memref<T, strided<[], offset: ?>>`) so array element addresses from

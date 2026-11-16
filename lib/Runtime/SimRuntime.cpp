@@ -591,6 +591,13 @@ void scl_rt_sfb(uint32_t n) {
     s.vtable->sfb(n);
     return;
   }
+  // awlsim system_sfb_*: s.BIE = 1 on success, 0 on error (e.g. PT < 0)
+  auto bie = [&](bool ok) {
+    if (ok)
+      s.stw |= (uint16_t)(1u << 8);
+    else
+      s.stw &= (uint16_t)~(1u << 8);
+  };
   uint32_t db = s.currentDi;
   uint32_t base = ar2ByteOff();
   auto rd = [&](uint32_t byte, uint8_t w) {
@@ -606,8 +613,10 @@ void scl_rt_sfb(uint32_t n) {
     scl_rt_write_bit(SCL_RT_AREA_DB, db, base + byte, bit, v);
   };
   uint64_t key = ((uint64_t)db << 32) | base;
-  if (n > 5)
-    return; // unknown SFB number (e.g. CALL SFB -1): no-op, BIE stays 1
+  if (n > 5) {
+    bie(true); // unknown SFB number (e.g. CALL SFB -1): no-op, BIE := 1
+    return;
+  }
   if (n <= 2) { // CTU / CTD / CTUD counters
     int cv = (int16_t)(uint16_t)(rd(6, 2) & 0xFFFF);
     int pv = (int16_t)(uint16_t)(rd(2, 2) & 0xFFFF);
@@ -649,6 +658,7 @@ void scl_rt_sfb(uint32_t n) {
       wrb(4, 0, cv >= pv);
       wrb(4, 1, cv <= 0);
     }
+    bie(true); // counters always succeed
     return;
   }
   // SFB3 TP / SFB4 TON / SFB5 TOF (awlsim system_sfb_3/4/5). Instance layout:
@@ -657,6 +667,7 @@ void scl_rt_sfb(uint32_t n) {
   // instance DB itself.
   uint64_t now = s.clockMs;
   int64_t pt = (int32_t)(uint32_t)rd(2, 4); // PT: 32-bit TIME in ms
+  bie(pt >= 0); // negative PT is an error (awlsim system_sfb_3/4/5)
   bool in = rdb(0, 0);
   uint8_t state = (uint8_t)(rd(12, 1) & 0xFF);
   const uint8_t ST_RUNNING = 1, ST_FINISHED = 2;
@@ -829,6 +840,11 @@ void scl_rt_timer_fb(uint8_t mode, uint64_t idbPtr) {
   auto &st = s.timerFbs[idbPtr];
   bool in = fbReadByte(p, 0) != 0;
   int32_t pt = fbReadI32(p, 4);
+  // negative PT is an error: BIE := 0 (awlsim system_sfb_3/4/5)
+  if (pt >= 0)
+    s.stw |= (uint16_t)(1u << 8);
+  else
+    s.stw &= (uint16_t)~(1u << 8);
   if (pt < 0)
     pt = 0;
   uint64_t now = s.clockMs;
@@ -1062,25 +1078,37 @@ void scl_rt_sfc(uint32_t n) {
     s.vtable->sfc(n);
     return;
   }
+  // awlsim system_sfc_*: s.BIE = 1 on success, 0 on error paths
+  auto bie = [&](bool ok) {
+    if (ok)
+      s.stw |= (uint16_t)(1u << 8);
+    else
+      s.stw &= (uint16_t)~(1u << 8);
+  };
   if (n == 64) { // TIME_TCK: 31-bit millisecond timestamp
     scl_rt_write(SCL_RT_AREA_M, 0, kParamBase + 0, 4,
                  s.clockMs & 0x7FFFFFFF);
+    bie(true);
     return;
   }
   if (n == 47) { // WAIT: WT in microseconds, max 32767 (awlsim sfc_47)
     int wt = (int16_t)(uint16_t)scl_rt_read(SCL_RT_AREA_M, 0, kParamBase + 0, 2);
     if (wt > 0)
       s.clockMs += ((uint64_t)std::min(wt, 32767) + 999) / 1000;
+    bie(true);
     return;
   }
-  if (n != 21)
-    return; // other SFCs: host-provided stub
+  if (n != 21) {
+    bie(true); // other SFCs: host-provided stub, BIE := 1
+    return;
+  }
   // SFC 21 FILL (awlsim system_sfc_21): fill the BLK ANY block with BVAL.
   // The frontend stages the full 10-byte ANY headers inline in the marker
   // area: BVAL @ kParamBase+0, BLK @ kParamBase+10, RET_VAL (i16) @ +20.
   constexpr uint32_t BVAL = 0, BLK = 10, RETV = 20;
   auto fail = [&](uint16_t code) {
     scl_rt_write(SCL_RT_AREA_M, 0, kParamBase + RETV, 2, code);
+    bie(false); // error path: BIE := 0 (awlsim system_sfc_21)
   };
   auto anyByte = [&](uint32_t base, uint32_t i) -> uint8_t {
     return (uint8_t)scl_rt_read(SCL_RT_AREA_M, 0, kParamBase + base + i, 1);
@@ -1209,6 +1237,7 @@ void scl_rt_sfc(uint32_t n) {
     off += w;
   }
   scl_rt_write(SCL_RT_AREA_M, 0, kParamBase + RETV, 2, 0); // RET_VAL = 0
+  bie(true); // success: BIE := 1
 }
 
 // MARK: IEC library FCs called by name (awlsim library/iec). The frontend

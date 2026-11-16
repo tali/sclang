@@ -2488,6 +2488,19 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
                   ConversionPatternRewriter &rewriter) const override {
     SmallVector<Value, 4> args;
     ModuleOp mod = op->getParentOfType<ModuleOp>();
+    // awlsim insn_call/insn_cc/insn_uc: after the call OS (bit 4) is cleared
+    auto clearOs = [&]() {
+      auto i8 = rewriter.getI8Type();
+      auto fn = getOrInsertRtFunc(rewriter, mod, "scl_rt_stw_set_bit",
+                                  rewriter.getFunctionType({i8, i8}, {}));
+      auto bitC = rewriter.create<arith::ConstantOp>(
+          op.getLoc(), i8, rewriter.getI8IntegerAttr(4));
+      auto zero = rewriter.create<arith::ConstantOp>(
+          op.getLoc(), i8, rewriter.getI8IntegerAttr(0));
+      rewriter.create<func::CallOp>(op.getLoc(), fn, TypeRange{},
+                                    ValueRange{bitC, zero});
+    };
+    clearOs(); // OS (bit 4) is cleared when a block is called
     // CALL FB n, DB m: pass the instance DB number as the FB's i32 argument
     if (auto dbAttr = op.getDb()) {
       auto i32 = rewriter.getI32Type();
