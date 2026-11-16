@@ -2134,6 +2134,27 @@ struct AwlConstOpLowering : public OpConversionPattern<awl::ConstOp> {
   }
 };
 
+// LC T n -> @scl_rt_timer_lc(timer: i32) -> i64
+struct AwlTimerLcOpLowering : public OpConversionPattern<awl::TimerLcOp> {
+  using OpConversionPattern<awl::TimerLcOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::TimerLcOp op, awl::TimerLcOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i32 = rewriter.getI32Type();
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_timer_lc",
+                                rewriter.getFunctionType({i32}, {rewriter.getI64Type()}));
+    auto tC = rewriter.create<arith::ConstantOp>(
+        loc, i32, rewriter.getI32IntegerAttr(op.getTimer()));
+    auto v = rewriter.create<func::CallOp>(loc, fn, TypeRange{rewriter.getI64Type()},
+                                           ValueRange{tC})
+                 .getResult(0);
+    rewriter.replaceOpWithNewOp<arith::TruncIOp>(op, rewriter.getI32Type(), v);
+    return success();
+  }
+};
+
 struct AwlLoadOpLowering : public OpConversionPattern<awl::LoadOp> {
   using OpConversionPattern<awl::LoadOp>::OpConversionPattern;
   LogicalResult
@@ -2502,8 +2523,21 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
     };
     clearOs(); // OS (bit 4) is cleared when a block is called
     // CALL FB n, DB m: pass the instance DB number as the FB's i32 argument
+    mlir::Value savedDi, savedDb;
     if (auto dbAttr = op.getDb()) {
       auto i32 = rewriter.getI32Type();
+      // awlsim saves prevDbRegister/prevDiRegister in the call stack element
+      // and restores them when the callee returns (run_BE)
+      auto curDiFn = getOrInsertRtFunc(rewriter, mod, "scl_rt_current_di",
+                                       rewriter.getFunctionType({}, {i32}));
+      savedDi = rewriter.create<func::CallOp>(op.getLoc(), curDiFn,
+                                              TypeRange{i32}, ValueRange{})
+                    .getResult(0);
+      auto curDbFn = getOrInsertRtFunc(rewriter, mod, "scl_rt_current_db",
+                                       rewriter.getFunctionType({}, {i32}));
+      savedDb = rewriter.create<func::CallOp>(op.getLoc(), curDbFn,
+                                              TypeRange{i32}, ValueRange{})
+                    .getResult(0);
       if (dbAttr.value() == -1) {
         // multi-instance call (CALL #var): the instance DB is the current DI
         // register; awlsim also sets the DB register to it (cpu.py
@@ -2673,6 +2707,21 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
     }
     auto call = rewriter.create<func::CallOp>(op.getLoc(), op.getCallee(),
                                               TypeRange{}, args);
+    // awlsim insn_CALL.run clears these status bits after the call returns:
+    // OS=0, OR=0, STA=1, NER=0 (OV is preserved). Bits: NER=0 STA=2 OR=3 OS=4.
+    {
+      auto i8 = rewriter.getI8Type();
+      auto fn = getOrInsertRtFunc(rewriter, mod, "scl_rt_stw_set_bit",
+                                  rewriter.getFunctionType({i8, i8}, {}));
+      for (auto bv : {std::pair<int, int>{4, 0}, {3, 0}, {2, 1}, {0, 0}}) {
+        auto bitC = rewriter.create<arith::ConstantOp>(
+            op.getLoc(), i8, rewriter.getI8IntegerAttr(bv.first));
+        auto valC = rewriter.create<arith::ConstantOp>(
+            op.getLoc(), i8, rewriter.getI8IntegerAttr(bv.second));
+        rewriter.create<func::CallOp>(op.getLoc(), fn, TypeRange{},
+                                      ValueRange{bitC, valC});
+      }
+    }
     if (savedAr2) {
       auto i8 = rewriter.getI8Type();
       auto i64 = rewriter.getI64Type();
@@ -2683,6 +2732,17 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
           op.getLoc(), i8, rewriter.getI8IntegerAttr(2));
       rewriter.create<func::CallOp>(op.getLoc(), setFn, TypeRange{},
                                     ValueRange{arC, savedAr2});
+    }
+    if (savedDi) { // restore the DB/DI registers saved before the call
+      auto i32 = rewriter.getI32Type();
+      auto diFn = getOrInsertRtFunc(rewriter, mod, "scl_rt_set_current_di",
+                                    rewriter.getFunctionType({i32}, {}));
+      rewriter.create<func::CallOp>(op.getLoc(), diFn, TypeRange{},
+                                    ValueRange{savedDi});
+      auto dbFn = getOrInsertRtFunc(rewriter, mod, "scl_rt_set_current_db",
+                                    rewriter.getFunctionType({i32}, {}));
+      rewriter.create<func::CallOp>(op.getLoc(), dbFn, TypeRange{},
+                                    ValueRange{savedDb});
     }
     rewriter.replaceOp(op, call.getResults());
     return success();
@@ -3895,7 +3955,7 @@ void SclToStdLoweringPass::runOnOperation() {
       AwlNopOpLowering, AwlNotOpLowering, AwlOrLowering, AwlPackAreaOpLowering,
       AwlPackPtrOpLowering,
       AwlArGetOpLowering, AwlArSetOpLowering, AwlDbInfoOpLowering,
-      AwlArAddOpLowering, AwlIndirectOpLowering,
+      AwlArAddOpLowering, AwlIndirectOpLowering, AwlTimerLcOpLowering,
       AwlLoadBitIndirectOpLowering,
       AwlLoadIndirectOpLowering, AwlRealMathOpLowering, AwlSetDbOpLowering,
       AwlSetDbvOpLowering, AwlSetDbSizeOpLowering, AwlSetDbRefOpLowering,

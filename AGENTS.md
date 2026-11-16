@@ -141,7 +141,11 @@ has no `\b` — use python3 for regex edits.
   line). sclang driver exits 2 when scl_rt_assert_failures() > 0 after the
   cycle loop.
   Current: AWL 116/116 (100%), SCL single 15/15, SCL per-project 16/17,
-  JIT smoke 74/77 (96%), oracle (__ASSERT value-level) 41/53 (77%).
+  JIT smoke 74/77 (96%), oracle (__ASSERT value-level) 44/53 (83%).
+  Known flake (pre-existing at b7b6d1e, ~10% of runs): the LogMsg SCL
+  project intermittently fails with a garbage `unknown FB '<binary>'`
+  line — uninitialized string somewhere in SclGen, NOT caused by recent
+  changes; worth debugging (ASan build).
   lit is 114/114. OB-temp presets (OB1 header) are written at OB entry
   (scl_rt_ob_start); the JIT driver runs the startup OB (OB 102 on a
   4-accu CPU, else OB 100) before the OB 1 cycles; __FEATURE t [, v] is
@@ -175,6 +179,17 @@ has no `\b` — use python3 for regex edits.
   Single-quoted literals 'AB' pack chars big-endian ('ABCD' = 0x41424344);
   double-quoted are names/symbols. DATA_BLOCK "Name" gets a stable DB number
   (namedDbs, from 100) so "Name".member resolves symbolically.
+- awlsim status/logic details: after CALL/UC returns, OS=0 OR=0 STA=1 NER=0
+  (OV preserved); CALL FB n,DB m saves+restores the DB/DI registers around
+  the call (awlsim prevDb/prevDiRegister); CLR sets NER=0, so the next U/O
+  computes from the neutral accumulator (rloFresh in AwlGen) — U x after CLR
+  yields x, not 0. LC T n loads the timer value in S5TIME format
+  (awl.timer_lc -> scl_rt_timer_lc, ABI v10 vtable entry appended at END).
+  ANY headers for FB statics use area 0x84 + runtime DINO as DB word and
+  bake the AR2 multi-instance base into the pointer (awlsim
+  _trans_anyPointerFromDI); ARRAY operands set the element count as
+  repetition factor. SFC 21 fails with E_DBNOTEXIST only when the DB is
+  really not loaded (DB numbers are NOT limited to 0xFF — tests use DB 900).
   DI-area S7 pointers (area 0x85) decode to
   db=0xFFFF which resolves to the DI register; FB calls emit
   `scl_rt_set_current_di(db)` so `DIW…`/`P##var` work inside FBs.

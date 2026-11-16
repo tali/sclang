@@ -161,6 +161,7 @@ SimState &state() {
   return s;
 }
 
+
 /// Byte offset of the AR2 multi-instance base (awlsim adds the AR2 base to
 /// every DI-area access, see cpu.py getArea_DI/setArea_DI).
 static uint32_t ar2ByteOff() {
@@ -217,6 +218,23 @@ std::vector<uint8_t> &bufferFor(uint8_t area, uint32_t db, uint32_t &byteOff,
 }
 
 } // namespace
+
+// LC T n: timer current value in S5TIME format — BCD-packed value in bits
+// 0-11 plus the time base in bits 12-13 (awlsim Timer.getTimevalS5T).
+int64_t scl_rt_timer_lc(uint32_t n) {
+  auto &s = state();
+  if (s.vtable && s.vtable->timer_lc)
+    return s.vtable->timer_lc(n);
+  auto &tm = s.timers[n];
+  timerCheck(tm, s.clockMs);
+  uint64_t unit = kTimeBaseMs[tm.timebase & 3];
+  uint64_t bin = unit ? (tm.remainingMs + unit / 2) / unit : 0;
+  if (bin > 999)
+    bin = 999;
+  uint32_t bcd = (uint32_t)(bin % 10) | ((uint32_t)((bin / 10) % 10) << 4) |
+                 ((uint32_t)((bin / 100) % 10) << 8);
+  return (int64_t)(((uint64_t)(tm.timebase & 3) << 12) | bcd);
+}
 
 extern "C" {
 
@@ -1168,7 +1186,9 @@ void scl_rt_sfc(uint32_t n) {
                      uint32_t &outDb) -> int {
     if (area == 0x84 || area == 0x85) {
       uint32_t dbNr = anyWord(base, 4);
-      if (dbNr == 0 || dbNr >= 0x100)
+      // awlsim system_sfc_21: E_DBNOTEXIST if DB 0 or the DB is not loaded
+      // (DB numbers are not limited to 0xFF; tests use e.g. DB 900)
+      if (dbNr == 0 || !s.dbs.count(dbNr))
         return 1;
       outArea = SCL_RT_AREA_DB;
       outDb = dbNr;

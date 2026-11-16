@@ -1609,6 +1609,7 @@ private:
   llvm::SmallVector<mlir::Value, 4> acc;
   mlir::Value rlo;
   bool rloActive = false;
+  bool rloFresh = false; // NER == 0 (after CLR / at block start): next U/O is neutral
   // true while the current statement is a logic-chain op (U/O/A/NOT/X/...):
   // awlsim sets NER=0 on all other instructions, so the next statement's
   // first U/O starts a fresh chain (VKE = operand)
@@ -2350,6 +2351,7 @@ private:
     acc.clear();
     rlo = nullptr;
     rloActive = false;
+    rloFresh = true; // NER = 0 at block start
     brackets.clear();
 
     // header lines between the block header and BEGIN (TITLE, VERSION, ...)
@@ -2435,6 +2437,7 @@ private:
         acc.clear();
         rlo = nullptr;
         rloActive = false;
+        rloFresh = true; // NER = 0 at block/statement-chain start
         brackets.clear();
         continue;
       }
@@ -2690,9 +2693,10 @@ private:
       return true;
     }
     if (m == "CLR") {
-      stmtLogic = true; // RLO := 0
+      stmtLogic = true; // RLO := 0, NER := 0 (awlsim insn_clr)
       rlo = builder.create<awl::ConstOp>(loc(), builder.getI1Type(),
                                           builder.getIntegerAttr(builder.getI1Type(), 0));
+      rloFresh = true; // next U/O starts from the neutral accumulator
       rloActive = true;
       return true;
     }
@@ -3030,8 +3034,24 @@ private:
       builder.create<awl::SleepOp>(loc(), builder.getI32IntegerAttr((int32_t)ms));
       return true;
     }
-    if (m == "LC") // LC Z n: load counter value into ACCU1
-      return parseLoad();
+    if (m == "LC") {
+      // LC T n: timer current value in S5TIME format (awlsim getTimevalS5T);
+      // LC Z n and others load like L.
+      if (lexer.getCurToken() == Tok::ident && !lexer.curQuoted() &&
+          upperIdent() == "T" && lexer.curLine() == insnLine) {
+        std::string w = upperIdent();
+        lexer.next();
+        int32_t n = 0;
+        if (lexer.getCurToken() == Tok::integer) {
+          n = (int32_t)lexer.getInteger();
+          lexer.next();
+        }
+        acc.push_back(builder.create<awl::TimerLcOp>(
+            loc(), builder.getI32Type(), builder.getI32IntegerAttr(n)));
+        return true;
+      }
+      return parseLoad(); // LC Z n: load counter value into ACCU1
+    }
     if (m == "FP" || m == "FN") // edge memory not modelled: approximated
       return parseRloLogic(m == "FP" ? "U" : "UN"); // by U/UN
     if (m == "SAVE" || m == "MCRA" || m == "MCRD")
@@ -3381,6 +3401,9 @@ private:
   bool ensureRlo() {
     // The RLO value persists across statements (awlsim: VKE is only changed
     // by logic ops); only a completely fresh chain starts from RLO = 1.
+    // awlsim's NER bit models this: after CLR (or at block start) NER = 0,
+    // and the next U/O computes VKE = ((VKE | !NER) & STA) | (OR & NER),
+    // i.e. the accumulator behaves as neutral 1 for the first AND-chain op.
     if (!rlo)
       rlo = builder.create<awl::ConstOp>(loc(), builder.getI1Type(),
                                           builder.getIntegerAttr(builder.getI1Type(), 1));
@@ -4262,10 +4285,12 @@ private:
     bool neg = (m == "UN" || m == "ON");
     auto i1 = builder.getI1Type();
     // a fresh logic chain starts from 1 for U/A and from 0 for O
-    // (awlsim: with NER=0, VKE = STA, i.e. the first operand itself)
-    if (!rloActive) {
+    // (awlsim: with NER=0, VKE = STA, i.e. the first operand itself;
+    // NER=0 holds after CLR and at block start — rloFresh)
+    if (!rloActive || rloFresh) {
       rlo = builder.create<awl::ConstOp>(
           loc(), i1, builder.getIntegerAttr(i1, isOr ? 0 : 1));
+      rloFresh = false;
       rloActive = true;
     }
     // U/O TRUE/FALSE: constant RLO operand (awlsim extension)
@@ -5181,20 +5206,20 @@ private:
       return true;
     }
     bool isAnyVar = false;
+    const MemberInfo *opMember = nullptr; // for ARRAY repCount/elemType
     if (lexer.getCurToken() == Tok::localvar) {
       std::string vname = upperStr(lexer.getIdent());
-      const MemberInfo *mi = nullptr;
       if (curLayout) {
         auto it = curLayout->members.find(vname);
         if (it != curLayout->members.end())
-          mi = &it->second;
+          opMember = &it->second;
       }
-      if (!mi && curTempLayout) {
+      if (!opMember && curTempLayout) {
         auto it = curTempLayout->members.find(vname);
         if (it != curTempLayout->members.end())
-          mi = &it->second;
+          opMember = &it->second;
       }
-      if (mi && mi->type == "ANY")
+      if (opMember && opMember->type == "ANY")
         isAnyVar = true;
     }
     mlir::Value a = parseOperand(false);
@@ -5215,10 +5240,31 @@ private:
     if (!dt)
       return true; // not an addressable operand: nothing to point at
     int32_t width = dt.getWidth();
+    int32_t repCount = 1;
     int32_t typeCode = width == 1   ? 0x01
                        : width == 8 ? 0x02
                        : width == 16 ? 0x04
                                      : 0x06;
+    if (opMember && opMember->type == "ARRAY") {
+      // ANY of an ARRAY: element type code + element count (awlsim
+      // makeANYPointer by element type/width)
+      repCount = opMember->count > 0 ? opMember->count : 1;
+      std::string et = upperStr(opMember->elemType);
+      int32_t ew = 32;
+      if (et == "BOOL") ew = 1;
+      else if (et == "BYTE" || et == "CHAR") ew = 8;
+      else if (et == "WORD" || et == "INT" || et == "DATE" || et == "S5TIME" ||
+               et == "BLOCK_DB" || et == "BLOCK_FB" || et == "COUNTER" ||
+               et == "TIMER") ew = 16;
+      else if (et == "DWORD" || et == "DINT" || et == "REAL" ||
+               et == "TIME" || et == "TOD") ew = 32;
+      else if (et == "DATE_AND_TIME") ew = 64;
+      typeCode = ew == 1 ? 0x01
+               : ew == 8 ? 0x02
+               : ew == 16 ? 0x04
+               : ew == 64 ? 0x0E
+                          : 0x06;
+    }
     int32_t areaS7 =
         dt.getArea() == mlir::scl::DirectArea::Input    ? 0x81
         : dt.getArea() == mlir::scl::DirectArea::Output ? 0x82
@@ -5228,10 +5274,11 @@ private:
     int32_t pdb = dt.getArea() == mlir::scl::DirectArea::DataBlock
                       ? dt.getDb()
                       : 0;
-    if (pdb == 0 && dt.getArea() == mlir::scl::DirectArea::DataBlock)
-      areaS7 = 0x85; // instance DB
+    bool isInstance = pdb == -1; // FB static: current DI at runtime
+    if (isInstance)
+      areaS7 = 0x84; // awlsim _trans_anyPointerFromDI: area DB + open DI nr
     uint32_t ptr = ((uint32_t)areaS7 << 24) |
-                   ((uint32_t)(pdb & 0xFF) << 16) |
+                   ((uint32_t)(isInstance ? 0 : (pdb & 0xFF)) << 16) |
                    ((uint32_t)(dt.getByte() & 0x1FFF) << 3) |
                    (uint32_t)(dt.getBit() & 7);
     auto put = [&](int32_t i, int32_t w, int32_t val) {
@@ -5239,11 +5286,37 @@ private:
           loc(), constInt(builder.getI32Type(), val),
           mkDirect(area, db, byte + i, 0, w));
     };
+    auto putV = [&](int32_t i, int32_t w, mlir::Value val) {
+      builder.create<awl::StoreOp>(loc(), val,
+                                   mkDirect(area, db, byte + i, 0, w));
+    };
     put(0, 8, 0x10);          // magic
     put(1, 8, typeCode);      // data type
-    put(2, 16, 1);            // repetition
-    put(4, 16, pdb);          // DB number
-    put(6, 32, (int32_t)ptr); // S7 pointer
+    put(2, 16, repCount);     // repetition factor
+    if (isInstance) {
+      // DB number = the currently open instance DB (awlsim: diRegister)
+      mlir::Value dino = builder.create<awl::DbInfoOp>(
+          loc(), builder.getI64Type(), builder.getI32IntegerAttr(3),
+          builder.getI32IntegerAttr(0));
+      putV(4, 16, castTo(dino, builder.getI32Type()));
+      // bake the AR2 multi-instance base into the pointer (awlsim
+      // _trans_anyPointerFromDI adds the AR2 base for instance data)
+      mlir::Value ar2 = builder.create<awl::ArGetOp>(
+          loc(), builder.getI64Type(), builder.getI32IntegerAttr(2));
+      mlir::Value baseBits = builder.create<awl::AndOp>(
+          loc(), builder.getI64Type(), ar2,
+          constInt(builder.getI64Type(), 0xFFFFFF));
+      mlir::Value bits = builder.create<awl::AddOp>(
+          loc(), builder.getI64Type(), baseBits,
+          constInt(builder.getI64Type(), (int64_t)dt.getByte() * 8 + dt.getBit()));
+      mlir::Value ptrV = builder.create<awl::OrOp>(
+          loc(), builder.getI64Type(), bits,
+          constInt(builder.getI64Type(), (int64_t)0x84 << 24));
+      putV(6, 32, castTo(ptrV, builder.getI32Type()));
+    } else {
+      put(4, 16, pdb);        // DB number
+      put(6, 32, (int32_t)ptr); // S7 pointer
+    }
     return true;
   }
 

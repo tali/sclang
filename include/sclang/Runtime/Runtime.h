@@ -170,6 +170,9 @@ typedef struct SclRtVTable {
   void (*sfc)(uint32_t n); ///< run SFC n (params staged at the marker area)
   void (*ob_start)(uint32_t obNum); ///< write the OB-temp preset header
   uint64_t (*ar_add)(uint8_t ar, uint32_t offBits); // returns new ptr
+  /* Appended for LC T n (v10): timer current value in S5TIME format. May be
+     NULL in older host runtimes; the sim then handles it itself. */
+  int64_t (*timer_lc)(uint32_t t);
   int64_t (*read_indirect)(uint64_t ptr, uint8_t widthBytes);
   void (*write_indirect)(uint64_t ptr, int64_t value, uint8_t widthBytes);
   bool (*read_bit_indirect)(uint64_t ptr);
@@ -214,6 +217,7 @@ void scl_rt_register(const SclRtVTable *vtable);
 /// db == 0 refers to the current DB (set by AUF/OPN DB n).
 void scl_rt_set_current_db(uint32_t db);
 uint32_t scl_rt_current_db(void);
+int64_t scl_rt_timer_lc(uint32_t n); // LC T n: S5TIME-format current value
 void scl_rt_ar_set(uint8_t ar, uint64_t ptr);
 uint64_t scl_rt_ar_get(uint8_t ar);
 /// Pointer = AR<ar> + offBits (added to the byte/bit field), repacked.

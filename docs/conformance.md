@@ -71,7 +71,7 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 - SCL per project: **16/17 pass (94%)**
 - JIT smoke (files with OB 1, full pipeline + execution): **74/77 pass (96%)**
 - Oracle (`__ASSERT` files with OB 1, value-level, exit code must be 0):
-  **41/53 pass (77%)** — see "Oracle tier" below (STW/status-bit asserts
+  **44/53 pass (83%)** — see "Oracle tier" below (STW/status-bit asserts
   are evaluated; remaining failures are real value gaps, see the list)
 
 ## Remaining failures = documented gaps
@@ -167,13 +167,18 @@ actual/expected):
   anypointer/array expect 0x87 VL-area P## pointers for FC params with the
   implicit DB-pointer calling convention; pointer.awl aborts on a DB
   out-of-bounds after the same change — needs the VL frame model),
-  insn_CALL:411 (OV after call), any-to-instance-db:60 (SFC 21 RET_VAL),
-  insn_SI:109 (LC T current timer value), GE_DT BCD-fail RET_VAL-untouched
-  (fc12:616/634), startup_multiple nrAccus=2 (we default 4 — accepted),
+  GE_DT BCD-fail RET_VAL-untouched (fc12:616/634),
+  startup_multiple nrAccus=2 (we default 4 — accepted),
   string.awl JIT timeout, infinite-recursion (stack overflow guard).
   Fixed since the last count: symbols:60 (quoted DATA_BLOCK names),
   immediates:27 (P#DBX byte offset), insn_MISC (TAR swap, POP, +ARn,
-  char literals), insn_CALL_multiinstance + clockmem (AR2 = 0x84 packing).
+  char literals), insn_CALL_multiinstance + clockmem (AR2 = 0x84 packing),
+  insn_CALL:411 (post-call STW clear), any-to-instance-db (SFC 21 FILL with
+  instance-DB ANY pointers: DINO db word + AR2 base + ARRAY repCount),
+  insn_SI:109/142/145 (LC T S5TIME encoding; NER semantics after CLR).
+- known flake: the LogMsg SCL project fails intermittently (~10%) with a
+  garbage `unknown FB` diagnostic — pre-existing uninitialized-memory bug
+  in SclGen (reproduces at b7b6d1e), unrelated to AWL work.
 
 The floor in `run_conformance.py` (`FLOOR_ORACLE = 0.15`) guards against
 regressions.

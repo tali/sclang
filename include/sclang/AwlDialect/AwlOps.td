@@ -81,6 +81,15 @@ def ConstOp : AwlOp<"const", [Pure, ConstantLike]> {
 
 // MARK: load / store (L / T)
 
+// LC T n: load the timer's current value as S5TIME (BCD value + timebase
+// bits 12-13), per awlsim Timer.getTimevalS5T.
+def TimerLcOp : AwlOp<"timer_lc", [Pure]> {
+  let summary = "LC T n: timer current value in S5TIME format";
+  let arguments = (ins I32Attr:$timer);
+  let results = (outs I32:$result);
+  let assemblyFormat = "attr-dict $timer `->` type($result)";
+}
+
 def LoadOp : AwlOp<"load"> {
   let summary = "L: load ACC1 from an operand";
   let arguments = (ins Awl_Direct:$addr);
