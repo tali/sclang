@@ -973,11 +973,12 @@ static void typeInfo(const std::string &ty, const std::map<std::string, Layout> 
   }
   if (ty == "ANY") { size = 10; align = 2; widthBits = 80; return; } // ANY hdr
   if (ty == "POINTER") { size = 6; align = 2; widthBits = 48; return; }
-  if (ty.rfind("STRING", 0) == 0) { // STRING[n]: n+2 bytes
+  if (ty.rfind("STRING", 0) == 0) { // STRING[n]: n+2 bytes, even-aligned
+    // (awlsim: element size is (n+2) rounded up to a multiple of 2)
     int n = 254;
     if (ty.size() > 6)
       n = atoi(ty.c_str() + 6);
-    size = n + 2; align = 2; widthBits = size * 8; return;
+    size = (n + 2 + 1) & ~1; align = 2; widthBits = size * 8; return;
   }
   auto it = udts.find(ty);
   if (it != udts.end()) {
@@ -1059,6 +1060,18 @@ static void parseStructBody(Lexer &lx, Layout &layout,
         std::string et = typeNameOf(lx);
         if (et.empty())
           et = "INT";
+        if (et == "STRING" && lx.getCurToken() == Tok::lbracket) {
+          // ARRAY [..] OF STRING[n]: keep the dimension in the elem type
+          lx.next();
+          if (lx.getCurToken() == Tok::integer) {
+            et = "STRING" + std::to_string(lx.getInteger());
+            lx.next();
+          }
+          while (lx.getCurToken() != Tok::rbracket && lx.getCurToken() != Tok::eof)
+            lx.next();
+          if (lx.getCurToken() == Tok::rbracket)
+            lx.next();
+        }
         int32_t esize, ealign, ewidth;
         bool ebit;
         typeInfo(et, udts, esize, ealign, ewidth, ebit);
@@ -2176,6 +2189,17 @@ private:
       }
       addr = mkDirect(mlir::scl::DirectArea::DataBlock, effDb(dbOverride), byte,
                       bit, width);
+      // remember the member's type for the RHS handler (e.g. STRING literal;
+      // for ARRAY OF STRING the element type is what matters)
+      auto lit2 = dbLayouts.find(effDb(dbOverride));
+      if (lit2 != dbLayouts.end()) {
+        auto it2 = lit2->second.members.find(symName);
+        if (it2 != lit2->second.members.end()) {
+          lastOperandType = it2->second.type == "ARRAY"
+                               ? it2->second.elemType
+                               : it2->second.type;
+        }
+      }
     }
     if (!addr) {
       lexer.nextLine();
@@ -2192,6 +2216,30 @@ private:
     mlir::Value val;
     if (lexer.getCurToken() == Tok::ident) {
       std::string w = upperIdent();
+      if (lexer.curQuoted() && lexer.curQuoteChar() == '\'' &&
+          lastOperandType.rfind("STRING", 0) == 0 &&
+          mlir::isa<mlir::scl::DirectType>(addr.getType())) {
+        // VAR := 'literal': store current length at byte 1 and the chars
+        // from byte 2 (byte 0 = max length, set at declaration init)
+        auto dt = mlir::cast<mlir::scl::DirectType>(addr.getType());
+        std::string raw = lexer.getIdent().str();
+        lexer.next();
+        auto putB = [&](int32_t off, int32_t v) {
+          builder.create<awl::StoreOp>(
+              loc(), constInt(builder.getI32Type(), v),
+              mkDirect(dt.getArea(), dt.getDb(), dt.getByte() + off, 0, 8));
+        };
+        putB(1, (int32_t)raw.size());
+        for (size_t i = 0; i < raw.size(); ++i)
+          putB(2 + (int32_t)i, (unsigned char)raw[i]);
+        // awlsim zero-fills the rest of the string up to the declared maxlen
+        int32_t maxlen = lastOperandType.size() > 6
+                             ? atoi(lastOperandType.c_str() + 6)
+                             : 254;
+        for (int32_t i = (int32_t)raw.size(); i < maxlen; ++i)
+          putB(2 + i, 0);
+        return true;
+      }
       if (w == "TRUE" || w == "FALSE") {
         auto i1 = builder.getI1Type();
         val = builder.create<awl::ConstOp>(
@@ -5012,10 +5060,31 @@ private:
       if (cursor > hw)
         hw = cursor;
     }
+    bool stringIndexed = false; // STRING[i] set an explicit char width
     while (true) {
       // [i] index?
-      if (lexer.getCurToken() == Tok::lbracket)
-        addBits(byte, bit, consumeArrayIndices(mi));
+      if (lexer.getCurToken() == Tok::lbracket) {
+        if (mi && mi->type.rfind("STRING", 0) == 0) {
+          // STRING[i]: char access — chars start at byte 2, one byte each
+          lexer.next();
+          int32_t idx = 1;
+          if (lexer.getCurToken() == Tok::integer) {
+            idx = (int32_t)lexer.getInteger();
+            lexer.next();
+          }
+          while (lexer.getCurToken() != Tok::rbracket &&
+                 lexer.getCurToken() != Tok::eof)
+            lexer.next();
+          if (lexer.getCurToken() == Tok::rbracket)
+            lexer.next();
+          byte += 2 + (idx - 1);
+          bit = 0;
+          width = 8;
+          stringIndexed = true;
+        } else {
+          addBits(byte, bit, consumeArrayIndices(mi));
+        }
+      }
       if (lexer.getCurToken() == Tok::dot) {
         lexer.next();
         if (lexer.getCurToken() == Tok::ident ||
@@ -5057,7 +5126,7 @@ private:
       }
       break;
     }
-    if (mi) {
+    if (mi && !stringIndexed) {
       width = mi->widthBits ? mi->widthBits : width;
       if (width == 1)
         bit = mi->bit;

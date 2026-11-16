@@ -167,7 +167,8 @@ actual/expected):
   array:264 expect the implicit 6-byte DB-pointer content in FC param slots
   and 0x87 = parent-L-frame deref — needs the VL frame model;
   pointer:45 TARn-operand store; anypointer:166+ string-length asserts;
-  string.awl:361+ DB string initializers don't set the length byte),
+  string.awl FC string-param slots need the implicit 6-byte POINTER +
+  VL-frame model like dbpointer),
   GE_DT BCD-fail RET_VAL-untouched (fc12:616/634),
   startup_multiple nrAccus=2 (we default 4 — accepted),
   string.awl JIT timeout, infinite-recursion (stack overflow guard).
@@ -179,7 +180,9 @@ actual/expected):
   insn_SI:109/142/145 (LC T S5TIME encoding; NER semantics after CLR),
   fc12_ge_dt:616 (OUT params staged with current value — BCD-fail leaves
   RET_VAL untouched), pointer-area asserts (LARn/TARn accu semantics),
-  anypointer:127 (ANY ptr dword = P#DBX style, db field 0).
+  anypointer:127 (ANY ptr dword = P#DBX style, db field 0),
+  string DB-init string initializers (len byte + chars + zero-fill,
+  STRING[n] even-aligned size, STRING[i] char access).
 - known flake: the LogMsg SCL project fails intermittently (~10%) with a
   garbage `unknown FB` diagnostic — pre-existing uninitialized-memory bug
   in SclGen (reproduces at b7b6d1e), unrelated to AWL work.

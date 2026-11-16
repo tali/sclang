@@ -142,6 +142,10 @@ has no `\b` — use python3 for regex edits.
   cycle loop.
   Current: AWL 116/116 (100%), SCL single 15/15, SCL per-project 16/17,
   JIT smoke 75/77 (97%), oracle (__ASSERT value-level) 46/53 (87%).
+  String handling: `VAR := 'lit'` in DB-init/statement stores len @+1, chars
+  @+2.., zero-fills to maxlen; STRING[n] size is (n+2) even-aligned;
+  ARRAY OF STRING[n] keeps the dim in elemType; STRING[i] = char at +2+(i-1)
+  width 8 (stringIndexed flag in resolveDbMember).
   Known flake (pre-existing at b7b6d1e, ~10% of runs): the LogMsg SCL
   project intermittently fails with a garbage `unknown FB '<binary>'`
   line — uninitialized string somewhere in SclGen, NOT caused by recent
