@@ -161,7 +161,9 @@ has no `\b` — use python3 for regex edits.
   <spec ref> [(full|approx|gap)]` comment (lang = AWL/STL or SCL/ST) at its
   implementation site (AwlGen dispatch, AwlOps.td ops, lowerings, runtime
   fns, tests); a reason may follow the status (`(approx: reason)`) and
-  still counts as that status, never as full. `docs/spec-conformance.md`
+  still counts as that status, never as full. The status MUST be the
+  trailing parenthesized token of the tag — an `(approx: ...)` in the middle
+  of the text parses as full (put `-> where` before it). `docs/spec-conformance.md`
   contains a matrix GENERATED from
   those tags by `test/conformance/gen_spec_matrix.py` — after adding or
   changing a SPEC tag, ALWAYS regenerate it (`python3

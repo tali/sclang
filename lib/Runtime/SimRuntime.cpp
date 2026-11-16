@@ -1704,6 +1704,7 @@ void scl_rt_ob_start(uint32_t obNum) {
     s.vtable->ob_start(obNum);
     return;
   }
+  // SPEC[AWL] Siemens AWL manual status word (STW) cleared at OB entry (awlsim statusWord.reset) -> scl_rt_ob_start
   s.stw = 0; // STW is cleared at OB entry (awlsim statusWord.reset)
   if (obNum != 1)
     return; // OBTempPresets_table only has OB 1

@@ -5414,6 +5414,7 @@ private:
   bool resolveDbMember(int32_t db, const std::string &dw, bool bitCtxt,
                        int32_t &byte, int32_t &bit, int32_t &width,
                        std::string *typeOut = nullptr) {
+    // SPEC[AWL] Siemens AWL manual symbolic DB members (DBn.SYMBOL...) resolved through the DATA_BLOCK layout (approx: a member missing from a declared DB resolves to DBW 0/DBX 0.0 of that DB)
     byte = 0;
     bit = 0;
     width = bitCtxt ? 1 : 16;
@@ -5432,6 +5433,7 @@ private:
     } else {
       // no DATA_BLOCK declaration: auto-assign the symbolic member in
       // order of first use, sized by the access width
+      // SPEC[AWL] Siemens AWL manual symbolic DB members of undeclared DBs, auto-assigned offsets in order of first use (awlsim symbol tables) -> autoDbCursor branch of resolveDbMember (approx: DB contents are runtime memory, so the synthetic offset only fixes the address, not the value)
       int32_t key = effDb(db);
       int32_t w = bitCtxt ? 1 : 16;
       int32_t stride = w >= 16 ? 2 : 1;
