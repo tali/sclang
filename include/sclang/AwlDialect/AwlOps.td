@@ -48,6 +48,7 @@ def BlockOp : AwlTopLevelOp<"block", [Symbol]> {
 // MARK: operands and constants
 
 // A memory-area / DB operand, e.g. M 10.3 or DB1.DBW 4 -> !scl.direct<...>
+// SPEC[AWL] Siemens AWL manual "Addressing": absolute memory operand -> !scl.direct<area, db, byte, bit, width> (see docs/design/memory-areas.md)
 def DirectOp : AwlOp<"direct", [Pure, ConstantLike]> {
   let summary = "a directly-represented operand (memory area / DB)";
   let description = [{
@@ -90,6 +91,7 @@ def TimerLcOp : AwlOp<"timer_lc", [Pure]> {
   let assemblyFormat = "attr-dict $timer `->` type($result)";
 }
 
+// SPEC[AWL] IEC 61131-3 STL load (L) / status-word reads -> awl.load
 def LoadOp : AwlOp<"load"> {
   let summary = "L: load ACC1 from an operand";
   let arguments = (ins Awl_Direct:$addr);
@@ -102,6 +104,7 @@ def LoadOp : AwlOp<"load"> {
   let assemblyFormat = "attr-dict $addr `:` type($addr) `->` type($result)";
 }
 
+// SPEC[AWL] IEC 61131-3 STL transfer (T) / bit set-reset (S/R) -> awl.store
 def StoreOp : AwlOp<"store"> {
   let summary = "T: store ACC1 to an operand";
   let arguments = (ins AnyType:$value, Awl_Direct:$addr);
@@ -191,6 +194,7 @@ def CastOp : AwlOp<"cast"> {
 // through the carry bit (approximated as rld/rrd — the sim does not track
 // the STW carry). The amount is clamped to the operand width (S7 semantics:
 // counts >= width behave like the width).
+// SPEC[AWL] Siemens AWL manual shift/rotate (SLW/SRW/SSI/SSD/SLD/SRD/RLD/RRD/RLDA/RRDA) -> awl.shift
 def ShiftOp : AwlOp<"shift"> {
   let summary = "SLW/SRW/SSI/SSD/SLD/SRD/RLD/RRD/RLDA/RRDA: shift/rotate ACCU1";
   let arguments = (ins StrAttr:$kind, I32:$value, I32:$amount);
@@ -200,6 +204,7 @@ def ShiftOp : AwlOp<"shift"> {
 
 // Unary real math on ACCU1 (f32): kind is abs, negr, sin, cos, tan, asin,
 // acos, atan, sqrt, exp, ln (lowercase mnemonic).
+// SPEC[AWL] Siemens AWL manual real arithmetic (ABS/NEGR/SIN/...) -> awl.real_math (approx)
 def RealMathOp : AwlOp<"real_math"> {
   let summary = "ABS/NEGR/SIN/COS/TAN/ASIN/ACOS/ATAN/SQRT/EXP/LN: unary real math";
   let arguments = (ins StrAttr:$kind, F32:$value);
@@ -246,6 +251,7 @@ def JumpIfNotOp : AwlOp<"jump_if_not"> {
   let assemblyFormat = "attr-dict $rlo `,` $label `:` type($rlo)";
 }
 
+// SPEC[AWL] IEC 61131-3 STL block call (CALL/UC/CC) -> awl.call (FC VL params, FB instance DB, SFC/SFB runtime)
 def CallOp : AwlOp<"call", [DeclareOpInterfaceMethods<CallOpInterface>]> {
   let summary = "CALL/UC/CC: call a block (FC/OB n, or FB n with instance DB m); CC calls only if RLO = 1";
   // FC parameters (a variadic argument list) are not supported yet; the
@@ -370,6 +376,7 @@ def SleepOp : AwlOp<"sleep"> {
 
 // __ASSERT==/__ASSERT<>... (awlsim test oracles): runtime value check.
 // op: 0 ==, 1 !=, 2 >, 3 <, 4 >=, 5 <=. id is the source line for diagnostics.
+// SPEC[AWL] awlsim test oracle __ASSERT<cmp> -> awl.assert/assert_r -> scl_rt_assert_cmp[_r]
 def AssertOp : AwlOp<"assert"> {
   let summary = "__ASSERT: integer runtime oracle check";
   let arguments = (ins I32Attr:$id, I8Attr:$op, I64:$actual, I64:$expected);
@@ -420,6 +427,7 @@ def SetDbRefOp : AwlOp<"set_db_ref"> {
 
 // __FEATURE target [, value]: get/set CPU feature flags (target 0 = number
 // of accumulator registers, 1 = OB-temp presets enabled). value = -1: get.
+// SPEC[AWL] awlsim __FEATURE t [, v] -> awl.feature -> scl_rt_feature
 def FeatureOp : AwlOp<"feature"> {
   let summary = "__FEATURE test directive: get/set a CPU feature flag";
   let arguments = (ins I32Attr:$target, I32Attr:$value);
@@ -438,6 +446,7 @@ def DbInfoOp : AwlOp<"db_info", [Pure]> {
 }
 
 // AUF/OPN DB n: set the current DB register (DB 0 operands then refer to it).
+// SPEC[AWL] Siemens AWL manual AUF/OPN DB n -> awl.set_db / set_dbv / set_div (DB/DI registers, ABI v5)
 def SetDbOp : AwlOp<"set_db"> {
   let summary = "AUF/OPN DB n: set the current DB register";
   let arguments = (ins I32Attr:$db);
@@ -477,6 +486,7 @@ def SetDbvOp : AwlOp<"set_dbv"> {
 
 // LAR1/LAR2 <operand>: load a packed pointer (i64, as produced by awl.direct)
 // into address register 1 or 2.
+// SPEC[AWL] Siemens AWL manual LARn/TARn -> awl.ar_set/ar_get/ar_raw (packed internal AR, raw S7 on TAR to memory)
 def ArSetOp : AwlOp<"ar_set"> {
   let summary = "LAR1/LAR2/TAR1: set address register from a packed pointer";
   // AnyType: a !scl.direct operand (LAR1 DB1.DBW 4) converts to the packed
@@ -513,6 +523,7 @@ def ArAddOp : AwlOp<"ar_add", [Pure]> {
 
 // B/W/D [AR1, P#x.y] etc.: packed pointer = AR<ar> + offBits (bit offset),
 // returned as i64 (also stored back into the AR).
+// SPEC[AWL] Siemens AWL manual indirect addressing [ARn, P#x.y] -> awl.indirect (AR + bit offset)
 def IndirectOp : AwlOp<"indirect", [Pure]> {
   let summary = "[AR1, P#x.y]: address register plus bit offset";
   let arguments = (ins I32Attr:$ar, I32Attr:$offBits);
@@ -521,6 +532,7 @@ def IndirectOp : AwlOp<"indirect", [Pure]> {
 }
 
 // L [AR1, P#x.y] / LC: indirect load of widthBits bits through a packed ptr.
+// SPEC[AWL] Siemens AWL manual indirect load (L B/W/D [ARn, P#x.y]) -> awl.load_indirect
 def LoadIndirectOp : AwlOp<"load_indirect"> {
   let summary = "L/LC [AR1, ...]: indirect load through a packed pointer";
   let arguments = (ins I64:$ptr, I32Attr:$widthBits);
@@ -529,6 +541,7 @@ def LoadIndirectOp : AwlOp<"load_indirect"> {
 }
 
 // T [AR1, P#x.y]: indirect store of widthBits bits through a packed pointer.
+// SPEC[AWL] Siemens AWL manual indirect store (T B/W/D [ARn, P#x.y]) -> awl.store_indirect
 def StoreIndirectOp : AwlOp<"store_indirect"> {
   let summary = "T [AR1, ...]: indirect store through a packed pointer";
   let arguments = (ins I64:$value, I64:$ptr, I32Attr:$widthBits);

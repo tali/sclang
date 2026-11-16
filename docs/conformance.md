@@ -1,5 +1,9 @@
 # External conformance testing
 
+For *which* specifications this is tested and how to trace a spec item to
+code and tests, see [spec-conformance.md](spec-conformance.md) (generated
+from `SPEC[...]` tags in the sources).
+
 Publicly available SCL/AWL sources are used as a conformance corpus to test
 the compiler end to end. The corpora are **not** committed to this repo
 (licenses); they live outside the tree and the test suite skips gracefully

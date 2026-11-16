@@ -1,4 +1,5 @@
 // RUN: sclang-gen -x awl --emit=mlir-std %s | FileCheck %s
+// SPEC[AWL] IEC 61131-3 STL memory areas P/Q/M/DB/DI/L/T/C and direct operands
 // AWL memory areas: DBn operands map to area 'D' with the DB number,
 // bit operands (X) use the bit ABI, word operands (W) the byte ABI.
 // CHECK-DAG: func.func private @scl_rt_read_bit(i8, i32, i32, i8) -> i1

@@ -2720,11 +2720,13 @@ private:
   }
 
   bool parseIdentInstruction(const std::string &m, const std::string &blockName) {
+    // SPEC[AWL] IEC 61131-3 STL block end (BE/BEA/BEU), Siemens AWL manual "Block end"
     if (m == "BE" || m == "BEA" || m == "BEU") {
       builder.create<awl::BeOp>(loc());
       blockEnded = true;
       return true;
     }
+    // SPEC[AWL] IEC 61131-3 STL conditional block end (BEB/BEC), Siemens AWL manual
     if (m == "BEB" || m == "BEC") {
       // BEB: end block if RLO = 1; BEC: end block if RLO = 0
       if (!ensureRlo())
@@ -2735,6 +2737,7 @@ private:
       rloActive = false;
       return true;
     }
+    // SPEC[AWL] IEC 61131-3 STL no-operation (NOP)
     if (m == "NOP") {
       if (lexer.getCurToken() == Tok::integer)
         lexer.next(); // NOP 0 / NOP 1
@@ -2742,10 +2745,13 @@ private:
       rloActive = false;
       return true;
     }
+    // SPEC[AWL] IEC 61131-3 STL load (L), Siemens AWL manual "Load and transfer" — see parseLoad
     if (m == "L")
       return parseLoad();
+    // SPEC[AWL] IEC 61131-3 STL transfer (T), Siemens AWL manual "Load and transfer" — see parseStore
     if (m == "T")
       return parseStore();
+    // SPEC[AWL] IEC 61131-3 STL boolean logic ops (U/UN/A/AN/O/ON) + STW comparisons (U ==0 etc.), Siemens AWL manual "Logic operations"
     if ((m == "U" || m == "UN" || m == "A" || m == "AN" || m == "O" ||
          m == "ON") &&
         lexer.getCurToken() != Tok::lparen) {
@@ -2795,6 +2801,7 @@ private:
       }
       return parseRloLogic(m == "AN" ? "UN" : m);
     }
+    // SPEC[AWL] IEC 61131-3 STL NOT (negate RLO)
     if (m == "NOT") {
       stmtLogic = true;
       // NOT inverts the *current* RLO, even across non-logic statements
@@ -2806,6 +2813,7 @@ private:
       rloActive = true;
       return true;
     }
+    // SPEC[AWL] IEC 61131-3 STL SET (RLO := 1)
     if (m == "SET") { // RLO := 1 (also sets VKE, awlsim insn_set)
       stmtLogic = true;
       rlo = builder.create<awl::ConstOp>(loc(), builder.getI1Type(),
@@ -2813,6 +2821,7 @@ private:
       rloActive = true;
       return true;
     }
+    // SPEC[AWL] IEC 61131-3 STL CLR (RLO := 0)
     if (m == "CLR") {
       stmtLogic = true; // RLO := 0, NER := 0 (awlsim insn_clr)
       rlo = builder.create<awl::ConstOp>(loc(), builder.getI1Type(),
@@ -2821,6 +2830,7 @@ private:
       rloActive = true;
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual "Opening a data block" (AUF/OPN DB/DI, incl. AUF DB [LW n])
     if (m == "AUF") { // AUF DB n / AUF DI n: open data block -> set the
       // current DB/DI register (DB 0 operands then address it, ABI v5)
       bool di = false;
@@ -2856,6 +2866,7 @@ private:
       }
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual "Address register instructions" (LAR1/LAR2/+ARn; LAR loads the operand content as pointer, awlsim insn_larN)
     if (m.rfind("LAR", 0) == 0 || m.rfind("+AR", 0) == 0) {
       // LAR1/LAR2 <operand>: load a pointer into address register 1/2.
       // P#x.y literal -> raw byte*8+bit value; a direct operand (DB1.DBW 4,
@@ -2935,6 +2946,7 @@ private:
       }
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual "Address register instructions" (TAR1/TAR2/TAR; TAR stores the AR as a raw S7 pointer, awlsim insn_tarN)
     if (m.rfind("TAR", 0) == 0) {
       // TAR1/TAR2 [operand]: AR := pointer operand, or ACCU1 if none
       int ar = (m.size() >= 4 && isdigit(m[3])) ? m[3] - '0' : 1;
@@ -3034,20 +3046,26 @@ private:
       rloActive = true;
       return true;
     }
+    // SPEC[AWL] IEC 61131-3 STL bit set/reset (S/R), Siemens AWL manual "Bit logic"
     if (m == "S")
       return parseSetReset(true);
     if (m == "R")
       return parseSetReset(false);
+    // SPEC[AWL] IEC 61131-3 STL word/dword logic (AW/OW/XOW/AD/OD/XOD), Siemens AWL manual "Word logic"
     if (m == "AW" || m == "OW" || m == "XOW" || m == "AD" || m == "OD" ||
         m == "XOD" || m == "UD" || m == "UW" || m == "UB" || m == "OB")
       return parseWordLogic(m);
+    // SPEC[AWL] Siemens AWL manual "Timer instructions" (SP/SE/SS/SV/SI/SD, S5TIME), runtime scl_rt_timer_*
     if (m == "SP" || m == "SE" || m == "SS" || m == "SV" || m == "SI" ||
         m == "SA" || m == "SD") // SD = English off-delay (German SA)
       return parseTimerStart(m == "SD" ? "SA" : m);
+    // SPEC[AWL] Siemens AWL manual "Counter instructions" (ZV/ZR/CU/CD), runtime scl_rt_counter_op
     if (m == "ZV" || m == "ZR" || m == "CU" || m == "CD")
       return parseCounterZW(m == "ZV" || m == "CU");
+    // SPEC[AWL] IEC 61131-3 STL unconditional/conditional jumps (SPA/SPB/SPN/SPBN/JU/JB/JNB/JBI/JC/LOOP), Siemens AWL manual "Jumps"
     if (m == "SPA" || m == "SPB" || m == "SPN" || m == "SPBN" || m == "JU")
       return parseJump(m == "SPBN" || m == "JU" ? (m == "JU" ? "SPA" : "SPN") : m);
+    // SPEC[AWL] Siemens AWL manual "SAVE" (RLO -> BR status bit)
     if (m == "SAVE") { // SAVE: RLO -> BR (STW bit 8)
       if (!ensureRlo())
         return false;
@@ -3057,6 +3075,7 @@ private:
       rloActive = false;
       return true;
     }
+    // SPEC[AWL] Siemens AWL S5-compat SF (timer/counter enable) (approx)
     if (m == "SF") { // S5-era: consume a timer/counter operand, not modelled
       lexer.next();
       if (lexer.getCurToken() == Tok::integer)
@@ -3065,11 +3084,13 @@ private:
         lexer.next();
       return true;
     }
+    // SPEC[AWL] IEC 61131-3 STL TAK (exchange accumulators), Siemens AWL manual "Accumulator instructions"
     if (m == "TAK") { // exchange ACCU1/ACCU2
       padAcc();
       std::swap(acc[acc.size() - 1], acc[acc.size() - 2]);
       return true;
     }
+    // SPEC[AWL] IEC 61131-3 STL NEGI/NEGD (two's-complement ACCU1)
     if (m == "NEGI" || m == "NEGD") { // negate ACCU1
       mlir::Value a = popAcc();
       if (!a)
@@ -3077,14 +3098,17 @@ private:
       acc.push_back(builder.create<awl::NegOp>(loc(), a.getType(), a));
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual "Shift and rotate" (SLW/SRW/SSI/SSD/SLD/SRD/RLD/RRD/RLDA/RRDA), awl.shift
     if (m == "SLW" || m == "SRW" || m == "SSI" || m == "SSD" ||
         m == "SLD" || m == "SRD" || m == "RLD" || m == "RRD" ||
         m == "RLDA" || m == "RRDA")
       return parseShift(m);
+    // SPEC[AWL] Siemens AWL manual "Real math" (ABS/NEGR/SIN/COS/TAN/...), awl.real_math (approx: float32 host math)
     if (m == "ABS" || m == "NEGR" || m == "SIN" || m == "COS" || m == "TAN" ||
         m == "ASIN" || m == "ACOS" || m == "ATAN" || m == "SQRT" ||
         m == "EXP" || m == "LN" || m == "SQR")
       return parseRealMath(m);
+    // SPEC[AWL] Siemens AWL manual "Value conversions" TRUNC/RND (approx: truncation)
     if (m == "TRUNC" || m == "RND") {
       // real ACCU1 -> int; TRUNC truncates, RND rounds (RND+ up, RND- down).
       // Out of int32 range the ACCU is unchanged and OV/OS are set (runtime).
@@ -3111,11 +3135,13 @@ private:
       rloActive = false;
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual "Value conversions" DTR (dword->real), plus BTI/BTD/ITB/DTB BCD and ITD/DTI/INVI/INVD below
     if (m == "DTR") { // DWORD ACCU1 -> real (value conversion, awlsim insn_dtr)
       mlir::Value a = popAcc();
       acc.push_back(castTo(castTo(a, builder.getI32Type()), builder.getF32Type()));
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual "Enabling" FR (timer/counter), runtime scl_rt_timer_fr
     if (m == "FR") { // FR T n / FR C n: enable — reset the edge memory of
       // the timer/counter at runtime; the RLO is NOT modified
       mlir::Value v = parseOperand(false);
@@ -3125,6 +3151,7 @@ private:
       builder.create<awl::FrOp>(loc(), v, rloInput());
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual TDB (swap DB/DI registers) (approx: not modelled)
     if (m == "TDB") { // TDB [DB n]: transfer DB register — not modelled
       if (lexer.getCurToken() == Tok::ident) {
         std::string w = upperIdent();
@@ -3135,6 +3162,7 @@ private:
         lexer.next();
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual "Opening a data block" OPN (= AUF)
     if (m == "OPN") { // OPN DB n / OPN DI n / OPN DB1: open data block (like AUF)
       bool di = false;
       if (lexer.getCurToken() == Tok::ident) {
@@ -3167,6 +3195,7 @@ private:
       }
       return true;
     }
+    // SPEC[AWL] awlsim test directive __STWRST (reset status word)
     if (m == "__STWRST") { // awlsim test directive: reset status word, RLO=0
       builder.create<awl::StwResetOp>(loc());
       auto i1 = builder.getI1Type();
@@ -3174,6 +3203,7 @@ private:
       rloActive = true;
       return true;
     }
+    // SPEC[AWL] awlsim test directive __FEATURE t [, v] (nrAccus / OB-temp presets), runtime scl_rt_feature
     if (m == "__FEATURE") { // awlsim test directive: __FEATURE t [, v]
       int64_t target = 0, value = -1;
       if (lexer.getCurToken() == Tok::integer) {
@@ -3193,6 +3223,7 @@ private:
           builder.getI32IntegerAttr((int32_t)value)));
       return true;
     }
+    // SPEC[AWL] awlsim test directive __SLEEP ms (advance virtual clock), runtime scl_rt_sleep
     if (m == "__SLEEP") { // awlsim test directive: advance the virtual clock
       int64_t ms = 0;
       if (lexer.getCurToken() == Tok::integer) {
@@ -3202,6 +3233,7 @@ private:
       builder.create<awl::SleepOp>(loc(), builder.getI32IntegerAttr((int32_t)ms));
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual LC (load timer/counter current value, BCD-coded)
     if (m == "LC") {
       // LC T n: timer current value in S5TIME format (awlsim getTimevalS5T);
       // LC Z n and others load like L.
@@ -3220,15 +3252,19 @@ private:
       }
       return parseLoad(); // LC Z n: load counter value into ACCU1
     }
+    // SPEC[AWL] Siemens AWL manual FP/FN edge memory (approx: approximated by U/UN — no edge memory)
     if (m == "FP" || m == "FN") // edge memory not modelled: approximated
       return parseRloLogic(m == "FP" ? "U" : "UN"); // by U/UN
+    // SPEC[AWL] Siemens AWL manual MCR (master control relay) (approx: bracket only)
     if (m == "SAVE" || m == "MCRA" || m == "MCRD")
       return true; // BR / master-control-relay bits are not modelled
+    // SPEC[AWL] Siemens AWL manual BLD <n> (display code — no-op)
     if (m == "BLD") { // BLD <n>: display code, no-op
       if (lexer.getCurToken() == Tok::integer)
         lexer.next();
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual MCR( / MCR ) nesting (approx)
     if (m == "MCR") { // MCR( ... MCR): master control relay — bracket only
       if (lexer.getCurToken() == Tok::lparen) {
         lexer.next();
@@ -3247,12 +3283,15 @@ private:
       }
       return true;
     }
+    // SPEC[AWL] IEC 61131-3 STL SPBB/SPB-branch save (save RLO into BR)
     if (m == "SPBB")
       return parseJump("SPB");
+    // SPEC[AWL] Siemens AWL manual ENT/PUSH (push accumulators), POP/LEAVE below
     if (m == "ENT" || m == "PUSH") { // push a copy of ACCU1
       acc.push_back(acc.empty() ? constInt(builder.getI32Type(), 0) : acc.back());
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual POP/LEAVE (pop accumulators)
     if (m == "POP" || m == "LEAVE") {
       // POP: ACCU1 := ACCU2; ACCU2 and below are unchanged (awlsim insn_POP)
       if (acc.empty())
@@ -3261,6 +3300,7 @@ private:
                                    : constInt(builder.getI32Type(), 0);
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual INC/DEC (ACCU1 +/- n)
     if (m == "INC" || m == "DEC") { // ACCU1 +/-= n (default 1)
       int64_t n = 1;
       if (lexer.getCurToken() == Tok::integer) {
@@ -3273,6 +3313,7 @@ private:
       rloActive = false;
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual "Value conversions" ITD/DTI
     if (m == "ITD" || m == "DTI") { // int <-> dword (sign/zero extend)
       mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
       acc.push_back(castTo(a, m == "ITD" ? builder.getI32Type()
@@ -3280,6 +3321,7 @@ private:
       rloActive = false;
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual INVI/INVD (one's complement)
     if (m == "INVI" || m == "INVD") { // one's complement
       mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
       auto ty = m == "INVI" ? builder.getI16Type() : builder.getI32Type();
@@ -3289,6 +3331,7 @@ private:
       rloActive = false;
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual MOD (remainder)
     if (m == "MOD") { // ACCU1 %% ACCU2: a - (a / b) * b
       padAcc();
       mlir::Value b = popAcc();
@@ -3305,6 +3348,7 @@ private:
       rloActive = false;
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual TAD (dword accumulator exchange)
     if (m == "TAD") // exchange ACCU1/ACCU2 (dword view) — same as TAK
       return parseIdentInstruction("TAK", blockName);
     if ((m == "X" || m == "XN") && lexer.getCurToken() == Tok::lparen) {
@@ -3317,6 +3361,7 @@ private:
       rloActive = true;
       return true;
     }
+    // SPEC[AWL] IEC 61131-3 STL X/XN (XOR RLO with bit)
     if (m == "X" || m == "XN") { // X/XN bit: rlo = rlo XOR bit (XN: negated)
       stmtLogic = true;
       if (lexer.getCurToken() == Tok::ident) {
@@ -3353,6 +3398,7 @@ private:
         rlo = builder.create<awl::NotOp>(loc(), i1, rlo);
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual SPL (jump to label via ACCU1)
     if (m == "SPL") {
       // SPL is a jump table: `SPL <default>` followed by a list of
       // `SPA <label>` entries; the low byte of ACCU1 selects the entry
@@ -3386,11 +3432,14 @@ private:
       rloActive = false;
       return true;
     }
+    // SPEC[AWL] IEC 61131-3 STL conditional jumps JNB/JBI/SPBNB/SPBI/SPBIN (with BR save)
     if (m == "SPBNB" || m == "SPBI" || m == "SPBIN" || m == "JNB" ||
         m == "JNBI" || m == "SPO" || m == "SOS" || m == "SPU" || m == "JCN")
       return parseJump("SPN");
+    // SPEC[AWL] IEC 61131-3 STL conditional jumps JB/JBI/JC (RLO/BR conditions)
     if (m == "JB" || m == "JBI" || m == "JC")
       return parseJump("SPB");
+    // SPEC[AWL] IEC 61131-3 STL LOOP (decrement ACCU1, jump if != 0)
     if (m == "LOOP") { // jump if ACCU1 != 0
       if (lexer.getCurToken() != Tok::ident)
         return error("expected label after LOOP");
@@ -3404,6 +3453,7 @@ private:
       rloActive = false;
       return true;
     }
+    // SPEC[AWL] IEC 61131-3 STL zero/plus/minus jumps (SPZ/SPPZ/SPMZ/SPS/SPP/SPM)
     if (m == "SPZ" || m == "SPPZ" || m == "SPMZ" || m == "SPS" || m == "SPP" ||
         m == "SPM") {
       // jump if ACCU1 == 0 / > 0 / < 0
@@ -3425,6 +3475,7 @@ private:
       rloActive = false;
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual "Value conversions" BTI/BTD (BCD -> binary)
     if (m == "BTI" || m == "BTD") { // BCD -> binary
       mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
       auto ty = m == "BTI" ? builder.getI16Type() : builder.getI32Type();
@@ -3432,6 +3483,7 @@ private:
       rloActive = false;
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual "Value conversions" ITB/DTB (binary -> BCD)
     if (m == "ITB" || m == "DTB") { // binary -> BCD
       mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
       auto ty = m == "ITB" ? builder.getI16Type() : builder.getI32Type();
@@ -3439,6 +3491,7 @@ private:
       rloActive = false;
       return true;
     }
+    // SPEC[AWL] Siemens AWL manual TAW (ACCU1 -> status word) (approx)
     if (m == "TAW") { // ACCU1 -> status word (approximated: marker word 0)
       mlir::Value v = acc.empty() ? constInt(builder.getI32Type(), 0) : acc.back();
       auto stw = builder.create<awl::DirectOp>(
@@ -3447,8 +3500,10 @@ private:
       rloActive = false;
       return true;
     }
+    // SPEC[AWL] awlsim test directive __ASSERT<cmp> (value oracles, runtime scl_rt_assert_cmp[_r])
     if (m.rfind("__ASSERT", 0) == 0)
       return parseAssert();
+    // SPEC[AWL] IEC 61131-3 STL block calls (CALL/UC/CC, incl. parameterized CALL and indirect UC FC [MW x]), see parseCall
     if (m == "CALL" || m == "UC" || m == "CC")
       return parseCall(m == "CC");
     return error("unknown instruction '" + m + "' in block " + blockName);
@@ -3731,6 +3786,7 @@ private:
   /// Parse `[AR1, P#x.y]` (or AR2) into an awl.indirect op yielding the
   /// packed pointer (i64). `widthBits` records the access width for the
   /// load/store that consumes the pointer (lastIndirectWidth).
+  // SPEC[AWL] Siemens AWL manual "Indirect addressing" ([AR1, P#x.y] area-relative, memory-indirect [LD n]/[#var] base = operand value, T/Z [..] = block number)
   mlir::Value parseIndirectBracket(
       int32_t widthBits,
       mlir::scl::DirectArea area = mlir::scl::DirectArea::Marker,
@@ -3882,6 +3938,7 @@ private:
     return -1;
   }
 
+  // SPEC[AWL] IEC 61131-3 STL / Siemens AWL manual "Addressing modes": absolute (M 10.0, DB1.DBW 4), indirect ([AR1, P#x.y], [LD n], [#var]), symbolic, P# pointer literals
   mlir::Value parseOperand(bool bitContext = false) {
     ptrParamSlot = -1;
     lastOperandIndirect = false;
@@ -6025,6 +6082,7 @@ private:
     return true;
   }
 
+  // SPEC[AWL] Siemens AWL manual "Calling blocks" (CALL/UC/CC with parameter lists := / =>, FB instance DB, multi-instance via AR2)
   bool parseCall(bool cond) {
     // CALL/UC/CC FC n | CALL/UC/CC FB n, DB m ; CC calls only if RLO = 1
     mlir::Value rloVal;

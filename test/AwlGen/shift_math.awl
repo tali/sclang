@@ -1,4 +1,5 @@
 // RUN: sclang-gen -x awl --emit=mlir %s | FileCheck %s
+// SPEC[AWL] Siemens AWL manual shift/rotate + real math
 // RUN: sclang -x awl --emit=jit --jit-cycles=1 %s
 // Shift/rotate (SLW SRW SSI SSD SLD SRD RLD RRD RLDA RRDA) lower to
 // awl.shift; real math (ABS NEGR SIN COS TAN ASIN ACOS ATAN SQRT EXP LN

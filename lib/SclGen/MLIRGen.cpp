@@ -461,6 +461,7 @@ private:
     });
   }
 
+  // SPEC[SCL] IEC 61131-3 ST organization block (OB) -> void function with scan-cycle hooks (ADR 002)
   mlir::Operation *mlirGen(const OrganizationBlockAST *ob) {
     // An organization block is an entry point without parameters or return
     // value: model it as a void function. Mark it so the lowering can emit
@@ -782,6 +783,8 @@ private:
   mlir::LogicalResult mlirGen(const InstructionAST *instr) {
     auto location = loc(instr->loc());
 
+    // SPEC[SCL] IEC 61131-3 ST statement list: assignment, call, IF/ELSIF/ELSE,
+    // FOR/WHILE/REPEAT-UNTIL, CASE, GOTO/labels, RETURN/EXIT/CONTINUE
     return TypeSwitch<const InstructionAST *, mlir::LogicalResult>(instr)
         .Case<ValueAssignmentAST>([&](auto assign) { return mlirGen(assign); })
         .Case<SubroutineProcessingAST>([&](auto call) { return mlirGen(call); })
@@ -1108,6 +1111,7 @@ private:
   }
 
   /// Codegen a variable assignment
+  // SPEC[SCL] IEC 61131-3 ST assignment (:=), incl. string/array copies -> see mlirGenStringAssignment and the array-copy path below
   mlir::LogicalResult mlirGen(const ValueAssignmentAST *instr) {
     auto location = loc(instr->loc());
 
@@ -2235,6 +2239,7 @@ private:
     return fieldVal;
   }
 
+  // SPEC[SCL] IEC 61131-3 ST type conversions (INT_TO_WORD, CHAR_TO_INT, ...) -> mlirGenBuiltinConversion; string builtins (CONCAT/...) are stubs (gap)
   mlir::Value mlirGenBuiltinConversion(mlir::Location location,
                                         const FunctionCallAST *expr,
                                         StringRef callee) {

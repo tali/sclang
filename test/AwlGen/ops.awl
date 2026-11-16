@@ -1,4 +1,5 @@
 // RUN: sclang-gen -x awl --emit=mlir %s | FileCheck %s
+// SPEC[AWL] IEC 61131-3 STL instruction set: logic, arithmetic, compare, jumps
 // AWL frontend codegen: accumulator stack, RLO, labels/jumps (ADR 003).
 // CHECK-LABEL: awl.block "OB1"
 // CHECK: %{{.*}} = awl.direct M, 0, 10, 0, 16 : !scl.direct<M, 0, 10, 0, 16>

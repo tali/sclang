@@ -21,6 +21,11 @@ see `docs/` for the design.
 
 Design documentation lives in [`docs/`](docs/): ADRs for hard-to-reverse
 decisions (`docs/decisions/`) and design plans (`docs/design/`).
+Conformance to the AWL/STL and SCL/ST specifications (IEC 61131-3, Siemens
+manuals, awlsim reference semantics) is documented and traceable to the code
+via `SPEC[...]` tags — see [`docs/spec-conformance.md`](docs/spec-conformance.md)
+and [`docs/conformance.md`](docs/conformance.md) for the external-corpus
+test results.
 
 [MLIR]: https://mlir.llvm.org/
 

@@ -1,4 +1,5 @@
 // RUN: sclang-gen -x awl --emit=mlir %s | FileCheck %s
+// SPEC[AWL] Siemens AWL manual timer instructions (SP/SE/SS/SV/SI/SD) + runtime
 // Timer/counter instructions: S5T# literal encodes to (base<<12)|BCD
 // (S5T#1S = 0x2001), SS -> awl.timer_start, ZV/S -> awl.counter,
 // `U T1.0` is the status bit (width 1), `L T1` the value (width 16).

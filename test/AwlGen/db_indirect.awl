@@ -2,6 +2,7 @@
 // access ([AR1, P#x.y]), plus DATA_BLOCK initial values run via the
 // synthesized __scl_db_init block (ABI v5).
 // RUN: sclang-gen -x awl --emit=mlir %s | FileCheck %s
+// SPEC[AWL] Siemens AWL manual "Addressing": DB register (AUF/OPN), ARs (LAR/TAR), indirect [AR1, P#x.y], DATA_BLOCK init
 
 DATA_BLOCK DB 1
 BEGIN

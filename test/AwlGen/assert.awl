@@ -1,4 +1,5 @@
 // RUN: sclang-gen -x awl --emit=mlir %s | FileCheck %s
+// SPEC[AWL] awlsim __ASSERT oracle directives -> awl.assert -> scl_rt_assert_cmp
 // RUN: sclang -x awl --emit=jit --jit-cycles=2 %s
 // awlsim __ASSERT oracle directives lower to awl.assert / awl.assert_r
 // runtime calls (docs/conformance.md, oracle tier). The second RUN line

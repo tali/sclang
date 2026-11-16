@@ -1,4 +1,5 @@
 // RUN: sclang-gen -x awl --emit=mlir %s | FileCheck %s
+// SPEC[AWL] IEC 61131-3 STL block calls incl. FB instance DBs and parameter passing
 // RUN: sclang-gen -x awl --emit=mlir-std %s | FileCheck %s --check-prefix=STD
 // RUN: sclang-gen -x awl --emit=awl %s | sclang-gen -x awl --emit=awl - | FileCheck %s --check-prefix=RT
 // CALL FB n, DB m (docs/design/awl-frontend.md): the call carries the

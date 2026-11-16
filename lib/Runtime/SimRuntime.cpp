@@ -255,6 +255,7 @@ int64_t scl_rt_timer_lc(uint32_t n) {
 
 extern "C" {
 
+// SPEC[AWL] IEC 61131-3 STL memory areas (P/Q/M/DB/DI/L/T/C, big-endian S7 storage — docs/decisions/001) -> scl_rt_read/read_bit (C ABI, docs/decisions/002)
 int64_t scl_rt_read(uint8_t area, uint32_t db, uint32_t byteOff,
                     uint8_t widthBytes) {
   if (state().vtable)
@@ -304,6 +305,7 @@ int64_t scl_rt_read(uint8_t area, uint32_t db, uint32_t byteOff,
   return (int64_t)v;
 }
 
+// SPEC[AWL] IEC 61131-3 STL memory areas, stores -> scl_rt_write/write_bit (C ABI)
 void scl_rt_write(uint8_t area, uint32_t db, uint32_t byteOff,
                   uint8_t widthBytes, uint64_t value) {
   if (state().vtable) {
@@ -557,6 +559,7 @@ uint64_t scl_rt_pack_s7(uint32_t area, uint32_t db, uint32_t byte,
 // __fetchDI/__storeDI add the AR2 multi-instance base only for FB blocks).
 void scl_rt_frame_set_fb(uint8_t isFb) { state().curIsFb = isFb; }
 
+// SPEC[AWL] Siemens AWL manual local data stack (L/VL frames per block call, incl. FC param area and 256-depth guard) -> scl_rt_l_push/l_pop/param_in/param_out
 void scl_rt_l_push(uint32_t bytes) {
   auto &s = state();
   // awlsim raises when callStackDepth >= specs.callStackSize (default 256);
@@ -1047,6 +1050,7 @@ void scl_rt_ar_set(uint8_t ar, uint64_t ptr) {
     s.ars[ar - 1] = ptr;
 }
 
+// SPEC[AWL] Siemens AWL manual address registers AR1/AR2 -> scl_rt_ar_get/ar_set/ar_add/ar_raw (packed internal form)
 uint64_t scl_rt_ar_get(uint8_t ar) {
   auto &s = state();
   if (ar >= 1 && ar <= 2)
@@ -1108,6 +1112,7 @@ static uint64_t rawToPacked(uint64_t p) {
   return packPtr(SCL_RT_AREA_M, 0, (uint32_t)(p / 8), (uint8_t)(p % 8), 0);
 }
 
+// SPEC[AWL] Siemens AWL manual indirect addressing -> scl_rt_read_indirect/write_indirect (raw S7 <-> packed decode)
 int64_t scl_rt_read_indirect(uint64_t ptr, uint8_t widthBytes) {
   auto &s = state();
   if (s.vtable && s.vtable->read_indirect)
@@ -1147,6 +1152,7 @@ void scl_rt_write_bit_indirect(uint64_t ptr, bool value) {
 // MARK: system functions (SFCs). The frontend stages the parameters in the
 // marker area at kParamBase (SFC 21: BVAL/BLK as i64 S7 pointers @+0/+8,
 // RET_VAL i16 @+16; SFC 47: WT i16 @+0; SFC 64: RET_VAL i32 @+0).
+// SPEC[AWL] Siemens AWL manual system functions SFC/SFB -> scl_rt_sfc/scl_rt_sfb (runtime-staged params in the marker area)
 void scl_rt_sfc(uint32_t n) {
   auto &s = state();
   if (s.vtable && s.vtable->sfc) {
@@ -1730,6 +1736,7 @@ void scl_rt_ob_start(uint32_t obNum) {
 
 // __FEATURE t [, v] (awlsim insn_feature): t=0 number of accumulator
 // registers (default 4), t=1 OB-temp presets enabled. value < 0: get.
+// SPEC[AWL] awlsim __FEATURE t [, v] -> scl_rt_feature (nrAccus, OB-temp presets)
 int32_t scl_rt_feature(uint32_t target, int32_t value) {
   auto &s = state();
   if (target == 0) {
