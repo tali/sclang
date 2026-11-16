@@ -141,7 +141,7 @@ has no `\b` — use python3 for regex edits.
   line). sclang driver exits 2 when scl_rt_assert_failures() > 0 after the
   cycle loop.
   Current: AWL 116/116 (100%), SCL single 15/15, SCL per-project 16/17,
-  JIT smoke 76/77 (99%), oracle (__ASSERT value-level) 52/53 (98%).
+  JIT smoke 77/77 (100%), oracle (__ASSERT value-level) 52/53 (98%).
   String handling: `VAR := 'lit'` in DB-init/statement stores len @+1, chars
   @+2.., zero-fills to maxlen; STRING[n] size is (n+2) even-aligned;
   ARRAY OF STRING[n] keeps the dim in elemType; STRING[i] = char at +2+(i-1)
@@ -339,6 +339,9 @@ has no `\b` — use python3 for regex edits.
     (load_indirect), not passed as the address (lastOperandIndirect flag).
     AUF/OPN DI [LW 0] sets the DI register (awl.set_div ->
     scl_rt_set_current_di); AUF DB [LW 0] reads the L area (not M).
+  - Call-depth guard: scl_rt_l_push exits(2) with a clear message at depth
+    256 (awlsim specs.callStackSize default) — infinite recursion used to
+    SIGSEGV the JIT (rc 139); rc 2 counts as a clean JIT-tier pass.
   - AR2 multi-instance base is added to DI-area accesses ONLY inside FB
     frames (awlsim __fetchDI/__storeDI check callStackTop.block.isFB):
     runtime state curIsFb, set per L-frame via scl_rt_frame_set_fb from

@@ -559,6 +559,13 @@ void scl_rt_frame_set_fb(uint8_t isFb) { state().curIsFb = isFb; }
 
 void scl_rt_l_push(uint32_t bytes) {
   auto &s = state();
+  // awlsim raises when callStackDepth >= specs.callStackSize (default 256);
+  // without a guard the JIT'd recursion overflows the native stack (SIGSEGV)
+  if (s.lFrames.size() >= 256) {
+    fprintf(stderr, "scl_rt: call stack overflow (depth 256, awlsim "
+            "callStackSize) — infinite recursion\n");
+    exit(2);
+  }
   s.lFrames.push_back(s.lBase);
   s.lSizes.push_back(s.curFrameSize);
   s.frameSaves.push_back({s.ars[0], s.ars[1], s.currentDb, s.currentDi,
