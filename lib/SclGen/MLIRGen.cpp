@@ -1135,23 +1135,33 @@ private:
     // Whole-array (incl. string) var-to-var assignment `a := b`: copy the
     // elements one by one (the buffers are flat byte/element buffers).
     if (ArrayType lhsArr = arrayTypeOfAddress(lhs)) {
+      mlir::Value rhsAddr = mlirGen(expr->getRhs());
       ArrayType rhsArr = arrayTypeOfAST(expr->getRhs());
+      // the rhs may also be an address-valued expression (member access, or
+      // a string builtin call returning a temp buffer address)
+      if (!rhsArr && rhsAddr)
+        rhsArr = arrayTypeOfAddress(rhsAddr);
       if (!rhsArr) {
-        // non-array rhs into an array/string lhs (e.g. a string builtin stub
-        // returning an int): zero-fill, with a warning
+        // non-array rhs into an array/string lhs (e.g. a scalar): zero-fill,
+        // with a warning
         emitWarning(location) << "assigning a non-string value to a string, "
                                  "storing an empty string";
         if (failed(mlirGenStoreStringBytes(location, lhs, lhsArr, "")))
           return mlir::failure();
         return mlir::success();
       }
-      if (rhsArr && lhsArr.getElementType() == rhsArr.getElementType() &&
-          lhsArr.getDimensions() == rhsArr.getDimensions()) {
-        mlir::Value rhsAddr = mlirGen(expr->getRhs());
+      // char arrays (strings) of different declared sizes: copy the common
+      // prefix and zero-fill the rest (string assignment truncates/pads)
+      bool lhsIsChar = lhsArr.getElementType().isa<IntegerType>() &&
+                       lhsArr.getElementType().cast<IntegerType>().getWidth() == 8;
+      if (rhsArr.getElementType() == lhsArr.getElementType() &&
+          (lhsArr.getDimensions() == rhsArr.getDimensions() || lhsIsChar)) {
         if (!rhsAddr)
           return mlir::failure();
         auto dims = lhsArr.getDimensions();
         int64_t count = dims[0].second - dims[0].first + 1;
+        auto rdims = rhsArr.getDimensions();
+        int64_t srcCount = rdims[0].second - rdims[0].first + 1;
         // Composite elements (struct/array): copy the flat byte buffer
         // through a char-array view of the same size.
         mlir::Type elemTy = lhsArr.getElementType();
@@ -1164,13 +1174,29 @@ private:
           copyTy = ArrayType::get({{0, count * elemBytes - 1}}, i8);
           elemTy = i8;
           count *= elemBytes;
+          srcCount *= elemBytes;
         }
         mlir::TypeAttr attr = mlir::TypeAttr::get(copyTy);
-        for (int64_t i = 0; i < count; ++i) {
+        int64_t ncopy = std::min(count, srcCount);
+        for (int64_t i = 0; i < ncopy; ++i) {
           mlir::Value dst = arrayElemAddr(location, lhs, copyTy, i, attr);
           mlir::Value src = arrayElemAddr(location, rhsAddr, copyTy, i, attr);
           mlir::Value v = builder.create<LoadOp>(location, elemTy, src);
           builder.create<StoreOp>(location, dst, v);
+        }
+        // zero-fill the rest of the lhs (string truncation/padding)
+        for (int64_t i = ncopy; i < count; ++i) {
+          mlir::Value dst = arrayElemAddr(location, lhs, copyTy, i, attr);
+          builder.create<StoreOp>(
+              location, dst,
+              builder.create<ConstantOp>(
+                  location, elemTy,
+                  builder.getIntegerAttr(
+                      builder.getIntegerType(
+                          elemTy.isa<IntegerType>()
+                              ? elemTy.cast<IntegerType>().getWidth()
+                              : 8),
+                      0)));
         }
         return mlir::success();
       }
@@ -2239,7 +2265,7 @@ private:
     return fieldVal;
   }
 
-  // SPEC[SCL] IEC 61131-3 ST type conversions (INT_TO_WORD, CHAR_TO_INT, ...) -> mlirGenBuiltinConversion; string builtins (CONCAT/...) are stubs (gap)
+  // SPEC[SCL] IEC 61131-3 ST type conversions (INT_TO_WORD, CHAR_TO_INT, ...) -> mlirGenBuiltinConversion; string functions (LEN/CONCAT/...) -> mlirGenStringBuiltin
   mlir::Value mlirGenBuiltinConversion(mlir::Location location,
                                         const FunctionCallAST *expr,
                                         StringRef callee) {
@@ -2330,10 +2356,585 @@ private:
     return arg;
   }
 
+  // ------------------------------------------------------------------
+  // IEC 61131-3 ST string functions (LEN/LEFT/RIGHT/MID/FIND/CONCAT/
+  // DELETE/INSERT/REPLACE and the numeric<->string conversions).
+  //
+  // Strings are flat zero-padded char buffers (ArrayType of !scl.char), so
+  // the current length of a string is the index of its first zero byte
+  // (C-string semantics) — see mlirGenStoreStringBytes/mlirGenStringCompare.
+  // The functions are expanded inline as unrolled byte loops (same pattern
+  // as the string compare above), so they lower to plain loads/stores/arith
+  // in every backend (JIT and AWL alike). String results are returned as the
+  // address of a fresh String[254] temp buffer.
+  // SPEC[SCL] IEC 61131-3 ST string functions LEN/LEFT/RIGHT/MID/FIND/CONCAT/DELETE/INSERT/REPLACE and <type>_TO_STRING/STRING_TO_<type> -> mlirGenStringBuiltin (approx: flat zero-padded buffers with C-string length; STRING_TO_REAL/REAL_TO_STRING/VAL_STRG remain external stubs)
+  struct StrArg {
+    mlir::Value addr;   // char-array address (var/member/builtin result)
+    ArrayType arrTy;
+    std::string lit;    // string literal bytes
+    mlir::Value scalar; // single char value
+    int64_t maxLen() const {
+      if (addr) {
+        auto d = const_cast<ArrayType &>(arrTy).getDimensions();
+        return d[0].second - d[0].first + 1;
+      }
+      return scalar ? 1 : (int64_t)lit.size();
+    }
+  };
+  struct StrBuf {
+    mlir::Value addr;
+    ArrayType ty;
+  };
+
+  mlir::Type charTy() const { return IntegerType::get(builder.getContext(), 8); }
+  mlir::Type dintTy() const { return IntegerType::get(builder.getContext(), 32); }
+
+  mlir::Value sclConst(mlir::Location location, mlir::Type ty, int64_t v) {
+    int width = 32;
+    if (auto it = ty.dyn_cast<IntegerType>())
+      width = it.getWidth();
+    else if (auto lt = ty.dyn_cast<LogicalType>())
+      width = lt.getWidth();
+    return builder.create<ConstantOp>(
+        location, ty, builder.getIntegerAttr(builder.getIntegerType(width), v));
+  }
+  mlir::Value boolConst(mlir::Location location, bool v) {
+    return builder.create<ConstantOp>(
+        location, getType(tok_bool),
+        builder.getIntegerAttr(builder.getI1Type(), v ? 1 : 0));
+  }
+
+  /// widen any integer-ish value to scl dint (char/byte zero-extended)
+  mlir::Value toDint(mlir::Location location, mlir::Value v) {
+    auto d = dintTy();
+    if (v.getType() == d)
+      return v;
+    if (auto it = v.getType().dyn_cast<IntegerType>()) {
+      auto c = builder.create<IntegerCastOp>(location, d, v);
+      if (it.getWidth() == 8)
+        c.setZextAttr(builder.getUnitAttr()); // char: unsigned
+      return c.getResult();
+    }
+    if (v.getType().isa<LogicalType>()) {
+      auto c = builder.create<IntegerCastOp>(location, d, v);
+      c.setZextAttr(builder.getUnitAttr()); // byte/word/dword/bool: unsigned
+      return c.getResult();
+    }
+    return builder.create<DialectCastOp>(location, d, v).getResult();
+  }
+  /// narrow to scl char (!scl.char)
+  mlir::Value toChar(mlir::Location location, mlir::Value v) {
+    auto c8 = charTy();
+    if (v.getType() == c8)
+      return v;
+    if (v.getType().isa<IntegerType>() || v.getType().isa<LogicalType>())
+      return builder.create<IntegerCastOp>(location, c8, v).getResult();
+    return builder.create<DialectCastOp>(location, c8, v).getResult();
+  }
+  /// cond ? a : b for same-typed scl integers a/b (cond: !scl.bool)
+  mlir::Value mux(mlir::Location location, mlir::Value cond, mlir::Value a,
+                  mlir::Value b) {
+    auto ty = a.getType();
+    auto c = builder.create<IntegerCastOp>(location, ty, cond);
+    c.setZextAttr(builder.getUnitAttr());
+    auto one = sclConst(location, ty, 1);
+    auto nc = builder.create<SubOp>(location, one, c).getResult();
+    return builder.create<AddOp>(
+        location, builder.create<MulOp>(location, a, c).getResult(),
+        builder.create<MulOp>(location, b, nc).getResult()).getResult();
+  }
+  /// cast a scl dint value to an arbitrary scl target type
+  mlir::Value castToType(mlir::Location location, mlir::Value v,
+                         mlir::Type target) {
+    if (v.getType() == target)
+      return v;
+    if (target.isa<IntegerType>())
+      return builder.create<IntegerCastOp>(location, target, v).getResult();
+    return builder.create<DialectCastOp>(location, target, v).getResult();
+  }
+
+  mlir::Value elemAddr(mlir::Location location, mlir::Value addr,
+                       ArrayType arrTy, mlir::Value idx) {
+    return builder.create<GetIndexOp>(
+        location, AddressType::get(arrTy.getElementType()), addr,
+        mlir::ValueRange{idx}, mlir::TypeAttr::get(arrTy));
+  }
+  mlir::Value elemAddrAt(mlir::Location location, mlir::Value addr,
+                         ArrayType arrTy, int64_t i) {
+    return elemAddr(location, addr, arrTy,
+                    sclConst(location, getType(tok_int),
+                             arrTy.getDimensions()[0].first + i));
+  }
+
+  /// byte at compile-time index i of a string arg, as scl dint. The index
+  /// is clamped into the source buffer (callers only use the byte when the
+  /// logical index is in range, so the loaded value is discarded otherwise).
+  mlir::Value byteD(mlir::Location location, const StrArg &s, int64_t i) {
+    if (s.addr) {
+      int64_t n = s.maxLen();
+      if (i >= n)
+        i = n - 1;
+      return toDint(location,
+                    builder.create<LoadOp>(location, charTy(),
+                                           elemAddrAt(location, s.addr, s.arrTy, i)));
+    }
+    if (s.scalar)
+      return toDint(location, i == 0 ? s.scalar : sclConst(location, charTy(), 0));
+    return sclConst(location, dintTy(),
+                    i < (int64_t)s.lit.size() ? (uint8_t)s.lit[(size_t)i] : 0);
+  }
+  /// clamp a runtime (scl dint) index into [0, n-1] so speculative loads
+  /// stay in bounds (the value is only used when logically in range)
+  mlir::Value clampIdx(mlir::Location location, mlir::Value idx, int64_t n) {
+    auto d = dintTy();
+    mlir::Value lo = builder.create<LessThanOp>(location, idx, sclConst(location, d, 0));
+    idx = mux(location, lo, sclConst(location, d, 0), idx);
+    mlir::Value hi = builder.create<GreaterThanOp>(
+        location, idx, sclConst(location, d, n - 1));
+    return mux(location, hi, sclConst(location, d, n - 1), idx);
+  }
+  /// byte at runtime (scl dint) index of a string arg, as scl dint
+  mlir::Value byteVD(mlir::Location location, const StrArg &s,
+                     mlir::Value idx) {
+    if (s.addr)
+      return toDint(location, builder.create<LoadOp>(
+                                  location, charTy(),
+                                  elemAddr(location, s.addr, s.arrTy, idx)));
+    // literal/scalar: select over the known bytes
+    mlir::Value r = sclConst(location, dintTy(), 0);
+    int64_t n = s.maxLen();
+    for (int64_t i = 0; i < n; ++i)
+      r = mux(location,
+              builder.create<EqualOp>(location, idx,
+                                      sclConst(location, dintTy(), i)),
+              byteD(location, s, i), r);
+    return r;
+  }
+
+  /// current length (index of the first zero byte) of a string arg, as scl int
+  mlir::Value strLenOf(mlir::Location location, const StrArg &s) {
+    auto d = dintTy();
+    mlir::Value acc = sclConst(location, d, 0);
+    int64_t n = s.maxLen();
+    for (int64_t i = 0; i < n; ++i) {
+      mlir::Value nz = builder.create<NotEqualOp>(
+          location, byteD(location, s, i), sclConst(location, d, 0));
+      acc = mux(location, nz, sclConst(location, d, i + 1), acc);
+    }
+    return builder.create<IntegerCastOp>(location, getType(tok_int), acc)
+        .getResult();
+  }
+
+  StrBuf newStrBuf(mlir::Location location, int64_t maxLen) {
+    ArrayType arrTy = ArrayType::get({{0, (int)maxLen - 1}}, charTy());
+    return {builder.create<TempVariableOp>(location, AddressType::get(arrTy),
+                                           builder.getStringAttr("strres")),
+            arrTy};
+  }
+  void storeStrByte(mlir::Location location, const StrBuf &buf, int64_t i,
+                    mlir::Value byteDint) {
+    builder.create<StoreOp>(
+        location, elemAddrAt(location, buf.addr, buf.ty, i),
+        toChar(location, byteDint));
+  }
+
+  /// Build a string argument (array address / literal / char scalar) from an
+  /// AST expression.
+  StrArg strArgOf(mlir::Location location, const ExpressionAST *e) {
+    StrArg s;
+    if (const StringConstantAST *lit = asStringLit(e)) {
+      s.lit = lit->getValue();
+      return s;
+    }
+    mlir::Value v = mlirGen(e);
+    if (!v)
+      return s;
+    if (v.getType().isa<AddressType>()) {
+      if (ArrayType at = arrayTypeOfAddress(v)) {
+        s.addr = v;
+        s.arrTy = at;
+        return s;
+      }
+      // scalar address (char var / member): load with the declared type
+      mlir::Type vt = v.getType().cast<AddressType>().getElementType();
+      auto it = byteViewTypes.find(v);
+      if (it != byteViewTypes.end())
+        vt = it->second;
+      s.scalar = toChar(location, builder.create<LoadOp>(location, vt, v));
+      return s;
+    }
+    if (auto at = v.getType().dyn_cast<ArrayType>()) {
+      // whole-array value (e.g. a user FC returning a string): spill to a temp
+      auto buf = builder.create<TempVariableOp>(location, AddressType::get(at),
+                                                builder.getStringAttr("strarg"));
+      builder.create<StoreOp>(location, buf, v);
+      s.addr = buf;
+      s.arrTy = at;
+      return s;
+    }
+    s.scalar = toChar(location, v);
+    return s;
+  }
+
+  /// Numeric argument of a conversion builtin, as scl dint.
+  mlir::Value numArgD(mlir::Location location, const ExpressionAST *e) {
+    mlir::Value v = mlirGenRValue(e);
+    return v ? toDint(location, v) : mlir::Value();
+  }
+
+  mlir::Value mlirGenStringBuiltin(mlir::Location location,
+                                   const FunctionCallAST *expr,
+                                   StringRef calleeRef) {
+    std::string up = unquote(calleeRef);
+    up = llvm::StringRef(up).upper();
+    // collect arguments: named (IN1/IN2/IN/L/P/...) or positional
+    SmallVector<std::pair<std::string, const ExpressionAST *>, 4> args;
+    for (auto &p : expr->getParameters()) {
+      if (auto *b = dyn_cast<BinaryExpressionAST>(p.get())) {
+        if (b->getOp() == tok_assignment || b->getOp() == tok_assign_output) {
+          if (auto *n = dyn_cast<SimpleVariableAST>(b->getLhs())) {
+            args.push_back({std::string(n->getName().upper()), b->getRhs()});
+            continue;
+          }
+        }
+      }
+      args.push_back({"", p.get()});
+    }
+    bool anyNamed = llvm::any_of(args,
+                                 [](auto &a) { return !a.first.empty(); });
+    auto arg = [&](const char *name, int pos) -> const ExpressionAST * {
+      if (anyNamed) {
+        for (auto &a : args)
+          if (a.first == name)
+            return a.second;
+        return nullptr;
+      }
+      return pos < (int)args.size() ? args[(size_t)pos].second : nullptr;
+    };
+
+    auto d = dintTy();
+    const int64_t RESULT_MAX = 254; // String[254]: max SCL string size
+
+    if (up == "LEN") {
+      auto *e = arg("IN", 0);
+      if (!e)
+        return nullptr;
+      return strLenOf(location, strArgOf(location, e));
+    }
+
+    if (up == "CONCAT" || up == "LEFT" || up == "RIGHT" || up == "MID" ||
+        up == "DELETE" || up == "INSERT" || up == "REPLACE" || up == "FIND") {
+      auto *e1 = arg("IN1", 0);
+      auto *e2 = arg("IN2", 1);
+      // single-input functions take IN
+      if (!e1)
+        e1 = arg("IN", 0);
+      StrArg a = strArgOf(location, e1);
+      if (!a.addr && a.lit.empty() && !a.scalar)
+        return nullptr;
+      int64_t nA = a.maxLen();
+      mlir::Value lenA = toDint(location, strLenOf(location, a));
+      StrBuf buf = newStrBuf(location, RESULT_MAX);
+
+      if (up == "CONCAT") {
+        if (!e2)
+          return nullptr;
+        StrArg b = strArgOf(location, e2);
+        mlir::Value lenB = toDint(location, strLenOf(location, b));
+        int64_t nB = b.maxLen();
+        for (int64_t i = 0; i < RESULT_MAX; ++i) {
+          mlir::Value ic = sclConst(location, d, i);
+          mlir::Value inA = builder.create<LessThanOp>(location, ic, lenA);
+          mlir::Value idxB = clampIdx(
+              location, builder.create<SubOp>(location, ic, lenA).getResult(), nB);
+          mlir::Value byteB = byteVD(location, b, idxB);
+          // zero beyond b's current length
+          byteB = mux(location,
+                      builder.create<LessThanOp>(location, idxB, lenB), byteB,
+                      sclConst(location, d, 0));
+          mlir::Value inRange = builder.create<LessThanOp>(
+              location, ic, builder.create<AddOp>(location, lenA, lenB).getResult());
+          mlir::Value byte = mux(location, inA, byteD(location, a, i), byteB);
+          byte = mux(location, inRange, byte, sclConst(location, d, 0));
+          storeStrByte(location, buf, i, byte);
+        }
+        return buf.addr;
+      }
+      if (up == "LEFT" || up == "RIGHT" || up == "MID" || up == "DELETE" ||
+          up == "INSERT" || up == "REPLACE" || up == "FIND") {
+        // integer parameters L / P (1-based position), as scl dint
+        auto numArg = [&](const char *name, int pos) -> mlir::Value {
+          auto *e = arg(name, pos);
+          return e ? numArgD(location, e) : mlir::Value();
+        };
+        mlir::Value L = numArg("L", 1), P = numArg("P", 2);
+        if (up == "LEFT" || up == "RIGHT") {
+          if (!L)
+            return nullptr;
+        } else if (up == "MID" || up == "DELETE" || up == "REPLACE") {
+          if (!L || !P)
+            return nullptr;
+        }
+        if (up == "FIND") {
+          if (!e2)
+            return nullptr;
+          StrArg b = strArgOf(location, e2);
+          int64_t nB = b.maxLen();
+          mlir::Value lenB = toDint(location, strLenOf(location, b));
+          mlir::Value pos = sclConst(location, d, 0);
+          for (int64_t s = 0; s < nA; ++s) {
+            mlir::Value match = boolConst(location, true);
+            for (int64_t k = 0; k < nB; ++k) {
+              if (s + k >= nA)
+                continue; // would read past a's buffer: no match
+              mlir::Value eq = builder.create<EqualOp>(
+                  location, byteD(location, b, k), byteD(location, a, s + k));
+              mlir::Value ge = builder.create<GreaterEqualOp>(
+                  location, sclConst(location, d, k), lenB); // k >= lenB
+              match = builder.create<AndOp>(
+                  location, match,
+                  builder.create<OrOp>(location, ge, eq).getResult());
+            }
+            mlir::Value first = builder.create<EqualOp>(
+                location, pos, sclConst(location, d, 0));
+            match = builder.create<AndOp>(location, match, first);
+            pos = mux(location, match, sclConst(location, d, s + 1), pos);
+          }
+          return builder.create<IntegerCastOp>(location, getType(tok_int), pos)
+              .getResult();
+        }
+        // string-producing functions: byte i of the result
+        StrArg b;      // second string arg (INSERT/REPLACE), else unused
+        mlir::Value lenB, nB;
+        if (up == "INSERT" || up == "REPLACE") {
+          if (!e2)
+            return nullptr;
+          b = strArgOf(location, e2);
+          lenB = toDint(location, strLenOf(location, b));
+          nB = sclConst(location, d, b.maxLen());
+        }
+        // pm1 = P-1 (0-based insertion/deletion point); P is only present
+        // for MID/DELETE/INSERT/REPLACE (null otherwise)
+        mlir::Value pm1 = P
+            ? builder.create<SubOp>(location, P, sclConst(location, d, 1)).getResult()
+            : sclConst(location, d, 0);
+        for (int64_t i = 0; i < RESULT_MAX; ++i) {
+          mlir::Value ic = sclConst(location, d, i);
+          mlir::Value byte = sclConst(location, d, 0);
+          if (up == "LEFT") {
+            byte = mux(location,
+                       builder.create<LessThanOp>(location, ic, L),
+                       byteD(location, a, i), sclConst(location, d, 0));
+          } else if (up == "RIGHT") {
+            // last L chars, left-aligned in the result: byte[i] = a[start+i]
+            mlir::Value start = mux(
+                location,
+                builder.create<GreaterThanOp>(location, lenA, L),
+                builder.create<SubOp>(location, lenA, L).getResult(),
+                sclConst(location, d, 0));
+            mlir::Value src = clampIdx(
+                location, builder.create<AddOp>(location, start, ic).getResult(), nA);
+            mlir::Value in = builder.create<AndOp>(
+                location, builder.create<LessThanOp>(location, ic, L),
+                builder.create<LessThanOp>(
+                    location, builder.create<AddOp>(location, start, ic).getResult(),
+                    lenA));
+            byte = mux(location, in, byteVD(location, a, src), sclConst(location, d, 0));
+          } else if (up == "MID") {
+            mlir::Value src = clampIdx(
+                location, builder.create<AddOp>(location, pm1, ic).getResult(), nA);
+            mlir::Value in = builder.create<AndOp>(
+                location, builder.create<LessThanOp>(location, ic, L),
+                builder.create<LessThanOp>(location,
+                                           builder.create<AddOp>(location, pm1, ic).getResult(),
+                                           lenA));
+            mlir::Value bb = byteVD(location, a, src);
+            byte = mux(location, in, bb, sclConst(location, d, 0));
+          } else if (up == "DELETE") {
+            // result[i] = a[i] for i < P-1, else a[i+L] while in range
+            mlir::Value src = clampIdx(
+                location, builder.create<AddOp>(location, ic, L).getResult(), nA);
+            mlir::Value fromTail = builder.create<AndOp>(
+                location,
+                builder.create<GreaterEqualOp>(location, ic, pm1),
+                builder.create<LessThanOp>(
+                    location, builder.create<AddOp>(location, ic, L).getResult(), lenA));
+            mlir::Value byteHead = mux(
+                location, builder.create<LessThanOp>(location, ic, pm1),
+                byteD(location, a, i), sclConst(location, d, 0));
+            mlir::Value byteTail = mux(location, fromTail,
+                                       byteVD(location, a, src), sclConst(location, d, 0));
+            byte = mux(location,
+                       builder.create<LessThanOp>(location, ic, pm1),
+                       byteHead, byteTail);
+          } else if (up == "INSERT" || up == "REPLACE") {
+            // result = a[0..P-2] + b + a[P-1(+L)..]  (REPLACE skips L chars of a)
+            mlir::Value skip = up == "REPLACE" ? L : sclConst(location, d, 0);
+            int64_t nBInt = b.maxLen();
+            mlir::Value srcB = clampIdx(
+                location, builder.create<SubOp>(location, ic, pm1).getResult(), nBInt);
+            mlir::Value byteB = byteVD(location, b, srcB);
+            byteB = mux(location,
+                        builder.create<LessThanOp>(location, srcB, lenB), byteB,
+                        sclConst(location, d, 0));
+            // tail of a after the replaced/inserted region: a[i - lenB + skip]
+            mlir::Value srcA = clampIdx(
+                location,
+                builder.create<AddOp>(
+                    location,
+                    builder.create<SubOp>(location, ic, lenB).getResult(),
+                    skip).getResult(),
+                nA);
+            mlir::Value inMid = builder.create<AndOp>(
+                location,
+                builder.create<GreaterEqualOp>(location, ic, pm1),
+                builder.create<LessThanOp>(
+                    location, ic,
+                    builder.create<AddOp>(location, pm1, lenB).getResult()));
+            mlir::Value inTail = builder.create<AndOp>(
+                location,
+                builder.create<GreaterEqualOp>(
+                    location, ic,
+                    builder.create<AddOp>(location, pm1, lenB).getResult()),
+                builder.create<LessThanOp>(
+                    location, srcA, lenA));
+            mlir::Value byteHead = mux(
+                location, builder.create<LessThanOp>(location, ic, pm1),
+                byteD(location, a, i), sclConst(location, d, 0));
+            mlir::Value byteTail = mux(location, inTail,
+                                       byteVD(location, a, srcA), sclConst(location, d, 0));
+            byte = mux(location, builder.create<LessThanOp>(location, ic, pm1),
+                       byteHead, mux(location, inMid, byteB, byteTail));
+          }
+          storeStrByte(location, buf, i, byte);
+        }
+        return buf.addr;
+      }
+    }
+
+    // <type>_TO_STRING(IN): decimal representation of an integer value
+    if (llvm::StringRef(up).ends_with("_TO_STRING") && up != "STRING_TO_STRING") {
+      auto *e = arg("IN", 0);
+      if (!e)
+        return nullptr;
+      mlir::Value v = numArgD(location, e);
+      if (!v)
+        return nullptr;
+      mlir::Value neg = builder.create<LessThanOp>(location, v, sclConst(location, d, 0));
+      mlir::Value a = mux(location, neg,
+                         builder.create<SubOp>(location, sclConst(location, d, 0), v).getResult(),
+                         v);
+      // digits d[k] = (a / 10^k) % 10, least significant first
+      SmallVector<mlir::Value, 10> dig;
+      mlir::Value t = a;
+      for (int k = 0; k < 10; ++k) {
+        dig.push_back(builder.create<ModOp>(location, t, sclConst(location, d, 10)).getResult());
+        t = builder.create<DivOp>(location, t, sclConst(location, d, 10)).getResult();
+      }
+      // number of digits of a (1..10)
+      mlir::Value len = sclConst(location, d, 1);
+      int64_t p10 = 10;
+      for (int k = 1; k < 10; ++k, p10 *= 10)
+        len = mux(location,
+                  builder.create<GreaterEqualOp>(location, a, sclConst(location, d, p10)),
+                  sclConst(location, d, k + 1), len);
+      mlir::Value sign = mux(location, neg, sclConst(location, d, 1),
+                             sclConst(location, d, 0));
+      mlir::Value total = builder.create<AddOp>(location, len, sign).getResult();
+      StrBuf buf = newStrBuf(location, RESULT_MAX);
+      for (int64_t p = 0; p < RESULT_MAX; ++p) {
+        mlir::Value byte;
+        if (p > 10) {
+          byte = sclConst(location, d, 0);
+        } else {
+          mlir::Value pc = sclConst(location, d, p);
+          mlir::Value inL = builder.create<LessThanOp>(location, pc, total);
+          mlir::Value j = builder.create<SubOp>(location, pc, sign).getResult();
+          mlir::Value di = builder.create<SubOp>(
+              location, builder.create<SubOp>(location, len, sclConst(location, d, 1)).getResult(),
+              j).getResult(); // digit index from the right: len-1-j
+          mlir::Value dsel = sclConst(location, d, 0);
+          for (int k = 0; k < 10; ++k)
+            dsel = mux(location,
+                       builder.create<EqualOp>(location, di, sclConst(location, d, k)),
+                       dig[(size_t)k], dsel);
+          mlir::Value ch = builder.create<AddOp>(location, dsel, sclConst(location, d, 48)).getResult();
+          byte = mux(location, inL, ch, sclConst(location, d, 0));
+          if (p == 0)
+            byte = mux(location, neg, sclConst(location, d, 45), byte); // '-'
+        }
+        storeStrByte(location, buf, p, byte);
+      }
+      return buf.addr;
+    }
+
+    // STRING_TO_<inttype>(IN): decimal parse (optional leading '-')
+    if (llvm::StringRef(up).starts_with("STRING_TO_")) {
+      std::string dst = up.substr(std::string("STRING_TO_").size());
+      mlir::Type target = nullptr;
+      if (dst == "INT" || dst == "SINT" || dst == "CHAR")
+        target = dst == "CHAR" ? getType(tok_char) : getType(tok_int);
+      else if (dst == "DINT" || dst == "UDINT" || dst == "LINT" || dst == "ULINT")
+        target = getType(tok_dint);
+      else if (dst == "WORD" || dst == "UINT")
+        target = getType(tok_word);
+      else if (dst == "DWORD")
+        target = getType(tok_dword);
+      else if (dst == "BYTE" || dst == "USINT")
+        target = getType(tok_byte);
+      else
+        return nullptr; // STRING_TO_REAL/BOOL/...: not supported (stub)
+      auto *e = arg("IN", 0);
+      if (!e)
+        return nullptr;
+      StrArg s = strArgOf(location, e);
+      mlir::Value acc = sclConst(location, d, 0);
+      mlir::Value sign = sclConst(location, d, 1);
+      mlir::Value cont = boolConst(location, true);
+      int64_t n = s.maxLen();
+      for (int64_t i = 0; i < n; ++i) {
+        mlir::Value c = byteD(location, s, i);
+        mlir::Value isDig = builder.create<AndOp>(
+            location,
+            builder.create<GreaterEqualOp>(location, c, sclConst(location, d, 48)),
+            builder.create<LessEqualOp>(location, c, sclConst(location, d, 57)));
+        mlir::Value isMinus = builder.create<EqualOp>(location, c, sclConst(location, d, 45));
+        mlir::Value minusAt0 = i == 0 ? isMinus : mlir::Value(boolConst(location, false));
+        mlir::Value take = builder.create<AndOp>(
+            location, cont,
+            builder.create<OrOp>(location, isDig, minusAt0).getResult());
+        mlir::Value dval = mux(location, isDig,
+                               builder.create<SubOp>(location, c, sclConst(location, d, 48)).getResult(),
+                               sclConst(location, d, 0));
+        acc = mux(location, take,
+                  builder.create<AddOp>(
+                      location,
+                      builder.create<MulOp>(location, acc, sclConst(location, d, 10)).getResult(),
+                      dval).getResult(),
+                  acc);
+        cont = builder.create<AndOp>(
+            location, cont,
+            builder.create<OrOp>(location, isDig, minusAt0).getResult());
+        sign = mux(location, minusAt0, sclConst(location, d, -1), sign);
+      }
+      mlir::Value r = builder.create<MulOp>(location, sign, acc).getResult();
+      return castToType(location, r, target);
+    }
+
+    return nullptr;
+  }
+
   mlir::Value mlirGenFcCall(const FunctionCallAST *expr, StringRef callee,
                             bool allowVoid = false) {
     auto location = loc(expr->loc());
     auto context = builder.getContext();
+
+    // IEC 61131-3 string function (LEN/CONCAT/...)? Handled before the
+    // generic argument collection: these accept positional arguments, and
+    // STRING_TO_INT must not be swallowed by the generic _TO_ conversion.
+    if (functionResultTypes.find(callee) == functionResultTypes.end())
+      if (mlir::Value v = mlirGenStringBuiltin(location, expr, callee))
+        return v;
 
     // get arguments
     SmallVector<mlir::Value, 4> arguments;

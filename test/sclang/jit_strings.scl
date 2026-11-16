@@ -1,0 +1,122 @@
+// RUN: sclang --opt --emit=jit %s 2>&1 | FileCheck %s
+// Execution test for the IEC 61131-3 ST string functions (LEN, CONCAT,
+// STRING_TO_INT, INT_TO_STRING, LEFT, RIGHT, MID, FIND, DELETE, INSERT,
+// REPLACE, STRING_TO_DINT, DINT_TO_STRING): each result is checked against
+// the expected string/value and reported via DEBUG PRINT.
+// CHECK-NOT: bad
+// CHECK: len ok
+// CHECK: parse ok
+// CHECK: fmt ok
+// CHECK: concatchar ok
+// CHECK: left ok
+// CHECK: right ok
+// CHECK: mid ok
+// CHECK: find ok
+// CHECK: delete ok
+// CHECK: insert ok
+// CHECK: replace ok
+// CHECK: dint ok
+// CHECK: dintfmt ok
+// CHECK: zero ok
+function OB1 : int
+var_temp
+  s : string[20];
+  t : string[20];
+  u : string[20];
+  n : int;
+  m : int;
+  c : char;
+end_var
+begin
+  s := 'abc';
+  n := LEN(s);
+  IF n = 3 THEN
+    // DEBUG PRINT len ok
+  ELSE
+    // DEBUG PRINT len bad
+  END_IF;
+  m := STRING_TO_INT('-42');
+  IF m = -42 THEN
+    // DEBUG PRINT parse ok
+  ELSE
+    // DEBUG PRINT parse bad
+  END_IF;
+  s := INT_TO_STRING(m + 1);
+  IF s = '-41' THEN
+    // DEBUG PRINT fmt ok
+  ELSE
+    // DEBUG PRINT fmt bad
+  END_IF;
+  c := 'x';
+  t := CONCAT(IN1 := s, IN2 := c);
+  IF LEN(t) = 4 AND t = '-41x' THEN
+    // DEBUG PRINT concatchar ok
+  ELSE
+    // DEBUG PRINT concatchar bad
+  END_IF;
+  u := LEFT(IN := t, L := 3);
+  IF u = '-41' THEN
+    // DEBUG PRINT left ok
+  ELSE
+    // DEBUG PRINT left bad
+  END_IF;
+  u := RIGHT(IN := t, L := 2);
+  IF u = '1x' THEN
+    // DEBUG PRINT right ok
+  ELSE
+    // DEBUG PRINT right bad
+  END_IF;
+  u := MID(IN := t, L := 2, P := 2);
+  IF u = '41' THEN
+    // DEBUG PRINT mid ok
+  ELSE
+    // DEBUG PRINT mid bad
+  END_IF;
+  n := FIND(IN1 := t, IN2 := '1x');
+  IF n = 3 THEN
+    // DEBUG PRINT find ok
+  ELSE
+    // DEBUG PRINT find bad
+  END_IF;
+  u := DELETE(IN := t, L := 2, P := 2);
+  IF u = '-x' THEN
+    // DEBUG PRINT delete ok
+  ELSE
+    // DEBUG PRINT delete bad
+  END_IF;
+  u := INSERT(IN1 := t, IN2 := 'ZZ', P := 2);
+  IF u = '-ZZ41x' THEN
+    // DEBUG PRINT insert ok
+  ELSE
+    // DEBUG PRINT insert bad
+  END_IF;
+  u := REPLACE(IN := t, L := 2, P := 2, IN2 := 'QQ');
+  IF u = '-QQx' THEN
+    // DEBUG PRINT replace ok
+  ELSE
+    // DEBUG PRINT replace bad
+  END_IF;
+  m := STRING_TO_DINT('123');
+  IF m = 123 THEN
+    // DEBUG PRINT dint ok
+  ELSE
+    // DEBUG PRINT dint bad
+  END_IF;
+  u := DINT_TO_STRING(-12345);
+  IF u = '-12345' THEN
+    // DEBUG PRINT dintfmt ok
+  ELSE
+    // DEBUG PRINT dintfmt bad
+  END_IF;
+  u := INT_TO_STRING(0);
+  IF u = '0' AND LEN(u) = 1 THEN
+    // DEBUG PRINT zero ok
+  ELSE
+    // DEBUG PRINT zero bad
+  END_IF;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

@@ -82,7 +82,9 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
   callStackSize = 256, exit code 2); the Formelparser SCL project compiles
   (const symbols fold in rvalue position via mlirGenConstSymbol; forward
   declarations are replaced by the real definition in mlirGenFunctionLike;
-  string builtins remain stubs — compile tier only needs valid MLIR). Fixed since last writing:
+  the string functions CONCAT/STRING_TO_INT/INT_TO_STRING/LEN/... are
+  implemented inline in mlirGenStringBuiltin — see the SPEC matrix and
+  test/sclang/jit_strings.scl). Fixed since last writing:
   pointer.awl fully (TARn stores the AR as a raw S7 pointer via the new
   awl.ar_raw/scl_rt_ar_raw; LARn <mem> loads the operand's 32-bit content;
   TARn ARm does ARm := ARn; [LD n]/[#var]/[MD 4] indirect bases load the
@@ -116,8 +118,9 @@ references when a file is compiled alone:
 - undefined constant `FC_ID_CHECK_ARRAY` (FC_ID_CHECK references a symbol from
   another TIA library file);
 - cross-file types/symbols in Step7-Formelparser-SCL when compiled per file
-  (pass as a project except the `CONCAT`/`STRING_TO_INT`/`INT_TO_STRING`
-  string builtins, which are not implemented).
+  (the project passes as a whole; the `CONCAT`/`STRING_TO_INT`/
+  `INT_TO_STRING` string functions it uses are implemented since —
+  mlirGenStringBuiltin).
 
 ## Oracle tier: what passes and what the failures mean
 

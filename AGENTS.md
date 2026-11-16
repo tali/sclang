@@ -180,9 +180,20 @@ has no `\b` — use python3 for regex edits.
     separate file): mlirGenFunctionLike replaces an existing FunctionOp
     with the real definition, and skips a forward decl arriving after the
     definition (was: "redefinition of symbol" verification error).
-  - String builtins (CONCAT/STRING_TO_INT/...) are still stubs (warn +
-    empty string / 0) — enough for the compile tier; runtime semantics are
-    a documented gap.
+  - String functions (LEN/CONCAT/LEFT/RIGHT/MID/FIND/DELETE/INSERT/REPLACE,
+    <type>_TO_STRING, STRING_TO_<inttype>) are implemented inline in
+    mlirGenStringBuiltin (lib/SclGen/MLIRGen.cpp): strings are flat
+    zero-padded !scl.char buffers, length = index of first zero byte
+    (C-string semantics), functions expand to unrolled byte loops and
+    return a String[254] temp buffer ADDRESS; string-to-string assignment
+    with different declared sizes copies the common prefix and zero-fills
+    (truncating). STRING_TO_REAL/REAL_TO_STRING/VAL_STRG remain external
+    stubs. Gotchas hit: runtime indices into a source buffer MUST be
+    clamped (clampIdx) — the mux evaluates both sides, so an unclamped
+    index reads OOB and segfaults the JIT; and optional args (P/L) are null
+    mlir::Value for functions that don't take them — never build an op on
+    them unconditionally (SubOp on null -> crash). Tests: SclGen/MLIR/
+    string_builtins.scl (codegen), sclang/jit_strings.scl (execution).
   - __FEATURE 0 reports nrAccus = 4 (4-accu CPU default). startup_multiple
     expects 2 (awlsim runs it with --twoaccu) — permanent oracle failure;
     startup_OB100/OB102 expect 4 and pass.

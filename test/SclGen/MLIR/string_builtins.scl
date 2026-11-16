@@ -1,0 +1,29 @@
+// RUN: sclang-gen --emit=mlir %s --opt | FileCheck %s
+// Codegen for the IEC 61131-3 ST string functions: LEN becomes an unrolled
+// first-zero-byte scan, CONCAT/INT_TO_STRING produce a String[254] temp
+// buffer (scl.tmpvar "strres") filled byte by byte, STRING_TO_INT an
+// unrolled digit accumulator, and the results are copied back into the
+// target string with a byte-wise load/store loop (truncating assignment).
+// CHECK-LABEL: scl.function @OB1
+// CHECK: scl.getindex {{.*}} from %s : !scl.address<!scl.array<!scl.char, 0:7>>
+// CHECK: scl.load {{.*}} : !scl.address<!scl.char> : !scl.char
+// CHECK: scl.cmpne {{.*}} : !scl.dint
+// CHECK: %strres = scl.tmpvar "strres" : !scl.address<!scl.array<!scl.char, 0:253>>
+// CHECK: scl.getindex {{.*}} from %strres : !scl.address<!scl.array<!scl.char, 0:253>>
+// CHECK: scl.store {{.*}} : !scl.address<!scl.char> = {{.*}} : !scl.char
+// CHECK: scl.mul {{.*}} : !scl.dint
+// CHECK: scl.store {{.*}} : !scl.address<!scl.int> = {{.*}} : !scl.int
+function OB1 : int
+var_temp
+  s : string[8];
+  t : string[8];
+  n : int;
+  m : int;
+end_var
+begin
+  s := 'ab';
+  n := LEN(s);
+  t := CONCAT(IN1 := s, IN2 := 'cd');
+  m := STRING_TO_INT(t);
+  s := INT_TO_STRING(m);
+end_function
