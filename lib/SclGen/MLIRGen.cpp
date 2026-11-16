@@ -3000,7 +3000,10 @@ private:
 
   /// If `name` is a local variable of FB-instance type (e.g. a TON_TIME
   /// timer in VAR_TEMP), return the FB symbol it instantiates.
-  std::optional<StringRef> fbInstanceOf(StringRef name) {
+  // NB: returns std::string, not StringRef — unquote() produces a temporary
+  // and a StringRef into it would dangle (this was the intermittent garbage
+  // "unknown FB '<binary>'" warning in the LogMsg project)
+  std::optional<std::string> fbInstanceOf(StringRef name) {
     auto sym = symbolTable.lookup(name);
     mlir::Type t = sym.getType();
     if (!t)

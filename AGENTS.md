@@ -156,10 +156,15 @@ has no `\b` — use python3 for regex edits.
   @+2.., zero-fills to maxlen; STRING[n] size is (n+2) even-aligned;
   ARRAY OF STRING[n] keeps the dim in elemType; STRING[i] = char at +2+(i-1)
   width 8 (stringIndexed flag in resolveDbMember).
-  Known flake (pre-existing at b7b6d1e, ~10% of runs): the LogMsg SCL
-  project intermittently fails with a garbage `unknown FB '<binary>'`
-  line — uninitialized string somewhere in SclGen, NOT caused by recent
-  changes; worth debugging (ASan build).
+  Known flake (pre-existing at b7b6d1e): the LogMsg SCL project
+  intermittently fails (~4% of runs). Root cause of the garbage
+  `unknown FB '<binary>'` warning found and fixed: fbInstanceOf returned
+  optional<StringRef> pointing into the temporary std::string from
+  unquote() (dangling StringRef) — now returns optional<std::string>.
+  A residual silent mlir::failure() (~4%, no diagnostic, dies around the
+  DataLogNewFile/Delete calls) is still open — next step is an MSan build
+  of SclGen (needs instrumented libc++), not ASan (uninit reads are
+  invisible to it).
   lit is 117/117 (check-sclang). OB-temp presets (OB1 header) are written at OB entry
   (scl_rt_ob_start); the JIT driver runs the startup OB (OB 102 on a
   4-accu CPU, else OB 100) before the OB 1 cycles; __FEATURE t [, v] is

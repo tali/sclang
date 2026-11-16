@@ -115,9 +115,10 @@ see the list above; the structural one is that accumulator registers are not
 modeled across labels (fix: runtime accu slots in the sim, awl dialect
 accu_get/accu_set ops), which blocks insn_4ACCU and the across-label
 SPZ/LOOP jumps. Known flake: the
-LogMsg SCL project fails intermittently (~10%) with a garbage `unknown FB`
-diagnostic — a pre-existing uninitialized-memory bug in SclGen
-(reproduces at b7b6d1e), tracked in AGENTS.md.
+LogMsg SCL project fails intermittently (~4%). The garbage `unknown FB`
+diagnostic was a dangling StringRef in fbInstanceOf (returned a StringRef
+into the temporary from unquote()) — fixed; a residual silent failure
+around the DataLog calls remains open (needs MSan), tracked in AGENTS.md.
 
 Every remaining spec deviation is an `approx` row in the generated SPEC
 matrix ([spec-conformance.md](spec-conformance.md), currently 95 tags, 0
