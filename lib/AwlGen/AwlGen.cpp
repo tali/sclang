@@ -459,9 +459,11 @@ private:
         int64_t area = 0, db = 0;
         skipWs();
         if (cur.size() >= 2 && toupper((unsigned char)cur[0]) == 'D' &&
-            toupper((unsigned char)cur[1]) == 'B') {
+            (toupper((unsigned char)cur[1]) == 'B' ||
+             toupper((unsigned char)cur[1]) == 'I')) {
+          // P#DB... = DB area 0x84, P#DI... = DI area 0x85 (instance DB)
+          area = toupper((unsigned char)cur[1]) == 'B' ? 0x84 : 0x85;
           cur = cur.drop_front(2);
-          area = 0x84;
           while (!cur.empty() && isdigit((unsigned char)cur.front())) {
             db = db * 10 + (cur.front() - '0');
             cur = cur.drop_front();
@@ -480,6 +482,7 @@ private:
           case 'A': case 'Q': area = 0x82; break;
           case 'M': area = 0x83; break;
           case 'L': area = 0x86; break;
+          case 'V': area = 0x87; break; // VL: parent L-stack frame
           default: break; // not an area letter: symbolic name, skip below
           }
           if (area == 0)
@@ -1009,10 +1012,17 @@ static void typeInfo(const std::string &ty, const std::map<std::string, Layout> 
 
 // Parse a STRUCT/VAR body until one of the end keywords; assigns offsets
 // per S7 rules (BOOL bit-packed; WORD/DWORD even-aligned).
+// Compound types passed by reference (pointer header in the slot):
+// ANY (10-byte header), POINTER/STRING/DATE_AND_TIME (6-byte DB-pointer).
+// BLOCK_* refs and POINTER-typed... note POINTER itself is passed by value.
+static bool isByRefType(const std::string &t) {
+  return t == "ANY" || t == "DATE_AND_TIME" || t.rfind("STRING", 0) == 0;
+}
+
 static void parseStructBody(Lexer &lx, Layout &layout,
                             const std::map<std::string, Layout> &udts,
                             std::initializer_list<const char *> endKws,
-                            int section = 0) {
+                            int section = 0, bool fcBlock = false) {
   // continue after members collected by a previous section (VAR_INPUT,
   // VAR_OUTPUT, ... all share one address space)
   int32_t bit = layout.bitCursor;
@@ -1159,6 +1169,12 @@ static void parseStructBody(Lexer &lx, Layout &layout,
         int32_t sz, al, wb;
         bool isb;
         typeInfo(t, udts, sz, al, wb, isb);
+        // by-ref compound params carry a pointer header in their slot
+        // (6 bytes, 10 for ANY) — reserve it so following members shift
+        // (FC params live in the caller's L frame; in FBs only IN_OUT
+        // compound params are pointer-overridden in the instance DB)
+        if ((fcBlock || section == 2) && isByRefType(t) && !isb)
+          sz = std::max(sz, t == "ANY" ? 10 : 6);
         m.widthBits = wb;
         m.isBit = isb;
         if (isb) {
@@ -1235,6 +1251,8 @@ public:
   std::string forcedKind; // set by parseModule for FUNCTION(_BLOCK) quoted
   const Layout *curLayout = nullptr;         // interface of the block being parsed
   const Layout *curTempLayout = nullptr;     // VAR_TEMP of the block being parsed
+  int32_t blockVlLitOff = 0;   // running offset of VL literal copies in this block
+  int32_t blockVlLitEnd = 0;   // end of the VL literal area (for the lframe size)
   bool curBlockFb = false;
   int32_t curBlockNum = 0;
   // base of the FC parameter area within the block's L frame; must match
@@ -1411,7 +1429,8 @@ public:
               // TEMP vars live in the block's L-stack frame, not in the
               // interface (param) address space
               Layout &dst = sec == 4 ? tempLayouts[blockName] : secLayouts[sec];
-              parseStructBody(lx, dst, udtLayouts, {"END_VAR"}, sec);
+              parseStructBody(lx, dst, udtLayouts, {"END_VAR"}, sec,
+                              kind == "FC");
               if (sec != 4)
                 secSeen[sec] = true;
               continue;
@@ -1440,11 +1459,24 @@ public:
               m.byte = absBit / 8;
               m.bit = absBit % 8;
               L.members[kv.first] = m;
-              // total member extent in bits (arrays: count * elem stride)
+              // total member extent in bits (arrays: count * elem stride);
+              // by-reference compound params carry a pointer header in
+              // their slot (6 bytes, 10 for ANY), so reserve at least that
               int32_t totalBits =
                   m.type == "ARRAY"
                       ? (m.isBit ? m.count : m.count * m.stride * 8)
                       : (m.widthBits ? m.widthBits : 1);
+              // FC params are passed via the caller's L frame, so compound
+              // by-ref params carry a pointer header in their slot (6 bytes,
+              // 10 for ANY). In FBs only IN_OUT compound params are
+              // pointer-overridden in the instance DB (awlsim
+              // blockinterface __buildField); IN/OUT fields keep their
+              // declared size.
+              bool hdrSlot = kind == "FC" ? isByRefParam(&m)
+                                          : (m.section == 2 && isByRefParam(&m));
+              if (hdrSlot)
+                totalBits = std::max(totalBits,
+                                     m.type == "ANY" ? 80 : 48);
               int32_t endBit = absBit + totalBits;
               if (endBit > L.bitCursor)
                 L.bitCursor = endBit;
@@ -2359,6 +2391,8 @@ private:
       obBlockNames.push_back(name); // for the JIT startup-OB wrappers
     curBlockNum = (int32_t)num;
     curBlockFb = kind == "FB";
+    blockVlLitOff = 0;
+    blockVlLitEnd = 0;
     if (!quotedName.empty()) {
       auto it = namedLayouts.find(quotedName);
       curLayout = it != namedLayouts.end() ? &it->second : nullptr;
@@ -2541,6 +2575,17 @@ private:
         }
         break;
       }
+    }
+    // VL literal copies for by-ref params live in this block's L frame past
+    // the parameter area; grow the frame to cover them
+    if (blockVlLitEnd > 0) {
+      int32_t frame = curTempLayout ? curTempLayout->size : 0;
+      int32_t paramBytes = (kind == "FC" && curLayout) ? curLayout->size : 0;
+      if (kLocalBase + paramBytes > frame)
+        frame = kLocalBase + paramBytes;
+      if (blockVlLitEnd > frame)
+        frame = blockVlLitEnd;
+      blockOp->setAttr("lframe", builder.getI32IntegerAttr(frame));
     }
     blockEnded = false;
     return true;
@@ -3574,7 +3619,7 @@ private:
   static bool isAreaLetter(char c) {
     // German E/A/Z and English I/Q/C/L (L = local data, own area)
     return c == 'E' || c == 'A' || c == 'M' || c == 'T' || c == 'Z' ||
-           c == 'I' || c == 'Q' || c == 'C' || c == 'L';
+           c == 'I' || c == 'Q' || c == 'C' || c == 'L' || c == 'V';
   }
   static mlir::scl::DirectArea areaOf(char c) {
     switch (c) {
@@ -3582,6 +3627,7 @@ private:
     case 'A': case 'Q': return mlir::scl::DirectArea::Output;
     case 'M': return mlir::scl::DirectArea::Marker;
     case 'L': return mlir::scl::DirectArea::Local;
+    case 'V': return mlir::scl::DirectArea::VLocal;
     case 'T': return mlir::scl::DirectArea::Timer;
     case 'Z': case 'C': return mlir::scl::DirectArea::Counter;
     }
@@ -3729,14 +3775,19 @@ private:
       std::string name = upperStr(lexer.getIdent());
       lexer.next();
       const MemberInfo *mi = nullptr;
+      bool isParamMember = false; // interface member (vs. TEMP var)
       mlir::scl::DirectArea area = mlir::scl::DirectArea::Marker;
       int32_t byte = 0;
       if (curLayout) {
         auto it = curLayout->members.find(name);
         if (it != curLayout->members.end()) {
           mi = &it->second;
+          isParamMember = true;
+          // FB interface lives in the instance DB; FC interface lives in
+          // the caller's L frame at the parameter area offset, i.e. the
+          // VL area from inside the callee (awlsim MEM_VL)
           area = curBlockFb ? mlir::scl::DirectArea::DataBlock
-                            : mlir::scl::DirectArea::Local;
+                            : mlir::scl::DirectArea::VLocal;
           byte = curBlockFb ? mi->byte : kLocalBase + mi->byte;
         }
       }
@@ -3778,9 +3829,29 @@ private:
         while (lexer.getCurToken() == Tok::lbracket ||
                lexer.getCurToken() == Tok::dot) {
           if (lexer.getCurToken() == Tok::lbracket) {
-            addBits(byte, bit, consumeArrayIndices(mi));
-            if (!mi->elemType.empty())
-              type = mi->elemType; // array element type for .sub chains
+            if (mi->type.rfind("STRING", 0) == 0) {
+              // STRING[i]: char access — chars start at byte 2, one byte
+              // each, 1-based index (awlsim AwlDataType string indexing)
+              lexer.next();
+              int32_t idx = 1;
+              if (lexer.getCurToken() == Tok::integer) {
+                idx = (int32_t)lexer.getInteger();
+                lexer.next();
+              }
+              while (lexer.getCurToken() != Tok::rbracket &&
+                     lexer.getCurToken() != Tok::eof)
+                lexer.next();
+              if (lexer.getCurToken() == Tok::rbracket)
+                lexer.next();
+              byte += 2 + (idx - 1); // chars start at byte 2, 1-based
+              bit = 0;
+              width = 8;
+              type = "CHAR";
+            } else {
+              addBits(byte, bit, consumeArrayIndices(mi));
+              if (!mi->elemType.empty())
+                type = mi->elemType; // array element type for .sub chains
+            }
           } else {
             lexer.next(); // '.'
             if (lexer.getCurToken() == Tok::ident ||
@@ -3812,6 +3883,26 @@ private:
           }
         }
         lastOperandType = type;
+        if (isParamMember && !curBlockFb && isByRefType(mi->type)) {
+          // FC by-ref compound param (STRING/ANY/DATE_AND_TIME): the VL
+          // slot holds a 6-byte pointer header; dereference it — load the
+          // S7 pointer dword at slot+2, add the member access offset in
+          // bits. The runtime's rawToPacked decodes the raw pointer in the
+          // indirect load/store.
+          int32_t slotBase = kLocalBase + mi->byte;
+          int64_t relBits = (int64_t)(byte - slotBase) * 8 + bit;
+          auto hdr = mkDirect(mlir::scl::DirectArea::VLocal, 0, slotBase + 2, 0, 32);
+          mlir::Value raw = builder.create<awl::LoadOp>(loc(), hdr);
+          mlir::Value p = zextTo64(castTo(raw, builder.getI32Type()));
+          if (relBits)
+            p = builder.create<awl::AddOp>(
+                loc(), builder.getI64Type(), p,
+                constInt(builder.getI64Type(), relBits));
+          lastIndirectWidth = width != 1 && width != 8 && width != 16 && width != 32
+                                  ? 32
+                                  : width;
+          return p;
+        }
         // FB locals live in the instance DB addressed via the DI register
         // (db -1); DI-area accesses add the AR2 multi-instance base offset
         return mkDirect(area, area == mlir::scl::DirectArea::DataBlock ? -1 : 0,
@@ -5252,10 +5343,7 @@ private:
   // parameter slot and the callee accesses the actual operand through it
   // (P##param, like awlsim).
   static bool isByRefParam(const MemberInfo *m) {
-    const std::string &t = m->type;
-    // (BLOCK_* refs and POINTER params are passed as values — the block
-    // number / S7 pointer — not by reference)
-    return t == "ANY" || t == "STRING" || t == "DATE_AND_TIME";
+    return isByRefType(m->type);
   }
 
   // Is the current CALL parameter RHS an addressable operand (memory
@@ -5373,11 +5461,15 @@ private:
                : ew == 64 ? 0x0E
                           : 0x06;
     }
+    // L-stack r-values are forwarded to the callee as VL (0x87, the
+    // caller's frame) — awlsim _FC_trans_dbpointerInVL maps L -> VL
+    bool isLocal = dt.getArea() == mlir::scl::DirectArea::Local ||
+                   dt.getArea() == mlir::scl::DirectArea::VLocal;
     int32_t areaS7 =
         dt.getArea() == mlir::scl::DirectArea::Input    ? 0x81
         : dt.getArea() == mlir::scl::DirectArea::Output ? 0x82
         : dt.getArea() == mlir::scl::DirectArea::Marker ? 0x83
-        : dt.getArea() == mlir::scl::DirectArea::Local  ? 0x86
+        : isLocal                                       ? 0x87
                                                         : 0x84;
     int32_t pdb = dt.getArea() == mlir::scl::DirectArea::DataBlock
                       ? dt.getDb()
@@ -5386,10 +5478,12 @@ private:
     if (isInstance)
       areaS7 = 0x84; // awlsim _trans_anyPointerFromDI: area DB + open DI nr
     // the S7 pointer dword uses P#DBX style for DB areas: db field 0 (the
-    // DB number lives in the ANY header word @+4, awlsim ANYPointer)
+    // DB number lives in the ANY header word @+4, awlsim ANYPointer);
+    // VL (0x87) has no db field, so its byte offset uses bits 3..23
+    uint32_t byteMask = areaS7 == 0x87 ? 0x1FFFFF : 0x1FFF;
     uint32_t ptr = ((uint32_t)areaS7 << 24) |
                    ((uint32_t)(areaS7 == 0x84 ? 0 : (pdb & 0xFF)) << 16) |
-                   ((uint32_t)(dt.getByte() & 0x1FFF) << 3) |
+                   ((uint32_t)(dt.getByte() & byteMask) << 3) |
                    (uint32_t)(dt.getBit() & 7);
     auto put = [&](int32_t i, int32_t w, int32_t val) {
       builder.create<awl::StoreOp>(
@@ -5442,24 +5536,43 @@ private:
     auto dt = mlir::dyn_cast<mlir::scl::DirectType>(a.getType());
     if (!dt)
       return true; // not an addressable operand: nothing to point at
+    // awlsim _FC_trans_dbpointerInVL: the 6-byte header in the caller's
+    // L-stack (VL from the callee) is { db-number word @+0, S7 pointer
+    // dword @+2 }. An L-stack r-value is forwarded as VL (0x87); a DB
+    // r-value as DB (0x84) with the DB number only in the header word
+    // (db field 0, P#DBX style — awlsim drops the pointer's db field for
+    // indirect access); an instance-DB r-value as DB with the current
+    // DI number (DINO) in the header word.
+    bool isLocal = dt.getArea() == mlir::scl::DirectArea::Local ||
+                   dt.getArea() == mlir::scl::DirectArea::VLocal;
     int32_t areaS7 =
         dt.getArea() == mlir::scl::DirectArea::Input    ? 0x81
         : dt.getArea() == mlir::scl::DirectArea::Output ? 0x82
         : dt.getArea() == mlir::scl::DirectArea::Marker ? 0x83
-        : dt.getArea() == mlir::scl::DirectArea::Local  ? 0x86
+        : isLocal                                       ? 0x87
                                                         : 0x84;
+    bool isInstance =
+        dt.getArea() == mlir::scl::DirectArea::DataBlock && dt.getDb() < 0;
     int32_t pdb = dt.getArea() == mlir::scl::DirectArea::DataBlock
-                      ? dt.getDb()
+                      ? (dt.getDb() > 0 ? dt.getDb() : 0)
                       : 0;
-    if (pdb == 0 && dt.getArea() == mlir::scl::DirectArea::DataBlock)
-      areaS7 = 0x85; // instance DB
+    uint32_t byteMask = areaS7 == 0x87 ? 0x1FFFFF : 0x1FFF;
     uint32_t ptr = ((uint32_t)areaS7 << 24) |
-                   ((uint32_t)(pdb & 0xFF) << 16) |
-                   ((uint32_t)(dt.getByte() & 0x1FFF) << 3) |
+                   ((uint32_t)(dt.getByte() & byteMask) << 3) |
                    (uint32_t)(dt.getBit() & 7);
-    builder.create<awl::StoreOp>(
-        loc(), constInt(builder.getI32Type(), pdb),
-        mkDirect(area, db, byte, 0, 16));
+    if (isInstance) {
+      // DB number = the currently open instance DB (awlsim: diRegister)
+      mlir::Value dino = builder.create<awl::DbInfoOp>(
+          loc(), builder.getI64Type(), builder.getI32IntegerAttr(3),
+          builder.getI32IntegerAttr(0));
+      builder.create<awl::StoreOp>(
+          loc(), castTo(dino, builder.getI32Type()),
+          mkDirect(area, db, byte, 0, 16));
+    } else {
+      builder.create<awl::StoreOp>(
+          loc(), constInt(builder.getI32Type(), pdb),
+          mkDirect(area, db, byte, 0, 16));
+    }
     builder.create<awl::StoreOp>(
         loc(), constInt(builder.getI32Type(), (int32_t)ptr),
         mkDirect(area, db, byte + 2, 0, 32));
@@ -6006,7 +6119,7 @@ private:
     };
     // a param is copied as a block when it is a STRUCT or UDT member
     auto isBlockParam = [&](const MemberInfo *m) {
-      return m->type == "STRUCT" ||
+      return m->type == "STRUCT" || isByRefType(m->type) ||
              (m->type != "ARRAY" && !m->type.empty() &&
               udtLayouts.count(m->type) > 0);
     };
@@ -6072,12 +6185,60 @@ private:
         // FB/SFB params go to the instance DB (DI register for multi-instance
         // calls), at the multi-instance base offset if applicable.
         bool isDbParam = kind == "FB" || kind == "SFB";
+        // by-reference (pointer header in the slot): FC params always;
+        // FB params only when IN_OUT (awlsim overrides the instance-DB
+        // field with a DB-pointer then). FB IN/OUT compound params are
+        // copied by value into the instance DB.
+        bool byRef = isByRefParam(m) && (!isDbParam || m->section == 2);
         auto area = isDbParam ? mlir::scl::DirectArea::DataBlock
                               : mlir::scl::DirectArea::Marker;
         int32_t byte = isDbParam ? paramBase + m->byte : kLocalBase + m->byte;
         int32_t width = m->widthBits ? m->widthBits : 16;
         bool isArray = m->type == "ARRAY" && m->count > 1;
-        if (!isOutput && isByRefParam(m) && byRefRhs(m->type == "ANY")) {
+        if (!isOutput && byRef && !isDbParam &&
+            lexer.getCurToken() == Tok::ident && lexer.curQuoted() &&
+            lexer.curQuoteChar() == '\'' && m->type.rfind("STRING", 0) == 0) {
+          // string literal for a by-ref STRING param: copy the string into
+          // the CALLER's L frame past the callee's parameter area and stage
+          // a {0, VL-pointer} header at the param slot (awlsim
+          // _FC_trans_copyToVLWithDBPtr: L -> VL when forwarded)
+          std::string raw = lexer.getIdent().str();
+          lexer.next();
+          int32_t maxlen =
+              m->type.size() > 6 ? atoi(m->type.c_str() + 6) : 254;
+          int32_t litBytes = maxlen + 2;
+          if (litBytes & 1)
+            ++litBytes;
+          // past the callee's whole parameter area within this frame
+          int32_t base = kLocalBase +
+                         (callLayout ? callLayout->size : 0) + blockVlLitOff;
+          blockVlLitOff += litBytes;
+          if (base + litBytes > blockVlLitEnd)
+            blockVlLitEnd = base + litBytes;
+          auto putB = [&](int32_t off, int32_t v) {
+            builder.create<awl::StoreOp>(
+                loc(), constInt(builder.getI32Type(), v),
+                mkDirect(mlir::scl::DirectArea::Local, 0, base + off, 0, 8));
+          };
+          putB(0, maxlen);
+          putB(1, (int32_t)raw.size());
+          for (size_t i = 0; i < raw.size(); ++i)
+            putB(2 + (int32_t)i, (unsigned char)raw[i]);
+          for (int32_t i = (int32_t)raw.size(); i < maxlen; ++i)
+            putB(2 + i, 0);
+          // stage the 6-byte header { db-nr 0, VL pointer } in the marker
+          // staging area; param_in copies it to the caller frame's VL area
+          builder.create<awl::StoreOp>(
+              loc(), constInt(builder.getI32Type(), 0),
+              mkDirect(area, isDbParam ? paramDb : 0, byte, 0, 16));
+          uint32_t ptr = ((uint32_t)0x87 << 24) |
+                         ((uint32_t)(base & 0x1FFFFF) << 3);
+          builder.create<awl::StoreOp>(
+              loc(), constInt(builder.getI32Type(), (int32_t)ptr),
+              mkDirect(area, isDbParam ? paramDb : 0, byte + 2, 0, 32));
+          continue;
+        }
+        if (!isOutput && byRef && byRefRhs(m->type == "ANY")) {
           // by-reference param: ANY params stage a 10-byte ANY header,
           // compound types a 6-byte POINTER; no value copy either way
           bool ok = m->type == "ANY"
@@ -6085,6 +6246,41 @@ private:
               : emitPtrParamHeader(area, isDbParam ? paramDb : 0, byte);
           if (!ok)
             return false;
+          continue;
+        }
+        if (!isOutput && isDbParam && isByRefType(m->type) &&
+            m->section != 2) {
+          // FB IN/OUT compound param (e.g. STRING): copied by value into
+          // the instance DB slot (awlsim FB param translation copies the
+          // value; only IN_OUT compound fields are DB-pointers)
+          if (lexer.getCurToken() == Tok::ident && lexer.curQuoted() &&
+              lexer.curQuoteChar() == '\'' && m->type.rfind("STRING", 0) == 0) {
+            std::string raw = lexer.getIdent().str();
+            lexer.next();
+            int32_t maxlen =
+                m->type.size() > 6 ? atoi(m->type.c_str() + 6) : 254;
+            auto putB = [&](int32_t off, int32_t v) {
+              builder.create<awl::StoreOp>(
+                  loc(), constInt(builder.getI32Type(), v),
+                  mkDirect(area, paramDb, byte + off, 0, 8));
+            };
+            putB(0, maxlen);
+            putB(1, (int32_t)raw.size());
+            for (size_t i = 0; i < raw.size(); ++i)
+              putB(2 + (int32_t)i, (unsigned char)raw[i]);
+            for (int32_t i = (int32_t)raw.size(); i < maxlen; ++i)
+              putB(2 + i, 0);
+            continue;
+          }
+          mlir::Value target;
+          mlir::Value v = parseCallParamValue(&target);
+          if (!v)
+            return false;
+          if (target && mlir::isa<mlir::scl::DirectType>(target.getType()))
+            copyBlockParam(m, byte, target, area, paramDb, true);
+          else
+            builder.create<awl::StoreOp>(
+                loc(), v, mkDirect(area, paramDb, byte, m->bit, width));
           continue;
         }
         if (!isOutput) {
@@ -6111,7 +6307,7 @@ private:
             outParams.push_back(
                 {m, target, isArray && mlir::isa<mlir::scl::DirectType>(
                                           target.getType())});
-        } else if (isByRefParam(m) && callRhsAddressable()) {
+        } else if (byRef && callRhsAddressable()) {
           // by-reference OUT param: the callee writes through the staged
           // pointer; nothing to read back
           bool ok = m->type == "ANY"

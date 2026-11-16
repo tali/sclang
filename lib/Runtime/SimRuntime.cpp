@@ -90,7 +90,9 @@ struct SimState {
   // L-stack (S7 local data): a stack of frame bases; L-area byte offsets
   // are relative to lBase (the base of the innermost frame).
   std::vector<uint64_t> lFrames;
+  std::vector<uint64_t> lSizes; // frame size at the same stack depth
   uint64_t lBase = 0;
+  uint64_t curFrameSize = 0;
   // call-saved block-call state, saved/restored with the L frame (S7 restores
   // the address registers and DB/DI registers when a block returns)
   struct FrameSave {
@@ -162,6 +164,14 @@ SimState &state() {
 }
 
 
+/// Frame base for an L/V-area access: 'L' is the innermost frame, 'V' (VL,
+/// S7 area 0x87) the parent frame (awlsim: VL = caller's L-stack frame).
+static uint64_t frameBaseOf(uint8_t area, const SimState &s) {
+  if (area == SCL_RT_AREA_V)
+    return s.lFrames.empty() ? 0 : s.lFrames.back();
+  return s.lBase;
+}
+
 /// Byte offset of the AR2 multi-instance base (awlsim adds the AR2 base to
 /// every DI-area access, see cpu.py getArea_DI/setArea_DI).
 static uint32_t ar2ByteOff() {
@@ -198,8 +208,11 @@ std::vector<uint8_t> &bufferFor(uint8_t area, uint32_t db, uint32_t &byteOff,
       buf.resize((uint64_t)byteOff + width, 0);
     return buf;
   }
-  if (area == SCL_RT_AREA_L)
-    byteOff += (uint32_t)s.lBase; // L-area access is frame-relative
+  if (area == SCL_RT_AREA_L || area == SCL_RT_AREA_V) {
+    // L/V access is frame-relative; both share the single L-stack buffer
+    byteOff += (uint32_t)frameBaseOf(area, s);
+    area = SCL_RT_AREA_L;
+  }
   auto &buf = s.areaBytes[area];
   if (buf.empty()) {
     uint64_t size = s.areaSize[area] ? s.areaSize[area]
@@ -539,12 +552,16 @@ uint64_t scl_rt_pack_s7(uint32_t area, uint32_t db, uint32_t byte,
 void scl_rt_l_push(uint32_t bytes) {
   auto &s = state();
   s.lFrames.push_back(s.lBase);
+  s.lSizes.push_back(s.curFrameSize);
   s.frameSaves.push_back({s.ars[0], s.ars[1], s.currentDb, s.currentDi});
-  // frames are even-aligned and always advance by at least 2 bytes, so
-  // blocks without TEMP vars still get a separate L frame (a callee must
-  // not clobber the caller's LB/LW/LD local data)
-  uint64_t adv = (bytes + 1) & ~uint64_t(1);
+  // Frames tile the L-stack without overlap: the new frame starts after the
+  // CURRENT (caller's) frame. Frames are even-aligned and always advance by
+  // at least 2 bytes, so blocks without TEMP vars still get a separate L
+  // frame (a callee must not clobber the caller's LB/LW/LD local data,
+  // including the VL parameter/literal area past kParamBase).
+  uint64_t adv = (s.curFrameSize + 1) & ~uint64_t(1);
   s.lBase += adv < 2 ? 2 : adv;
+  s.curFrameSize = bytes;
 }
 
 void scl_rt_l_pop(void) {
@@ -552,6 +569,8 @@ void scl_rt_l_pop(void) {
   if (!s.lFrames.empty()) {
     s.lBase = s.lFrames.back();
     s.lFrames.pop_back();
+    s.curFrameSize = s.lSizes.back();
+    s.lSizes.pop_back();
     if (!s.frameSaves.empty()) {
       auto &f = s.frameSaves.back();
       s.ars[0] = f.ar1;
@@ -568,9 +587,11 @@ void scl_rt_l_pop(void) {
 static const uint32_t kParamBase = 8192;
 
 // Copy the FC parameter area between the absolute marker staging area
-// (where the call site stores the actual parameters) and the callee's own L
-// frame at kParamBase. param_in runs after the callee's scl_rt_l_push,
-// param_out before scl_rt_l_pop, so the callee's frame is current in both.
+// (where the call site stores the actual parameters) and the CALLER's L
+// frame at kParamBase (awlsim: the FC parameter area lives in the caller's
+// L-stack and is reached from the callee via the VL area, 0x87).
+// param_in runs after the callee's scl_rt_l_push, param_out before
+// scl_rt_l_pop, so the parent frame (lFrames.back()) is the caller's in both.
 static void paramCopy(uint32_t bytes, bool toCallee) {
   auto &s = state();
   auto &lbuf = s.areaBytes[SCL_RT_AREA_L];
@@ -579,7 +600,10 @@ static void paramCopy(uint32_t bytes, bool toCallee) {
   auto &mbuf = s.areaBytes[SCL_RT_AREA_M];
   if (mbuf.empty())
     mbuf.resize(kDefaultAreaSize, 0);
-  uint64_t lOff = s.lBase + kParamBase;   // callee frame parameter area
+  // FC parameter area lives in the CALLER's frame (awlsim: VL from the
+  // callee); param_in runs after the callee's l_push, so the parent frame
+  // is the caller's
+  uint64_t lOff = frameBaseOf(SCL_RT_AREA_V, s) + kParamBase;
   uint64_t mOff = kParamBase;             // marker staging area
   uint64_t dst = toCallee ? lOff : mOff;
   uint64_t src = toCallee ? mOff : lOff;
@@ -1037,7 +1061,7 @@ static uint64_t rawToPacked(uint64_t p) {
     return p;
   uint8_t s7 = (uint8_t)((p >> 24) & 0xFF);
   if (p < 0x100000000ull && s7 >= 0x80 && s7 <= 0x87) {
-    static const uint8_t s7area[8] = {'P', 'I', 'Q', 'M', 'D', 'D', 'L', 'L'}; // 0x87 VL = L frame
+    static const uint8_t s7area[8] = {'P', 'I', 'Q', 'M', 'D', 'D', 'L', 'V'}; // 0x87 = VL (parent frame)
     uint8_t area = s7area[s7 - 0x80];
     // 0x85 = DI area: the DB number comes from the DI register (db=0xFFFF)
     uint32_t db = s7 == 0x85 ? 0xFFFF : (uint32_t)((p >> 16) & 0xFF);
@@ -1194,7 +1218,7 @@ void scl_rt_sfc(uint32_t n) {
       outDb = dbNr;
       return 0;
     }
-    static const uint8_t s7area[8] = {'P', 'I', 'Q', 'M', 'D', 'D', 'L', 'L'}; // 0x87 VL = L frame
+    static const uint8_t s7area[8] = {'P', 'I', 'Q', 'M', 'D', 'D', 'L', 'V'}; // 0x87 = VL (parent frame)
     if (area >= 0x80 && area <= 0x86) {
       outArea = s7area[area - 0x80];
       outDb = 0;
@@ -1228,8 +1252,10 @@ void scl_rt_sfc(uint32_t n) {
         size = hw->second; // referenced extent of an undeclared DB
       return (uint64_t)off + w <= size;
     }
-    if (area == SCL_RT_AREA_L)
-      off += (uint32_t)s.lBase;
+    if (area == SCL_RT_AREA_L || area == SCL_RT_AREA_V) {
+      off += (uint32_t)frameBaseOf(area, s);
+      area = SCL_RT_AREA_L; // V shares the L-stack buffer
+    }
     auto &buf = s.areaBytes[area];
     uint64_t size = buf.empty() ? (s.areaSize[area] ? s.areaSize[area]
                                                    : kDefaultAreaSize)
@@ -1296,7 +1322,7 @@ void scl_rt_iec(uint32_t n) {
     uint32_t s7 = (uint32_t)(ptr >> 24) & 0xFF;
     byte = (uint32_t)(ptr >> 3) & 0x1FFF;
     bit = (uint8_t)(ptr & 7);
-    static const uint8_t s7area[8] = {'P', 'I', 'Q', 'M', 'D', 'D', 'L', 'L'}; // 0x87 VL = L frame
+    static const uint8_t s7area[8] = {'P', 'I', 'Q', 'M', 'D', 'D', 'L', 'V'}; // 0x87 = VL (parent frame)
     if (s7 == 0x84 || s7 == 0x85) { // DB / DI: DB number from the header
       uint32_t dbNr = anyWord(base, 4);
       if (dbNr == 0 || dbNr >= 0x100)
@@ -1765,7 +1791,7 @@ void scl_rt_sim_dump_areas(void) {
         printf("  %c[%zu]=%u\n", area, i, buf[i]);
     }
   };
-  for (char area : {'I', 'Q', 'M'})
+  for (char area : {'I', 'Q', 'M', 'L'})
     dumpBuf(area, 0, s.areaBytes[(uint8_t)area]);
   for (auto &kv : s.dbs)
     dumpBuf(SCL_RT_AREA_DB, kv.first, kv.second);

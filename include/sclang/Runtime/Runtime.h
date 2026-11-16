@@ -51,6 +51,7 @@ enum SclRtArea {
   SCL_RT_AREA_Q = 'Q',  ///< outputs     (%Q / AWL A)
   SCL_RT_AREA_M = 'M',  ///< markers     (%M / AWL M)
   SCL_RT_AREA_L = 'L',  ///< local data  (%L / AWL LW/LB/LD), per-call frame
+  SCL_RT_AREA_V = 'V',  ///< parent-frame local data (S7 VL, 0x87): the caller's L frame
   SCL_RT_AREA_DB = 'D', ///< data blocks (%DBn / AWL DBn), db = DB number
   SCL_RT_AREA_T = 'T',  ///< timers      (%T / AWL T)   (reserved)
   SCL_RT_AREA_C = 'C',  ///< counters    (%C / AWL Z)   (reserved)

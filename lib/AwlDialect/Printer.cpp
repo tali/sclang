@@ -79,6 +79,8 @@ struct TextPrinter {
       case scl::DirectArea::Input: a = 'E'; break;
       case scl::DirectArea::Output: a = 'A'; break;
       case scl::DirectArea::Marker: a = 'M'; break;
+      case scl::DirectArea::Local: a = 'L'; break;
+      case scl::DirectArea::VLocal: a = 'V'; break;
       case scl::DirectArea::Timer: a = 'T'; break;
       case scl::DirectArea::Counter: a = 'Z'; break;
       default: break;

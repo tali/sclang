@@ -182,6 +182,8 @@ enum class DirectArea : uint8_t {
   Output = 'Q',    // %Q / AWL A
   Marker = 'M',    // %M / AWL M
   Local = 'L',     // %L / AWL LW/LB/LD — per-call L-stack frame (see ADR)
+  VLocal = 'V',    // AWL 0x87 VL — the *parent* frame: FC parameters live in
+                   // the caller's L frame (awlsim callstack: MEM_VL)
   DataBlock = 'D', // %DBn / AWL DBn (db = DB number)
   Timer = 'T',     // %T / AWL T
   Counter = 'C',   // %C / AWL Z

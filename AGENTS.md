@@ -231,13 +231,24 @@ has no `\b` — use python3 for regex edits.
     advance by >= 2 bytes even when empty, so TEMP-less blocks still get a
     separate frame. l_push/l_pop also save/restore AR1/AR2 and the DB/DI
     registers (S7 restores them on block return).
-  - FC interface params live in the block's own L frame at `kLocalBase`
-    (8192, = runtime `kParamBase`); the block's `lframe` attr covers
-    `kLocalBase + paramBytes`. `paramBytes` attr on `awl.block` triggers
-    `scl_rt_param_in` (after push) / `scl_rt_param_out` (before pop), which
-    copy the param area between the absolute MARKER staging area (call-site
-    stores/copy-backs, `kLocalBase` in M) and the callee frame. This makes
-    recursive FCs correct (factorial.awl) and VAR_IN_OUT by-reference work.
+  - FC interface params live in the CALLER's L frame at `kLocalBase`
+    (8192, = runtime `kParamBase`), reached from inside the callee via the
+    VL area (0x87 = parent frame; awlsim MEM_VL). The callee's `paramBytes`
+    attr triggers `scl_rt_param_in` (after its l_push) / `scl_rt_param_out`
+    (before l_pop), which copy the param area between the absolute MARKER
+    staging area (call-site stores/read-backs, `kLocalBase` in M) and the
+    caller frame (`lFrames.back() + kParamBase`). The callee accesses params
+    as `!scl.direct<V, 0, kLocalBase+byte, ...>` (`DirectArea::VLocal = 'V'`);
+    V and L share ONE runtime buffer (`areaBytes['L']`), only the frame base
+    differs (`frameBaseOf`). L frames TILE the L-stack: `l_push` advances
+    `lBase` by the CURRENT (caller's) frame size (`curFrameSize`), so a
+    callee frame never overlaps the caller's param/VL-literal area. The
+    callee's own `lframe` attr still covers `kLocalBase + paramBytes` so a
+    nested callee's VL (= this frame) has room for its params.
+    String literals for by-ref FC STRING params are copied into the caller's
+    frame past the callee's whole param area (`blockVlLitOff/End`, grows
+    `lframe`) with a `{0, 0x87|off}` header staged in M (awlsim
+    `_FC_trans_copyToVLWithDBPtr`).
     FC interface layout = canonical order VAR_INPUT, VAR_OUTPUT (+ implicit
     RET_VAL right after OUT), VAR_IN_OUT, VAR — independent of source order
     (awlsim `blockinterface.getAllFields`). The pre-scan runs TWICE
@@ -266,11 +277,28 @@ has no `\b` — use python3 for regex edits.
     to packed i64 too, so the _ptr variants are used uniformly for T/C.
   - `P##name` pointers: FB interface -> area 0x85 (DI), FC interface -> 0x87
     (VL, parent L frame, at kLocalBase+byte), TEMP -> 0x86 (own frame).
-    `P#DBX` lexes as area 0x85. REAL-typed locals load as f32 (bitcast in
+    `P#DIX...` lexes as area 0x85, `P#V...` as 0x87. REAL-typed locals load
+    as f32 (bitcast in
     `lowerDirectLoad`; `lastOperandType` tracks the member type).
     VL (0x87) pointers decode in `rawToPacked` with a 21-bit byte field
     (bits 3..23 — the DB field is unused for VL), because the FC param area
     starts at kLocalBase = 8192 > 8191 (13-bit S7 byte field max).
+  - By-ref compound params (STRING[n]/DATE_AND_TIME/ANY — `isByRefType`)
+    carry a pointer header in their slot: 6 bytes {db-nr word @+0, S7 ptr
+    dword @+2}, 10 bytes for ANY. The header size is RESERVED in the layout
+    in `parseStructBody` (declaration order!) — FC: all interface sections;
+    FB: only VAR_IN_OUT (awlsim overrides just those with a DB-pointer).
+    `paramBytes` therefore covers the headers; `param_in/out` copy them.
+    Call-site staging: `emitPtrParamHeader` (L RHS -> 0x87 VL 21-bit byte
+    field, db word 0; DB RHS -> 0x84 with db field 0, DB number in the word
+    — awlsim drops the pointer db field for indirect access, uses the DB
+    register; instance RHS -> 0x84 + DINO word), `emitAnyParamHeader`
+    (10-byte ANY header). Callee-side `#param` / `#param[i]` on an FC
+    compound param derefs the header: load ptr dword at VL slot+2, add the
+    member offset in bits, return an i64 indirect address (STRING[i] is a
+    1-based char at byte 2+(i-1), width 8). FB IN/OUT compound params are
+    copied BY VALUE into the instance DB slot (byte-wise `copyBlockParam`,
+    or the literal directly).
   - `P#DBn.SYM[.SUB][[i]]` symbolic pointer literals: the lexer captures the
     member part in `Token.ptrSym` (+ `ptrTypeCode`/`ptrCount` for ANY
     suffixes like `P#M 10.0 BYTE 7`); `consumePtrLiteral()` resolves the
