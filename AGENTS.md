@@ -141,7 +141,7 @@ has no `\b` — use python3 for regex edits.
   line). sclang driver exits 2 when scl_rt_assert_failures() > 0 after the
   cycle loop.
   Current: AWL 116/116 (100%), SCL single 15/15, SCL per-project 16/17,
-  JIT smoke 75/77 (97%), oracle (__ASSERT value-level) 50/53 (94%).
+  JIT smoke 75/77 (97%), oracle (__ASSERT value-level) 51/53 (96%).
   String handling: `VAR := 'lit'` in DB-init/statement stores len @+1, chars
   @+2.., zero-fills to maxlen; STRING[n] size is (n+2) even-aligned;
   ARRAY OF STRING[n] keeps the dim in elemType; STRING[i] = char at +2+(i-1)
@@ -342,6 +342,20 @@ has no `\b` — use python3 for regex edits.
     `emitAnyParamHeader(..., toVl=false)` — NOT just the raw pointer
     dword (that was the anypointer.awl FB-section bug: header bytes read
     back as 0x83/0/0x50/...).
+  - FC ARRAY params are by-ref too (awlsim: compound r-values get a
+    6-byte DB-pointer header in the VL slot via _FC_trans_dbpointerInVL,
+    regardless of the param's declared type): call site stages the header
+    (byRef includes m->type == "ARRAY" for FC), the slot reserves
+    max(array size, 6) bytes, and the callee derefs like other by-ref
+    params. The callee deref uses the ROOT param's slot/type (saved as
+    rootByRefParam/rootParamByte/rootParamType before descending into
+    .SUB members — otherwise #ARR[1].SUB reads the header as data) and
+    combines the header's DB-number word into the raw pointer ONLY for
+    DB/DI-area headers (VL 0x87 bits 16-23 are the 21-bit byte field —
+    kLocalBase=8192 needs them; masking them broke string literals).
+    FB array params stay value-copied into the instance DB; forwarding a
+    by-ref FC array param to an FB param (`VAR0 := #VAR00`) copies the
+    elements through the deref'd pointer (copyArrayParamInd).
   - By-reference CALL params (`isByRefParam`: ANY/STRING/DATE_AND_TIME):
     ANY params stage a 10-byte ANY header (`emitAnyParamHeader`, incl.
     `P#... TYPE n` literals via ptrTypeCode/ptrCount); STRING/DT params

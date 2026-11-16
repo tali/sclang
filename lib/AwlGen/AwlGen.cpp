@@ -1186,7 +1186,7 @@ static void parseStructBody(Lexer &lx, Layout &layout,
         // (6 bytes, 10 for ANY) — reserve it so following members shift
         // (FC params live in the caller's L frame; in FBs only IN_OUT
         // compound params are pointer-overridden in the instance DB)
-        if (isByRefType(t) && !isb) {
+        if ((isByRefType(t) || t == "ARRAY") && !isb) {
           int32_t hdr = t == "ANY" ? 10 : 6;
           if (fcBlock)
             sz = std::max(sz, hdr); // FC: header slot, declared size if larger
@@ -1490,8 +1490,10 @@ public:
               // pointer-overridden in the instance DB (awlsim
               // blockinterface __buildField); IN/OUT fields keep their
               // declared size.
-              bool hdrSlot = kind == "FC" ? isByRefParam(&m)
-                                          : (m.section == 2 && isByRefParam(&m));
+              bool hdrSlot = kind == "FC"
+                                 ? (isByRefParam(&m) || m.type == "ARRAY")
+                                 : (m.section == 2 &&
+                                    (isByRefParam(&m) || m.type == "ARRAY"));
               if (hdrSlot) {
                 int32_t hdrBits = m.type == "ANY" ? 80 : 48;
                 totalBits = kind == "FC" ? std::max(totalBits, hdrBits)
@@ -3848,6 +3850,12 @@ private:
         else if (mi->type == "COUNTER")
           area = mlir::scl::DirectArea::Counter;
         // array index / UDT sub-member suffixes: #ARR[1].SUB.X
+        // (the deref below must use the ROOT param's slot: after descending
+        // into .SUB members `mi` points at the leaf, not the by-ref param)
+        bool rootByRefParam = isParamMember && !curBlockFb &&
+                              (isByRefType(mi->type) || mi->type == "ARRAY");
+        int32_t rootParamByte = byte;
+        std::string rootParamType = mi->type;
         int32_t bit = mi->bit;
         int32_t width = mi->widthBits ? mi->widthBits : 16;
         std::string type = mi->type;
@@ -3911,17 +3919,55 @@ private:
         lastOperandType = type;
         if (isParamMember && !curBlockFb && mi->type == "POINTER")
           ptrParamSlot = byte; // store/load writes/reads the 6-byte header
-        if (isParamMember && !curBlockFb && isByRefType(mi->type)) {
-          // FC by-ref compound param (STRING/ANY/DATE_AND_TIME): the VL
-          // slot holds a 6-byte pointer header; dereference it — load the
-          // S7 pointer dword at slot+2, add the member access offset in
-          // bits. The runtime's rawToPacked decodes the raw pointer in the
-          // indirect load/store.
-          int32_t slotBase = kLocalBase + mi->byte;
+        if (rootByRefParam) {
+          // FC by-ref compound param (STRING/ANY/DATE_AND_TIME/ARRAY): the
+          // VL slot holds a 6-byte pointer header { db-nr word @+0, S7 ptr
+          // dword @+2 with db field 0 }; dereference it — combine the
+          // header's DB number into the raw pointer (awlsim resolves the
+          // compound via the header's dbNumber, not the DB register), add
+          // the member access offset in bits. The runtime's rawToPacked
+          // decodes the raw pointer in the indirect load/store.
+          int32_t slotBase = rootParamByte;
           int64_t relBits = (int64_t)(byte - slotBase) * 8 + bit;
           auto hdr = mkDirect(mlir::scl::DirectArea::VLocal, 0, slotBase + 2, 0, 32);
-          mlir::Value raw = builder.create<awl::LoadOp>(loc(), hdr);
-          mlir::Value p = zextTo64(castTo(raw, builder.getI32Type()));
+          mlir::Value raw =
+              castTo(builder.create<awl::LoadOp>(loc(), hdr), builder.getI32Type());
+          if (rootParamType != "ANY") {
+            // Combine the header's DB number into the raw pointer, but only
+            // for DB/DI-area headers: the staged dword has db field 0 there,
+            // while for VL (0x87) bits 16-23 are part of the 21-bit byte
+            // field (kLocalBase = 8192 needs them) and must stay untouched.
+            auto dbwAddr =
+                mkDirect(mlir::scl::DirectArea::VLocal, 0, slotBase, 0, 16);
+            mlir::Value dbw = castTo(
+                builder.create<awl::LoadOp>(loc(), dbwAddr), builder.getI32Type());
+            dbw = builder.create<awl::AndOp>(loc(), builder.getI32Type(), dbw,
+                                             constInt(builder.getI32Type(), 0xFFFF));
+            auto i32 = builder.getI32Type();
+            mlir::Value areaBits = builder.create<awl::AndOp>(
+                loc(), i32, raw, constInt(i32, (int32_t)0xFF000000));
+            mlir::Value isDb = builder.create<awl::CmpEqOp>(
+                loc(), builder.getI1Type(), areaBits,
+                constInt(i32, (int32_t)0x84000000));
+            mlir::Value isDi = builder.create<awl::CmpEqOp>(
+                loc(), builder.getI1Type(), areaBits,
+                constInt(i32, (int32_t)0x85000000));
+            auto zextI1 = [&](mlir::Value b) {
+              auto op = builder.create<awl::CastOp>(loc(), i32, b);
+              op->setAttr("zext", builder.getUnitAttr());
+              return mlir::Value(op);
+            };
+            mlir::Value f =
+                builder.create<awl::OrOp>(loc(), i32, zextI1(isDb), zextI1(isDi));
+            mlir::Value fmask = builder.create<awl::MulOp>(loc(), i32, f,
+                                                           constInt(i32, 0xFFFF));
+            mlir::Value dbwEff =
+                builder.create<awl::AndOp>(loc(), i32, dbw, fmask);
+            mlir::Value dbwSh = builder.create<awl::MulOp>(loc(), i32, dbwEff,
+                                                           constInt(i32, 0x10000));
+            raw = builder.create<awl::OrOp>(loc(), i32, raw, dbwSh);
+          }
+          mlir::Value p = zextTo64(raw);
           if (relBits)
             p = builder.create<awl::AddOp>(
                 loc(), builder.getI64Type(), p,
@@ -6243,6 +6289,29 @@ private:
         }
       }
     };
+    // Whole-array copy from an indirect source (a forwarded by-ref FC
+    // param, e.g. `VAR0 := #VAR00`): element k is read via load_indirect
+    // at src + k*elemBits and stored into the callee's interface area.
+    auto copyArrayParamInd = [&](const MemberInfo *m, int32_t baseByte,
+                                 mlir::Value src, // i64 raw ptr to element lo
+                                 mlir::scl::DirectArea dstArea, int32_t dstDb) {
+      int32_t elemBits = m->elemSize ? m->elemSize * 8
+                                     : (m->widthBits ? m->widthBits : 16);
+      int32_t ew = m->widthBits ? m->widthBits : 16;
+      for (int32_t k = 0; k < m->count; ++k) {
+        mlir::Value a = src;
+        if (k * elemBits)
+          a = builder.create<awl::AddOp>(
+              loc(), builder.getI64Type(), src,
+              constInt(builder.getI64Type(), (int64_t)k * elemBits));
+        mlir::Value v = builder.create<awl::LoadIndirectOp>(
+            loc(), builder.getI64Type(), a, builder.getI32IntegerAttr(ew));
+        int32_t dbits = m->bit + k * elemBits;
+        builder.create<awl::StoreOp>(loc(), v,
+                                     mkDirect(dstArea, dstDb, baseByte + dbits / 8,
+                                              dbits % 8, ew));
+      }
+    };
     // Whole-STRUCT/UDT parameter copy: `P := DB10.STRUCTVAR` copies all of
     // the source struct's bytes between the source operand and the callee's
     // interface area (like copyArrayParam, but for a single struct member).
@@ -6344,7 +6413,8 @@ private:
         // FB params only when IN_OUT (awlsim overrides the instance-DB
         // field with a DB-pointer then). FB IN/OUT compound params are
         // copied by value into the instance DB.
-        bool byRef = isByRefParam(m) && (!isDbParam || m->section == 2);
+        bool byRef = (isByRefParam(m) || m->type == "ARRAY") &&
+                     (!isDbParam || m->section == 2);
         auto area = isDbParam ? mlir::scl::DirectArea::DataBlock
                               : mlir::scl::DirectArea::Marker;
         int32_t byte = isDbParam ? paramBase + m->byte : kLocalBase + m->byte;
@@ -6500,6 +6570,10 @@ private:
               mlir::isa<mlir::scl::DirectType>(target.getType())) {
             copyArrayParam(m, byte, target, area,
                            isDbParam ? paramDb : 0, true);
+          } else if (isArray && v.getType().isInteger(64)) {
+            // array RHS resolved to an indirect address (forwarded by-ref
+            // FC param): copy the elements through the pointer
+            copyArrayParamInd(m, byte, v, area, isDbParam ? paramDb : 0);
           } else if (isBlockParam(m) && target &&
                      mlir::isa<mlir::scl::DirectType>(target.getType())) {
             copyBlockParam(m, byte, target, area, isDbParam ? paramDb : 0,
