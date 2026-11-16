@@ -141,7 +141,7 @@ has no `\b` — use python3 for regex edits.
   line). sclang driver exits 2 when scl_rt_assert_failures() > 0 after the
   cycle loop.
   Current: AWL 116/116 (100%), SCL single 15/15, SCL per-project 17/17,
-  JIT smoke 102/105 (97%), oracle (__ASSERT value-level, OB1 + bare
+  JIT smoke 103/105 (98%), oracle (__ASSERT value-level, OB1 + bare
   instruction files) 70/71 (99%). Known-open oracle failure:
   startup_multiple (expects a 2-accu CPU; awlsim's own runner uses
   --twoaccu for it — permanent under our 4-accu default).
@@ -168,7 +168,9 @@ has no `\b` — use python3 for regex edits.
   scan) — this unblocked insn_CALL, insn_SE/insn_SS, sfb0-5, tc200
   array/pointer/udt, shutdown and startup_OB100/102. JIT-tier failures:
   the two Quine AWL files
-  (intra-block jump loop timeout) and one SCL project invocation.
+  (intra-block jump loop timeout; awlsim needs a symbol table for those
+  too). The JIT driver tolerates a missing OB 1 (FB-only files idle like
+  awlsim), which fixed the zustimmtaster project invocation.
   When these numbers change, refresh them here AND in docs/conformance.md
   ("Current results") AND in the run_conformance.py header comment.
   String handling: `VAR := 'lit'` in DB-init/statement stores len @+1, chars

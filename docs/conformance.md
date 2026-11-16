@@ -73,9 +73,10 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 - AWL compile: **116/116 pass (100%)**
 - SCL single file: **15/15 pass (100%)**
 - SCL per project: **17/17 pass (100%)**
-- JIT smoke (files with OB 1, full pipeline + execution): **102/105 pass (97%)**
-  — failures are the two Quine AWL snippets (intra-block jump loop, timeout)
-  and one SCL project invocation.
+- JIT smoke (files with OB 1, full pipeline + execution): **103/105 pass (98%)**
+  — failures are the two Quine AWL snippets (intra-block jump loop, timeout;
+  awlsim itself needs a symbol table for those). The JIT driver tolerates a
+  missing OB 1 (FB-only files idle, like awlsim).
 - Oracle (`__ASSERT` files with OB 1 or bare instruction lists, value-level,
   exit code must be 0): **70/71 pass (99%)** — see "Oracle tier" below.
   Known-open: startup_multiple (expects a 2-accu CPU; awlsim's own runner
@@ -124,7 +125,7 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 ## Remaining failures and known approximations
 
 All compile tiers pass 100% (AWL 116/116, SCL single 15/15, SCL projects
-17/17) and the JIT smoke tier passes 102/105. The oracle tier is 70/71 —
+17/17) and the JIT smoke tier passes 103/105. The oracle tier is 70/71 —
 see the list above; accumulator registers are now modeled at runtime
 (awl.accu_get/accu_set), so values persist across labels and calls.
 Known flake: the
