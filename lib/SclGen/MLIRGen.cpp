@@ -538,9 +538,20 @@ private:
         }
       }
     }
-    // Create an MLIR function
-
+    // Create an MLIR function. SCL projects may contain forward
+    // declarations (FUNCTION x ... BEGIN END_FUNCTION in a separate file)
+    // that are later defined with a real body: if a FunctionOp with this
+    // name already exists, the new definition replaces it (and a forward
+    // declaration arriving after the definition is skipped).
     auto func_type = builder.getFunctionType(input_types, output_types);
+    if (auto prev = mlir::SymbolTable::lookupNearestSymbolFrom<FunctionOp>(
+            theModule, builder.getStringAttr(name))) {
+      bool newIsFwdDecl = code->getInstructions().empty();
+      if (!newIsFwdDecl)
+        prev.erase(); // real definition replaces the forward declaration
+      else
+        return prev; // forward declaration after the definition: keep it
+    }
     auto function = builder.create<FunctionOp>(location, name, func_type);
     if (!function)
       return nullptr;
@@ -1466,8 +1477,40 @@ private:
       return builder.create<ConstantTimeOfDayOp>(location, time);    }
   }
 
+  /// Fold a constant symbol's initializer into a value (rvalue position).
+  mlir::Value mlirGenConstSymbol(mlir::Location location, StringRef name,
+                                 const VariableSymbol &variable) {
+    const ExpressionAST *ce = variable.getConstValue();
+    mlir::Type resTy = variable.getType() ? variable.getType() : getType(tok_int);
+    unsigned width = 16;
+    if (auto it = resTy.dyn_cast<IntegerType>())
+      width = it.getWidth();
+    else if (auto lt = resTy.dyn_cast<LogicalType>())
+      width = lt.getWidth();
+    if (auto *ic = llvm::dyn_cast<IntegerConstantAST>(ce))
+      return builder.create<ConstantOp>(
+          location, resTy,
+          builder.getIntegerAttr(builder.getIntegerType(width), ic->getValue()));
+    if (llvm::isa<RealConstantAST>(ce) || llvm::isa<TimeConstantAST>(ce))
+      return mlirGen(ce);
+    if (llvm::isa<StringConstantAST>(ce)) {
+      emitWarning(location) << "string constant '" << name
+                            << "' used as a value, assuming 0";
+      return builder.create<ConstantOp>(
+          location, getType(tok_int), builder.getIntegerAttr(builder.getIntegerType(16), 0));
+    }
+    // constant expression (e.g. A + B): fold to an integer
+    int64_t v = 0;
+    if (mlir::failed(foldConstIntAST(ce, v)))
+      v = 0;
+    return builder.create<ConstantOp>(
+        location, resTy, builder.getIntegerAttr(builder.getIntegerType(width), v));
+  }
+
   mlir::Value mlirGenVariable(mlir::Location location, StringRef name) {
     auto variable = symbolTable.lookup(name);
+    if (variable.isConst())
+      return mlirGenConstSymbol(location, name, variable);
     if (variable.isElement()) {
       // FB members live in the instance DB byte buffer; address them as i8.
       auto i8 = IntegerType::get(builder.getContext(), 8);
@@ -1493,6 +1536,9 @@ private:
   }
 
   mlir::Value mlirGenSymbol(mlir::Location location, StringRef name) {
+    auto sym0 = symbolTable.lookup(name);
+    if (sym0.isConst())
+      return mlirGenConstSymbol(location, name, sym0);
     auto nameAttr = builder.getStringAttr(name);
     DataBlockOp db =
         mlir::SymbolTable::lookupNearestSymbolFrom<DataBlockOp>(theModule, nameAttr);

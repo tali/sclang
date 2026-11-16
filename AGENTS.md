@@ -157,6 +157,22 @@ has no `\b` — use python3 for regex edits.
   OB-temp presets flag).
   Corpora + licenses + results + gap list:
   `docs/conformance.md`.
+  - SCL const symbols in rvalue position fold via mlirGenConstSymbol
+    (mlirGenVariable/mlirGenSymbol): int consts -> ConstantOp at the
+    declared width, real/time consts -> the constant handlers, const
+    expressions via foldConstIntAST, string consts warn + 0 (previously an
+    unlinked operand / verification error, e.g. `stack.size_max :=
+    STACK_SIZE` in Formelparser).
+  - SCL forward declarations (FUNCTION x ... BEGIN END_FUNCTION in a
+    separate file): mlirGenFunctionLike replaces an existing FunctionOp
+    with the real definition, and skips a forward decl arriving after the
+    definition (was: "redefinition of symbol" verification error).
+  - String builtins (CONCAT/STRING_TO_INT/...) are still stubs (warn +
+    empty string / 0) — enough for the compile tier; runtime semantics are
+    a documented gap.
+  - __FEATURE 0 reports nrAccus = 4 (4-accu CPU default). startup_multiple
+    expects 2 (awlsim runs it with --twoaccu) — permanent oracle failure;
+    startup_OB100/OB102 expect 4 and pass.
   `check-sclang` includes `test/conformance` (added to test/CMakeLists.txt).
 
 ## Key design decisions (do not regress)

@@ -68,13 +68,17 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 
 - AWL compile: **116/116 pass (100%)**
 - SCL single file: **15/15 pass (100%)**
-- SCL per project: **16/17 pass (94%)**
+- SCL per project: **17/17 pass (100%)**
 - JIT smoke (files with OB 1, full pipeline + execution): **77/77 pass (100%)**
 - Oracle (`__ASSERT` files with OB 1, value-level, exit code must be 0):
-  **52/53 pass (98%)** — see "Oracle tier" below. Remaining: startup_multiple
-  (nrAccus, permanent) and the pre-existing Formelparser SCL project gap.
-  infinite-recursion now exits cleanly (call-stack guard at awlsim's
-  callStackSize = 256, exit code 2). Fixed since last writing:
+  **52/53 pass (98%)** — see "Oracle tier" below. The only remaining failure
+  is startup_multiple (expects a 2-accu CPU; awlsim's own runner uses
+  --twoaccu for it — permanent under our 4-accu default). Fixed since last
+  writing: infinite-recursion exits cleanly (call-stack guard at awlsim's
+  callStackSize = 256, exit code 2); the Formelparser SCL project compiles
+  (const symbols fold in rvalue position via mlirGenConstSymbol; forward
+  declarations are replaced by the real definition in mlirGenFunctionLike;
+  string builtins remain stubs — compile tier only needs valid MLIR). Fixed since last writing:
   pointer.awl fully (TARn stores the AR as a raw S7 pointer via the new
   awl.ar_raw/scl_rt_ar_raw; LARn <mem> loads the operand's 32-bit content;
   TARn ARm does ARm := ARn; [LD n]/[#var]/[MD 4] indirect bases load the
