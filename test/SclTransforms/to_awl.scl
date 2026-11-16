@@ -7,7 +7,7 @@
 // CHECK: L MW0
 // CHECK: L 0
 // CHECK: >I
-// CHECK: SPN ELSE{{[0-9]+}}
+// CHECK: SPBN ELSE{{[0-9]+}}
 // CHECK: L MW0
 // CHECK: L 2
 // CHECK: +I

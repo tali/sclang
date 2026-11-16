@@ -77,15 +77,19 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
   — failures are the two Quine AWL snippets (intra-block jump loop, timeout)
   and one SCL project invocation.
 - Oracle (`__ASSERT` files with OB 1 or bare instruction lists, value-level,
-  exit code must be 0): **52/71 pass (73%)** — see "Oracle tier" below.
+  exit code must be 0): **54/71 pass (76%)** — see "Oracle tier" below.
   Known-open: startup_multiple (expects a 2-accu CPU; awlsim's own runner
   uses --twoaccu for it — permanent under our 4-accu default),
-  insn_4ACCU + the insn_JUMP SPZ/SPMZ/LOOP sections (accumulator registers
-  are parse-time only and reset at labels — awlsim keeps 4 runtime accus),
-  insn_ARITH_R (real-math STW edge cases), insn_SHIFT RLDA/RRDA
-  (rotate-through-carry approximated as RLD/RRD), stw_operators,
+  insn_ARITH_R (real-math STW edge cases),
   insn_SE/insn_SS (timer oracles need real elapsed time; run with
-  --cycle-ms=0), insn_CALL, shutdown, sfb0-5, tc200 array/pointer/udt. Fixed since last
+  --cycle-ms=0), insn_CALL, shutdown, sfb0-5, tc200 array/pointer/udt.
+  Fixed since last writing: runtime ACCU1..4 registers
+  (awl.accu_get/accu_set — accumulators persist across labels/calls),
+  which unblocked insn_4ACCU, the insn_JUMP SPZ/LOOP sections and
+  stw_operators; plus awlsim-exact SPN (A1^A0, no state reset), LOOP
+  reading ACCU1 at the jump site, `=` mirroring OR=0/STA=VKE/NER=0,
+  PUSH/POP as ACCU1<->ACCU2 copies, RLDA/RRDA rotating through A1, and
+  the AWL printer emitting SPBN for jump-if-RLO==0. Fixed since last
   writing: infinite-recursion exits cleanly (call-stack guard at awlsim's
   callStackSize = 256, exit code 2); the Formelparser SCL project compiles
   (const symbols fold in rvalue position via mlirGenConstSymbol; forward
@@ -110,11 +114,10 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 ## Remaining failures and known approximations
 
 All compile tiers pass 100% (AWL 116/116, SCL single 15/15, SCL projects
-17/17) and the JIT smoke tier passes 102/105. The oracle tier is 52/71 —
-see the list above; the structural one is that accumulator registers are not
-modeled across labels (fix: runtime accu slots in the sim, awl dialect
-accu_get/accu_set ops), which blocks insn_4ACCU and the across-label
-SPZ/LOOP jumps. Known flake: the
+17/17) and the JIT smoke tier passes 102/105. The oracle tier is 54/71 —
+see the list above; accumulator registers are now modeled at runtime
+(awl.accu_get/accu_set), so values persist across labels and calls.
+Known flake: the
 LogMsg SCL project fails intermittently (~4%). The garbage `unknown FB`
 diagnostic was a dangling StringRef in fbInstanceOf (returned a StringRef
 into the temporary from unquote()) — fixed; a residual silent failure

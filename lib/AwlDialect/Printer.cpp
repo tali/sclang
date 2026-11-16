@@ -413,7 +413,8 @@ struct TextPrinter {
         continue;
       }
       if (auto j = dyn_cast<JumpIfNotOp>(&o)) {
-        os << "  SPN " << j.getLabel() << '\n';
+        // awlsim: jump-if-RLO==0 is SPBN (SPN tests A1^A0 instead)
+        os << "  SPBN " << j.getLabel() << '\n';
         continue;
       }
       if (auto l = dyn_cast<LabelOp>(&o)) {
