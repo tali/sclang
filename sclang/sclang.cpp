@@ -515,16 +515,20 @@ int runJit(mlir::ModuleOp module) {
 
   // Invoke the JIT-compiled function once per scan cycle, advancing the
   // virtual clock between scans (drives %T timers / %C counters).
-  for (unsigned i = 0; i < jitCycles; ++i) {
-    auto invocationResult = engine->invoke("OB1");
-    if (invocationResult) {
-      llvm::errs() << "JIT invocation failed\n" << invocationResult << "\n";
-      return -1;
+  // awlsim with no OB 1 just idles — tolerate a missing OB 1 (e.g. FB-only
+  // source files) instead of failing the run.
+  if (engine->lookupPacked("OB1")) {
+    for (unsigned i = 0; i < jitCycles; ++i) {
+      auto invocationResult = engine->invoke("OB1");
+      if (invocationResult) {
+        llvm::errs() << "JIT invocation failed\n" << invocationResult << "\n";
+        return -1;
+      }
+      if (scl_rt_stop_requested())
+        break; // SFC 46 (STOP) / SFC -3 (SHUTDOWN): awlsim halts the CPU
+      if (i + 1 < jitCycles)
+        scl_rt_cycle(cycleMs);
     }
-    if (scl_rt_stop_requested())
-      break; // SFC 46 (STOP) / SFC -3 (SHUTDOWN): awlsim halts the CPU
-    if (i + 1 < jitCycles)
-      scl_rt_cycle(cycleMs);
   }
 
   if (dumpAreas && runtimeKind == Sim)
