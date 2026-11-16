@@ -42,8 +42,10 @@ What is run (two tiers):
   exactly where awlsim evaluates them. The tier passes iff the driver exits
   0, i.e. every executed oracle held — this checks *computed values*
   against the expectations embedded in the publicly available test files.
-  `__STW`/status-bit asserts (`BIE`, `OV`, `A0`, …) are skipped (the sim
-  does not track status bits). Malformed/unknown assert forms skip the line
+  `__STW`/status-bit asserts (`BIE`, `OV`, `A0`, `__STW 0`, `==0`/`UO`/…
+  conditions) are evaluated: the sim models the full status word
+  (awlsim statusword bits; see AGENTS.md — awl.stw_* ops -> scl_rt_stw_*
+  runtime calls, ABI v8/v9). Malformed/unknown assert forms skip the line
   so they can never break the compile tier.
 
 To make the JIT tier work on single files of multi-file projects,
@@ -69,7 +71,8 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 - SCL per project: **16/17 pass (94%)**
 - JIT smoke (files with OB 1, full pipeline + execution): **74/77 pass (96%)**
 - Oracle (`__ASSERT` files with OB 1, value-level, exit code must be 0):
-  **35/53 pass (66%)** — see "Oracle tier" below
+  **33/53 pass (62%)** — see "Oracle tier" below (the STW/status-bit
+  asserts are now evaluated, so the remaining failures are real value gaps)
 
 ## Remaining failures = documented gaps
 
@@ -160,8 +163,11 @@ actual/expected):
   words; `insn_MISC`: BCD/INV edge cases; `latin1`: char literal encoding;
 - IEC library FCs (`fc4_delete`, `fc9_eq_dt`, `fc12_ge_dt`, `fc21_len`):
   still host stubs;
-- `stw_operators`: STW bit tracking (A0/A1/OV/OS) beyond the skipped
-  `__STW` asserts.
+- `stw_operators` now passes; remaining oracle failures are the pointer
+  family (VL-area `__AR` raw pointers, ANY/DB pointers), BCD edges
+  (insn_BCD, insn_MISC), the acc-stack edge (insn_SI:109), cross-DB ANY
+  strings (fc21_len:140+), GE_DT BCD-fail RET_VAL-untouched (fc12:616/634),
+  startup_multiple nrAccus=2 (we default 4), string.awl JIT timeout.
 
 The floor in `run_conformance.py` (`FLOOR_ORACLE = 0.15`) guards against
 regressions.

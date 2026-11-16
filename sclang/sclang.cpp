@@ -337,6 +337,18 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_timer_start_ptr", (void *)&scl_rt_timer_start_ptr);
     add("scl_rt_timer_reset_ptr", (void *)&scl_rt_timer_reset_ptr);
     add("scl_rt_fr_ptr", (void *)&scl_rt_fr_ptr);
+    // status word (STW), ABI v8
+    add("scl_rt_stw_get", (void *)&scl_rt_stw_get);
+    add("scl_rt_stw_set", (void *)&scl_rt_stw_set);
+    add("scl_rt_stw_reset", (void *)&scl_rt_stw_reset);
+    add("scl_rt_stw_set_bit", (void *)&scl_rt_stw_set_bit);
+    add("scl_rt_stw_cmp_i", (void *)&scl_rt_stw_cmp_i);
+    add("scl_rt_stw_cmp_f", (void *)&scl_rt_stw_cmp_f);
+    add("scl_rt_stw_sign_i", (void *)&scl_rt_stw_sign_i);
+    add("scl_rt_stw_sign_f", (void *)&scl_rt_stw_sign_f);
+    add("scl_rt_stw_div_i", (void *)&scl_rt_stw_div_i);
+    add("scl_rt_stw_div_f", (void *)&scl_rt_stw_div_f);
+    add("scl_rt_f2i", (void *)&scl_rt_f2i);
     add("scl_rt_ob_start", (void *)&scl_rt_ob_start);
     add("scl_rt_feature", (void *)&scl_rt_feature);
     add("scl_rt_timer_fb", (void *)&scl_rt_timer_fb);

@@ -356,6 +356,39 @@ struct TextPrinter {
         // implicit in the mnemonic letter / operand size; not printed
         continue;
       }
+      // STW bookkeeping ops are sim-only annotations of real instructions;
+      // they are not printed (the instruction they belong to is printed
+      // by its own op: +I, ==I, SAVE, ...)
+      if (isa<StwSignOp, StwDivOp, StwCmpOp, StwSetBitOp, StwResetOp>(&o))
+        continue;
+      if (auto g = dyn_cast<StwGetOp>(&o)) {
+        os << "  L STW\n";
+        acc.push_back(g.getResult());
+        continue;
+      }
+      if (auto c = dyn_cast<StwCondOp>(&o)) {
+        static const char *txt[] = {"==0", "<>0", ">0", "<0", ">=0", "<=0", "UO"};
+        int cond = c.getCond();
+        os << "  U " << (cond >= 0 && cond < 7 ? txt[cond] : "UO") << '\n';
+        curRlo = c.getResult();
+        continue;
+      }
+      if (auto b = dyn_cast<StwBitOp>(&o)) {
+        static const char *names[] = {"NER", "VKE", "STA", "OR", "OS",
+                                      "OV",  "A0",  "A1",  "BIE"};
+        int bit = b.getBit();
+        os << "  U " << (bit >= 0 && bit < 9 ? names[bit] : "BIE") << '\n';
+        curRlo = b.getResult();
+        continue;
+      }
+      if (auto f = dyn_cast<F2IOp>(&o)) {
+        static const char *mn[] = {"TRUNC", "RND", "RND+", "RND-"};
+        int mode = f.getMode();
+        popAcc();
+        os << "  " << (mode >= 0 && mode < 4 ? mn[mode] : "TRUNC") << '\n';
+        acc.push_back(f.getResult());
+        continue;
+      }
       if (isa<CmpEqOp>(&o) || isa<CmpNeOp>(&o) || isa<CmpLtOp>(&o) ||
           isa<CmpLeOp>(&o) || isa<CmpGtOp>(&o) || isa<CmpGeOp>(&o)) {
         const char *mn = isa<CmpEqOp>(&o) ? "==" : isa<CmpNeOp>(&o) ? "<>"

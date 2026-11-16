@@ -137,11 +137,11 @@ has no `\b` — use python3 for regex edits.
   on OB1 files; rc 2 = __ASSERT oracles failed still counts as smoke pass),
   oracle (--emit=jit --jit-cycles=5 on OB1 files containing __ASSERT; pass
   iff rc == 0 — awlsim __ASSERT directives lower to awl.assert/assert_r ->
-  scl_rt_assert_cmp[_r], Runtime ABI v4; __STW/status-bit asserts skipped;
-  malformed assert forms skip the line). sclang driver exits 2 when
-  scl_rt_assert_failures() > 0 after the cycle loop.
+  scl_rt_assert_cmp[_r], Runtime ABI v4; malformed assert forms skip the
+  line). sclang driver exits 2 when scl_rt_assert_failures() > 0 after the
+  cycle loop.
   Current: AWL 116/116 (100%), SCL single 15/15, SCL per-project 16/17,
-  JIT smoke 72/77 (94%), oracle (__ASSERT value-level) 34/53 (64%).
+  JIT smoke 74/77 (96%), oracle (__ASSERT value-level) 33/53 (62%).
   lit is 114/114. OB-temp presets (OB1 header) are written at OB entry
   (scl_rt_ob_start); the JIT driver runs the startup OB (OB 102 on a
   4-accu CPU, else OB 100) before the OB 1 cycles; __FEATURE t [, v] is
@@ -272,8 +272,22 @@ has no `\b` — use python3 for regex edits.
   collected recursively (`collectInitAssigns`, incl. per-element for arrays
   of UDTs) and replayed into `__scl_db_init` before the BEGIN section.
   `__STW <bit>` is a real bit operand (A0/A1 = bits 6/7); `LARn/TARn ARm`
-  copies the other AR. STW bit *tracking* (A0/A1/OV/OS set by comparisons)
-  is still a gap — stw_operators value asserts fail on that.
+  copies the other AR. The status word (STW) is fully modelled now
+  (awlsim statusword bit numbering NER=0 VKE/RLO=1 STA=2 OR=3 OS=4 OV=5
+  A0/CC0=6 A1/CC1=7 BIE/BR=8): `awl.stw_*` ops in AwlOps.td lowered to
+  `scl_rt_stw_*` runtime calls (Runtime ABI v8/v9, SimRuntime `stw` field,
+  reset at OB entry in scl_rt_ob_start). Comparisons record A0/A1/VKE
+  (stw_cmp, VKE = predicate result), +,-,mul record sign + overflow
+  (stw_sign, op+range operands so no extra arith ops appear in the IR),
+  / records div-by-zero as UO+OV+OS (stw_div), TRUNC/RND/RND+/RND- go
+  through awl.f2i -> scl_rt_f2i (out-of-range keeps ACCU, sets OV/OS),
+  SAVE -> stw_set_bit(8, rlo), the VKE bit mirrors the RLO at the end of
+  each logic statement, CALL SFC/SFB sets BIE=1 (IEC library FCs set BIE
+  per their AWL body: success 1, error 0). RLO chain semantics: the RLO
+  persists across statements, but a fresh U/O after a non-logic statement
+  starts from the operand (awlsim NER=0 => VKE=STA; O-chains start from
+  0, U/A from 1 — see parseRloLogic / stmtLogic). `U >=0`/`<=0` are !A0/!A1
+  (so UO gives 0), `U >0`/`<0` are !A0&A1 / A0&!A1, UO is A0&A1.
 
 - `SclTypeConverter` maps `!scl.address<T>` to a **0-d memref with dynamic offset**
   (`memref<T, strided<[], offset: ?>>`) so array element addresses from

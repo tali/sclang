@@ -188,6 +188,20 @@ typedef struct SclRtVTable {
                           uint8_t in);
   void (*timer_reset_ptr)(uint64_t ptr);
   void (*fr_ptr)(uint64_t ptr, uint8_t in);
+  /* Appended for the status word (v8): bits NER=0 VKE/RLO=1 STA=2 OR=3
+     OS=4 OV=5 A0/CC0=6 A1/CC1=7 BIE/BR=8 (awlsim statusword). */
+  uint32_t (*stw_get)(void);
+  void (*stw_set)(uint32_t word);
+  void (*stw_reset)(void);
+  void (*stw_set_bit)(uint8_t bit, uint8_t value);
+  void (*stw_cmp_i)(uint8_t pred, int64_t lhs, int64_t rhs);
+  void (*stw_cmp_f)(uint8_t pred, double lhs, double rhs);
+  /* v9: arithmetic STW recording + real->int conversion (awlsim semantics) */
+  void (*stw_sign_i)(int64_t value, int64_t lhs, int64_t rhs, uint8_t op, int32_t range); // sign from value; OV/OS if untruncated lhs-op-rhs out of +-range
+  void (*stw_sign_f)(double value);    // setForFloatingPointDWord classification
+  void (*stw_div_i)(int64_t divisor, int64_t result); // div by 0: UO+OV+OS
+  void (*stw_div_f)(double divisor, double result);
+  int64_t (*f2i)(double value, int64_t orig, uint8_t mode); // TRUNC/RND/..: OV/OS + keep orig if out of range
 } SclRtVTable;
 
 /// Register a host vtable; all subsequent ABI calls forward through it.
@@ -258,6 +272,23 @@ void scl_rt_timer_start_ptr(uint64_t ptr, uint8_t mode, uint64_t durS5,
                             uint8_t in);
 void scl_rt_timer_reset_ptr(uint64_t ptr);
 void scl_rt_fr_ptr(uint64_t ptr, uint8_t in);
+/// Status word (STW) access, awlsim statusword bit numbering. Sim-only.
+uint32_t scl_rt_stw_get(void);
+void scl_rt_stw_set(uint32_t word);
+void scl_rt_stw_reset(void);
+void scl_rt_stw_set_bit(uint8_t bit, uint8_t value);
+/// Record a comparison into A0/A1 (and set VKE). pred: 0 eq, 1 ne, 2 lt,
+/// 3 le, 4 gt, 5 ge (arith::CmpIPredicate).
+void scl_rt_stw_cmp_i(uint8_t pred, int64_t lhs, int64_t rhs);
+void scl_rt_stw_cmp_f(uint8_t pred, double lhs, double rhs);
+/// Arithmetic STW recording (awlsim statusword). Sim-only.
+void scl_rt_stw_sign_i(int64_t value, int64_t lhs, int64_t rhs, uint8_t op, int32_t range);
+void scl_rt_stw_sign_f(double value);
+void scl_rt_stw_div_i(int64_t divisor, int64_t result);
+void scl_rt_stw_div_f(double divisor, double result);
+/// TRUNC/RND/RND+/RND- (mode 0..3): real -> int. Out of int32 range: keep
+/// `orig` in the ACCU and set OV/OS. Sim-only.
+int64_t scl_rt_f2i(double value, int64_t orig, uint8_t mode);
 /// Write the S7 OB-temp preset header (EV_CLASS/SCAN/PRIORITY/OB_NUMBR/
 /// cycle times/DATE_TIME) into the current L frame at OB entry
 /// (awlsim obtemp.OB1TempPresets; only OB 1 has presets). Sim-only.

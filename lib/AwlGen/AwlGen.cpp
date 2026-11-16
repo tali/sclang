@@ -1616,6 +1616,10 @@ private:
   llvm::SmallVector<mlir::Value, 4> acc;
   mlir::Value rlo;
   bool rloActive = false;
+  // true while the current statement is a logic-chain op (U/O/A/NOT/X/...):
+  // awlsim sets NER=0 on all other instructions, so the next statement's
+  // first U/O starts a fresh chain (VKE = operand)
+  bool stmtLogic = false;
   struct Bracket {
     mlir::Value savedRlo;
     bool isOr;
@@ -2440,8 +2444,16 @@ private:
         lexer.next();
         continue;
       }
+      stmtLogic = false;
       if (!parseInstruction(name))
         return false;
+      if (!stmtLogic)
+        rloActive = false; // non-logic statement ends the logic chain
+      // the STW VKE/RLO bit mirrors the RLO at the end of each statement
+      // (awlsim: VKE tracks the result of logic operations)
+      if (rloActive && rlo)
+        builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(1),
+                                          rlo);
       if (blockEnded) {
         // dead code after BEA/BEB up to the END_* keyword: labels still
         // exist (jumps may target them); other instructions are skipped
@@ -2601,6 +2613,7 @@ private:
     if ((m == "U" || m == "UN" || m == "A" || m == "AN" || m == "O" ||
          m == "ON") &&
         lexer.getCurToken() != Tok::lparen) {
+      stmtLogic = true;
       // bare U/O/... (no operand, e.g. at end of a chain): RLO unchanged.
       // An ident followed by an address token is an operand (U A 0.0,
       // UN L 0.0); only if no address follows and the ident is an
@@ -2610,10 +2623,22 @@ private:
       if (lexer.getCurToken() == Tok::eq || lexer.getCurToken() == Tok::ne ||
           lexer.getCurToken() == Tok::lt || lexer.getCurToken() == Tok::le ||
           lexer.getCurToken() == Tok::gt || lexer.getCurToken() == Tok::ge) {
-        lexer.next(); // `U ==0` status compare: approximate as bare
+        // `U ==0` / `U <>0` / `U >0` / `U <0` / `U >=0` / `U <=0`: STW
+        // condition from the A0/A1 bits (0=Z,1=NZ,2=POS,3=NEG,4=GE,5=LE)
+        Tok ct = lexer.getCurToken();
+        lexer.next();
         if (lexer.getCurToken() == Tok::integer)
           lexer.next();
-        return ensureRlo();
+        int cond = ct == Tok::eq ? 0
+                   : ct == Tok::ne ? 1
+                   : ct == Tok::gt ? 2
+                   : ct == Tok::lt ? 3
+                   : ct == Tok::ge ? 4
+                                   : 5;
+        rlo = builder.create<awl::StwCondOp>(loc(), builder.getI1Type(),
+                                              builder.getI32IntegerAttr(cond));
+        rloActive = true;
+        return true;
       }
       if (lexer.getCurToken() == Tok::ident && !lexer.curQuoted() &&
           lexer.curLine() != insnLine)
@@ -2635,18 +2660,25 @@ private:
       return parseRloLogic(m == "AN" ? "UN" : m);
     }
     if (m == "NOT") {
-      if (!ensureRlo())
-        return false;
+      stmtLogic = true;
+      // NOT inverts the *current* RLO, even across non-logic statements
+      // (awlsim insn_not: VKE ^= 1, independent of NER)
+      if (!rlo)
+        rlo = builder.create<awl::ConstOp>(
+            loc(), builder.getI1Type(), builder.getIntegerAttr(builder.getI1Type(), 0));
       rlo = builder.create<awl::NotOp>(loc(), builder.getI1Type(), rlo);
+      rloActive = true;
       return true;
     }
-    if (m == "SET") { // RLO := 1
+    if (m == "SET") { // RLO := 1 (also sets VKE, awlsim insn_set)
+      stmtLogic = true;
       rlo = builder.create<awl::ConstOp>(loc(), builder.getI1Type(),
                                           builder.getIntegerAttr(builder.getI1Type(), 1));
       rloActive = true;
       return true;
     }
-    if (m == "CLR") { // RLO := 0
+    if (m == "CLR") {
+      stmtLogic = true; // RLO := 0
       rlo = builder.create<awl::ConstOp>(loc(), builder.getI1Type(),
                                           builder.getIntegerAttr(builder.getI1Type(), 0));
       rloActive = true;
@@ -2793,6 +2825,7 @@ private:
     }
     if (lexer.getCurToken() == Tok::lparen &&
         (m == "A" || m == "O" || m == "U" || m == "UN" || m == "ON")) {
+      stmtLogic = true;
       lexer.next();
       if (!ensureRlo())
         return false;
@@ -2816,12 +2849,10 @@ private:
       return parseCounterZW(m == "ZV" || m == "CU");
     if (m == "SPA" || m == "SPB" || m == "SPN" || m == "SPBN" || m == "JU")
       return parseJump(m == "SPBN" || m == "JU" ? (m == "JU" ? "SPA" : "SPN") : m);
-    if (m == "SAVE") { // SAVE: RLO -> BR (STW bit 8 = marker byte 1 bit 0)
+    if (m == "SAVE") { // SAVE: RLO -> BR (STW bit 8)
       if (!ensureRlo())
         return false;
-      auto br = builder.create<awl::DirectOp>(
-          loc(), mlir::scl::DirectArea::Marker, 0, 1, 0, 1);
-      builder.create<awl::AssignOp>(loc(), rlo, br);
+      builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(8), rlo);
       if (lexer.getCurToken() == Tok::semi)
         lexer.next();
       rloActive = false;
@@ -2855,14 +2886,35 @@ private:
         m == "ASIN" || m == "ACOS" || m == "ATAN" || m == "SQRT" ||
         m == "EXP" || m == "LN" || m == "SQR")
       return parseRealMath(m);
-    if (m == "TRUNC") { // real ACCU1 -> int (truncate)
-      mlir::Value a = popAcc();
-      acc.push_back(castTo(castTo(a, builder.getF32Type()), builder.getI32Type()));
+    if (m == "TRUNC" || m == "RND") {
+      // real ACCU1 -> int; TRUNC truncates, RND rounds (RND+ up, RND- down).
+      // Out of int32 range the ACCU is unchanged and OV/OS are set (runtime).
+      int mode = 0; // TRUNC
+      if (m == "RND") {
+        mode = 1;
+        if (lexer.getCurToken() == Tok::plus) {
+          mode = 2;
+          lexer.next();
+        } else if (lexer.getCurToken() == Tok::minus) {
+          mode = 3;
+          lexer.next();
+        }
+      }
+      mlir::Value a = acc.empty() ? constInt(builder.getF32Type(), 0) : popAcc();
+      mlir::Value orig = castTo(a, builder.getI64Type());
+      mlir::Value f = mlir::isa<mlir::IntegerType>(a.getType())
+                          ? bitcastTo(castTo(a, builder.getI32Type()),
+                                      builder.getF32Type())
+                          : castTo(a, builder.getF32Type());
+      acc.push_back(builder.create<awl::F2IOp>(
+          loc(), builder.getI32Type(), f, builder.getI32IntegerAttr(mode),
+          orig));
+      rloActive = false;
       return true;
     }
-    if (m == "DTR") { // DWORD ACCU1 -> real
+    if (m == "DTR") { // DWORD ACCU1 -> real (value conversion, awlsim insn_dtr)
       mlir::Value a = popAcc();
-      acc.push_back(castTo(a, builder.getF32Type()));
+      acc.push_back(castTo(castTo(a, builder.getI32Type()), builder.getF32Type()));
       return true;
     }
     if (m == "FR") { // FR T n / FR C n: enable — reset the edge memory of
@@ -2916,7 +2968,8 @@ private:
       }
       return true;
     }
-    if (m == "__STWRST") { // awlsim test directive: reset status word (RLO=0)
+    if (m == "__STWRST") { // awlsim test directive: reset status word, RLO=0
+      builder.create<awl::StwResetOp>(loc());
       auto i1 = builder.getI1Type();
       rlo = builder.create<awl::ConstOp>(loc(), i1, builder.getIntegerAttr(i1, 0));
       rloActive = true;
@@ -3018,15 +3071,6 @@ private:
       rloActive = false;
       return true;
     }
-    if (m == "RND") { // RND/RND+/RND-: real -> int (truncates; no rounding
-      if (lexer.getCurToken() == Tok::plus || lexer.getCurToken() == Tok::minus)
-        lexer.next(); // op in the dialect)
-      mlir::Value a = acc.empty() ? constInt(builder.getF32Type(), 0) : popAcc();
-      acc.push_back(castTo(castTo(a, builder.getF32Type()),
-                           builder.getI32Type()));
-      rloActive = false;
-      return true;
-    }
     if (m == "MOD") { // ACCU1 %% ACCU2: a - (a / b) * b
       padAcc();
       mlir::Value b = popAcc();
@@ -3056,6 +3100,7 @@ private:
       return true;
     }
     if (m == "X" || m == "XN") { // X/XN bit: rlo = rlo XOR bit (XN: negated)
+      stmtLogic = true;
       if (lexer.getCurToken() == Tok::ident) {
         std::string w = upperIdent();
         if (w == "TRUE" || w == "FALSE") {
@@ -3074,8 +3119,10 @@ private:
       mlir::Value addr = parseBitOperand();
       if (!addr)
         return false;
-      if (!ensureRlo())
-        return false;
+      if (!rlo) // no RLO yet: start from 0
+        rlo = builder.create<awl::ConstOp>(
+            loc(), builder.getI1Type(), builder.getIntegerAttr(builder.getI1Type(), 0));
+      rloActive = true;
       auto i1 = builder.getI1Type();
       mlir::Value b;
       if (addr.getType().isInteger(64))
@@ -3206,6 +3253,15 @@ private:
     return builder.create<awl::CastOp>(loc(), t, v);
   }
 
+  // reinterpret the bits (DTR, TRUNC/RND input): int <-> float, same width
+  mlir::Value bitcastTo(mlir::Value v, mlir::Type t) {
+    if (v.getType() == t)
+      return v;
+    auto op = builder.create<awl::CastOp>(loc(), t, v);
+    op->setAttr("bitcast", builder.getUnitAttr());
+    return op;
+  }
+
   // loads of BYTE/WORD into an accumulator zero-extend (awlsim: W/B are
   // unsigned; the ACCU holds 0..65535)
   mlir::Value zextAcc(mlir::Value v) {
@@ -3293,12 +3349,12 @@ private:
   }
 
   bool ensureRlo() {
-    if (!rloActive) {
-      // a new logic chain starts with RLO = 1
+    // The RLO value persists across statements (awlsim: VKE is only changed
+    // by logic ops); only a completely fresh chain starts from RLO = 1.
+    if (!rlo)
       rlo = builder.create<awl::ConstOp>(loc(), builder.getI1Type(),
                                           builder.getIntegerAttr(builder.getI1Type(), 1));
-      rloActive = true;
-    }
+    rloActive = true;
     return true;
   }
 
@@ -3515,6 +3571,21 @@ private:
     bit = total % 8;
   }
 
+  // awlsim statusword bit names: NER=0 VKE/RLO=1 STA=2 OR=3 OS=4 OV=5
+  // A0/CC0=6 A1/CC1=7 BIE/BR=8. Returns -1 for unknown names.
+  static int stwBitNumber(const std::string &name) {
+    if (name == "NER") return 0;
+    if (name == "VKE" || name == "RLO") return 1;
+    if (name == "STA") return 2;
+    if (name == "OR") return 3;
+    if (name == "OS") return 4;
+    if (name == "OV") return 5;
+    if (name == "A0" || name == "CC0") return 6;
+    if (name == "A1" || name == "CC1") return 7;
+    if (name == "BIE" || name == "BR") return 8;
+    return -1;
+  }
+
   mlir::Value parseOperand(bool bitContext = false) {
     // operand starting with '[': fully indirect U [AR1, P#0.0]
     if (lexer.getCurToken() == Tok::lbracket)
@@ -3644,49 +3715,41 @@ private:
                                            builder.getI32IntegerAttr(0));
     }
 
-    // __STW <bitname>: individual status-word bit (A0/A1 = CC0/CC1 = 6/7)
+    // __STW <bitname|n>: individual status-word bit -> i1
     if (w == "__STW") {
+      int bitNo = -1;
       if (lexer.getCurToken() == Tok::ident) { // w's lexer.next() already done
-        std::string bitName = upperStr(lexer.getIdent());
+        bitNo = stwBitNumber(upperStr(lexer.getIdent()));
         lexer.next();
-        int bitNo = -1;
-        if (bitName == "A0" || bitName == "CC0") bitNo = 6;
-        else if (bitName == "A1" || bitName == "CC1") bitNo = 7;
-        else if (bitName == "BIE" || bitName == "BR") bitNo = 8;
-        else if (bitName == "NER") bitNo = 0;
-        else if (bitName == "VKE") bitNo = 1;
-        else if (bitName == "STA") bitNo = 2;
-        else if (bitName == "OR") bitNo = 3;
-        else if (bitName == "OS") bitNo = 4;
-        else if (bitName == "OV") bitNo = 5;
-        if (bitNo >= 0)
-          return builder.create<awl::DirectOp>(
-              loc(), mlir::scl::DirectArea::Marker, 0, bitNo / 8,
-              bitNo % 8, 1);
+      } else if (lexer.getCurToken() == Tok::integer) {
+        bitNo = (int)lexer.getInteger();
+        lexer.next();
       }
-      return builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::Marker,
-                                            0, 0, 0, 16);
+      if (bitNo >= 0)
+        return builder.create<awl::StwBitOp>(loc(), builder.getI1Type(),
+                                             builder.getI32IntegerAttr(bitNo));
+      return builder.create<awl::StwGetOp>(loc(), builder.getI32Type());
     }
-    // STW: status word — approximated by marker word 0
+    // STW: status word (L STW / T STW)
     if (w == "STW")
-      return builder.create<awl::DirectOp>(loc(), mlir::scl::DirectArea::Marker,
-                                            0, 0, 0, 16);
-    // individual STW bits (U OV / = OS ...): NER=0 VKE=1 STA=2 OR=3 OS=4
-    // OV=5 A0/CC0=6 A1/CC1=7 BIE/BR=8, kept in marker word 0
+      return builder.create<awl::StwGetOp>(loc(), builder.getI32Type());
+    // individual STW bits (U OV / U BIE ...): NER=0 VKE=1 STA=2 OR=3 OS=4
+    // OV=5 CC0=6 CC1=7 BIE/BR=8
     {
-      // A0/A1 are deliberately absent: they collide with output-area
-      // operands (A1.0); the CC0/CC1 spellings cover the STW bits
-      static const std::pair<const char *, int> stwBits[] = {
-          {"NER", 0}, {"VKE", 1}, {"RLO", 1}, {"STA", 2}, {"OR", 3},
-          {"OS", 4},  {"OV", 5},  {"CC0", 6}, {"CC1", 7}, {"BIE", 8},
-          {"BR", 8}};
-      for (auto &sb : stwBits)
-        if (w == sb.first) {
-          // STW bit 8 (BIE/BR) does not fit in byte 0: use byte 1 bit 0
-          int32_t byte = sb.second / 8, bit = sb.second % 8;
-          return builder.create<awl::DirectOp>(
-              loc(), mlir::scl::DirectArea::Marker, 0, byte, bit, 1);
-        }
+      // A0/A1 are deliberately absent here: they collide with output-area
+      // operands (A1.0); the CC0/CC1 spellings and __STW A0 / __STW A1
+      // cover the STW bits
+      static const char *stwBitNames[] = {"NER", "VKE", "RLO", "STA", "OR",
+                                          "OS",  "OV",  "CC0", "CC1", "BIE",
+                                          "BR"};
+      for (auto name : stwBitNames)
+        if (w == name)
+          return builder.create<awl::StwBitOp>(
+              loc(), builder.getI1Type(),
+              builder.getI32IntegerAttr(stwBitNumber(name)));
+      if (w == "UO") // unordered condition: A0 && A1
+        return builder.create<awl::StwCondOp>(loc(), builder.getI1Type(),
+                                              builder.getI32IntegerAttr(6));
     }
     // DI-area operands (DIX/DIB/DIW/DID): the instance DB in the DI
     // register — db = -1 selects it at runtime
@@ -3949,6 +4012,8 @@ private:
       return nullptr;
     // i64: indirect bit operand [AR1, P#x.y] (packed pointer); T/C-area
     // directs are S/R on timers/counters (not bit operands, but valid here)
+    if (v.getType().isInteger(1))
+      return v; // STW bit/condition (stw_bit / stw_cond) is already i1
     if (!isBit(v) && !v.getType().isInteger(64)) {
       if (auto dt = mlir::dyn_cast<mlir::scl::DirectType>(v.getType()))
         if (dt.getArea() == mlir::scl::DirectArea::Timer ||
@@ -4130,6 +4195,9 @@ private:
       builder.create<awl::StoreIndirectOp>(
           loc(), castTo(v, builder.getI64Type()), addr,
           builder.getI32IntegerAttr(lastIndirectWidth));
+    } else if (mlir::isa_and_nonnull<awl::StwGetOp>(addr.getDefiningOp())) {
+      // T STW: write the status word
+      builder.create<awl::StwSetOp>(loc(), castTo(v, builder.getI32Type()));
     } else if (mlir::isa<mlir::scl::DirectType>(addr.getType())) {
       builder.create<awl::StoreOp>(loc(), v, addr);
     } else {
@@ -4140,19 +4208,26 @@ private:
   }
 
   bool parseRloLogic(const std::string &m) {
+    stmtLogic = true;
+    bool isOr = (m == "O" || m == "ON");
+    bool neg = (m == "UN" || m == "ON");
+    auto i1 = builder.getI1Type();
+    // a fresh logic chain starts from 1 for U/A and from 0 for O
+    // (awlsim: with NER=0, VKE = STA, i.e. the first operand itself)
+    if (!rloActive) {
+      rlo = builder.create<awl::ConstOp>(
+          loc(), i1, builder.getIntegerAttr(i1, isOr ? 0 : 1));
+      rloActive = true;
+    }
     // U/O TRUE/FALSE: constant RLO operand (awlsim extension)
     if (lexer.getCurToken() == Tok::ident) {
       std::string w = upperIdent();
       if (w == "TRUE" || w == "FALSE") {
         lexer.next();
-        if (!ensureRlo())
-          return false;
-        auto i1 = builder.getI1Type();
         mlir::Value c = builder.create<awl::ConstOp>(
             loc(), i1, builder.getIntegerAttr(i1, w == "TRUE" ? 1 : 0));
-        if (m == "UN" || m == "ON")
+        if (neg)
           c = builder.create<awl::NotOp>(loc(), i1, c);
-        bool isOr = (m == "O" || m == "ON");
         rlo = isOr ? (mlir::Value)builder.create<awl::OrOp>(loc(), i1, rlo, c)
                    : (mlir::Value)builder.create<awl::AndOp>(loc(), i1, rlo, c);
         return true;
@@ -4161,11 +4236,15 @@ private:
     mlir::Value addr = parseBitOperand();
     if (!addr)
       return false;
-    if (!ensureRlo())
-      return false;
-    bool isOr = (m == "O" || m == "ON");
-    bool neg = (m == "UN" || m == "ON");
-    auto i1 = builder.getI1Type();
+    if (addr.getType().isInteger(1)) {
+      // STW bit/condition operand (U __STW OV, U UO): plain logic combine
+      mlir::Value bit = addr;
+      if (neg)
+        bit = builder.create<awl::NotOp>(loc(), i1, bit);
+      rlo = isOr ? (mlir::Value)builder.create<awl::OrOp>(loc(), i1, rlo, bit)
+                 : (mlir::Value)builder.create<awl::AndOp>(loc(), i1, rlo, bit);
+      return true;
+    }
     if (addr.getType().isInteger(64)) {
       // U/O [AR1, P#x.y]: indirect bit through the packed pointer
       mlir::Value bit =
@@ -4190,6 +4269,7 @@ private:
   }
 
   bool parseCloseBracket() {
+    stmtLogic = true;
     if (brackets.empty())
       return true; // stray ) — ignore
     Bracket b = brackets.pop_back_val();
@@ -4413,6 +4493,20 @@ private:
     case ArithKind::Div: r = builder.create<awl::DivOp>(loc(), ty, a, b); break;
     }
     acc.push_back(r);
+    // record the result into the STW: sign -> A0/A1 (overflow of the
+    // untruncated result -> OV/OS=1); division by zero -> A0=A1=OV=OS=1
+    if (k == ArithKind::Div) {
+      builder.create<awl::StwDivOp>(loc(), b, r);
+    } else {
+      int op = k == ArithKind::Add ? 0 : k == ArithKind::Sub ? 1 : 2;
+      int32_t range = mlir::isa<mlir::IntegerType>(ty)
+                          ? (ty.getIntOrFloatBitWidth() == 16 ? 0x7FFF
+                                                             : 0x7FFFFFFF)
+                          : 0;
+      builder.create<awl::StwSignOp>(loc(), r, a, b,
+                                      builder.getI32IntegerAttr(op),
+                                      builder.getI32IntegerAttr(range));
+    }
     rloActive = false;
     return true;
   }
@@ -4480,6 +4574,14 @@ private:
     case Tok::ge: r = builder.create<awl::CmpGeOp>(loc(), i1, a, b); break;
     default: return error("bad comparison");
     }
+    // record the comparison result into the STW A0/A1 bits (and VKE)
+    int pred = cmp == Tok::eq ? 0
+               : cmp == Tok::ne ? 1
+               : cmp == Tok::lt ? 2
+               : cmp == Tok::le ? 3
+               : cmp == Tok::gt ? 4
+                               : 5;
+    builder.create<awl::StwCmpOp>(loc(), builder.getI32IntegerAttr(pred), a, b);
     rlo = r;
     rloActive = true;
     return true;
@@ -4504,9 +4606,9 @@ private:
     return true;
   }
 
-  // __ASSERT<cmp>[R] <lhs>, <rhs> — awlsim test oracle. lhs is __ACCU n or
-  // a memory operand (loaded); __STW bit asserts are skipped (the sim does
-  // not track status-word bits). Lowered to awl.assert / awl.assert_r.
+  // __ASSERT<cmp>[R] <lhs>, <rhs> — awlsim test oracle. lhs is __ACCU n, a
+  // memory operand (loaded), or a status-word bit (__STW <bit|n>, UO, or a
+  // bare bit name), compared as 0/1. Lowered to awl.assert / awl.assert_r.
   bool parseAssert() {
     uint32_t id = (uint32_t)lexer.curLine();
     Tok cmp = lexer.getCurToken();
@@ -4534,12 +4636,56 @@ private:
     default: op = 5; break;
     }
     mlir::Value actual;
-    if (lexer.getCurToken() == Tok::ident) {
+    if (lexer.getCurToken() == Tok::eq || lexer.getCurToken() == Tok::ne ||
+        lexer.getCurToken() == Tok::lt || lexer.getCurToken() == Tok::le ||
+        lexer.getCurToken() == Tok::gt || lexer.getCurToken() == Tok::ge) {
+      // lhs is a status condition: __ASSERT== ==0, 1 / __ASSERT== >0, 0 ...
+      Tok ct = lexer.getCurToken();
+      lexer.next();
+      if (lexer.getCurToken() == Tok::integer)
+        lexer.next();
+      int cond = ct == Tok::eq ? 0
+                 : ct == Tok::ne ? 1
+                 : ct == Tok::gt ? 2
+                 : ct == Tok::lt ? 3
+                 : ct == Tok::ge ? 4
+                                 : 5;
+      auto i1 = builder.getI1Type();
+      actual = builder.create<awl::StwCondOp>(loc(), i1,
+                                              builder.getI32IntegerAttr(cond));
+    } else if (lexer.getCurToken() == Tok::ident) {
       std::string w = upperIdent();
-      if (w == "__STW" || w == "BIE" || w == "OV" || w == "OS" || w == "VKE" ||
-          w == "A0" || w == "A1" || w == "RLO" || w == "__DBR") {
-        lexer.nextLine(); // status-word / DB-register bits not tracked: skip
+      if (w == "__DBR") {
+        lexer.nextLine(); // DB-register value not tracked: skip
         return true;
+      }
+      // status-word operand as assert lhs: __STW <bit|n>, UO, bare bit name
+      {
+        int stwBit = -1;
+        bool isUo = false;
+        if (w == "__STW") {
+          lexer.next(); // consume __STW itself (upperIdent does not)
+          if (lexer.getCurToken() == Tok::ident) {
+            stwBit = stwBitNumber(upperStr(lexer.getIdent()));
+            lexer.next();
+          } else if (lexer.getCurToken() == Tok::integer) {
+            stwBit = (int)lexer.getInteger();
+            lexer.next();
+          }
+        } else if (w == "UO") {
+          isUo = true;
+        } else {
+          stwBit = stwBitNumber(w);
+        }
+        if (stwBit >= 0 || isUo) {
+          auto i1 = builder.getI1Type();
+          actual = isUo
+                       ? (mlir::Value)builder.create<awl::StwCondOp>(
+                             loc(), i1, builder.getI32IntegerAttr(6))
+                       : (mlir::Value)builder.create<awl::StwBitOp>(
+                             loc(), i1, builder.getI32IntegerAttr(stwBit));
+          goto haveLhs;
+        }
       }
       if (w == "__AR") { // address register value (packed or raw P# pointer)
         lexer.next();
@@ -4572,7 +4718,6 @@ private:
                      ? zextAcc(builder.create<awl::LoadOp>(loc(), addr))
                      : addr;
       }
-    haveLhs:;
     } else if (lexer.getCurToken() == Tok::integer ||
                lexer.getCurToken() == Tok::real ||
                lexer.getCurToken() == Tok::minus) {
@@ -4590,6 +4735,7 @@ private:
       lexer.nextLine(); // unsupported lhs form: skip the line
       return true;
     }
+    haveLhs:;
     if (lexer.getCurToken() != Tok::comma) {
       lexer.nextLine();
       return true;
@@ -4608,21 +4754,46 @@ private:
                      ? acc[acc.size() - n]
                      : constInt(builder.getI32Type(), 0);
     } else if (lexer.getCurToken() == Tok::ident) {
-      // status-word/register rhs is not tracked: skip the assert line
       std::string rw = upperStr(lexer.getIdent());
-      if (rw == "__STW" || rw == "__DBR" || rw == "__AR") {
-        lexer.nextLine();
+      if (rw == "__DBR" || rw == "__AR") {
+        lexer.nextLine(); // register values not tracked: skip the assert
         return true;
       }
-      // memory operand rhs, e.g. __ASSERT== __ACCU 1, MD 8
-      mlir::Value addr = parseOperand(false);
-      if (!addr) {
-        lexer.nextLine();
-        return true;
+      // status-word operand as assert rhs: __STW <bit|n>, UO, bare bit name
+      int stwBit = -1;
+      bool isUo = false;
+      if (rw == "__STW") {
+        lexer.next(); // consume __STW itself
+        if (lexer.getCurToken() == Tok::ident) {
+          stwBit = stwBitNumber(upperStr(lexer.getIdent()));
+          lexer.next();
+        } else if (lexer.getCurToken() == Tok::integer) {
+          stwBit = (int)lexer.getInteger();
+          lexer.next();
+        }
+      } else if (rw == "UO") {
+        isUo = true;
+      } else {
+        stwBit = stwBitNumber(rw);
       }
-      expected = mlir::isa<mlir::scl::DirectType>(addr.getType())
-                     ? zextAcc(builder.create<awl::LoadOp>(loc(), addr))
-                     : addr;
+      if (stwBit >= 0 || isUo) {
+        auto i1 = builder.getI1Type();
+        expected = isUo
+                       ? (mlir::Value)builder.create<awl::StwCondOp>(
+                             loc(), i1, builder.getI32IntegerAttr(6))
+                       : (mlir::Value)builder.create<awl::StwBitOp>(
+                             loc(), i1, builder.getI32IntegerAttr(stwBit));
+      } else {
+        // memory operand rhs, e.g. __ASSERT== __ACCU 1, MD 8
+        mlir::Value addr = parseOperand(false);
+        if (!addr) {
+          lexer.nextLine();
+          return true;
+        }
+        expected = mlir::isa<mlir::scl::DirectType>(addr.getType())
+                       ? zextAcc(builder.create<awl::LoadOp>(loc(), addr))
+                       : addr;
+      }
     } else {
       bool bcd = lexer.curBcdLit();
       mlir::Value c = parseConst();
@@ -5162,6 +5333,15 @@ private:
                                 cond ? mlir::ValueRange{rloVal}
                                      : mlir::ValueRange{},
                                 attrs);
+    // system function calls set BIE/BR = 1 on success (awlsim
+    // system_sfc_*/system_sfb_*: s.BIE = 1); IEC library FCs do not
+    if (!isIec) {
+      auto i1 = builder.getI1Type();
+      mlir::Value one = builder.create<awl::ConstOp>(
+          loc(), i1, builder.getIntegerAttr(i1, 1));
+      builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(8),
+                                       one);
+    }
     // output params: read back from the staging area
     for (auto &o : sfcOuts) {
       auto addr = mkDirect(mlir::scl::DirectArea::Marker, 0,
@@ -5749,6 +5929,15 @@ private:
                                   cond ? mlir::ValueRange{rloVal}
                                        : mlir::ValueRange{},
                                   attrs);
+      // CALL SFB n: system function block sets BIE/BR = 1 (awlsim
+      // system_sfb_*: s.BIE = 1)
+      if (kind == "SFB") {
+        auto i1 = builder.getI1Type();
+        mlir::Value one = builder.create<awl::ConstOp>(
+            loc(), i1, builder.getIntegerAttr(i1, 1));
+        builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(8),
+                                         one);
+      }
     }
     // output params: read back from the callee's interface area
     for (auto &op : outParams) {

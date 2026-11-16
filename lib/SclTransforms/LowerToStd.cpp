@@ -2431,6 +2431,12 @@ struct AwlCastOpLowering : public OpConversionPattern<awl::CastOp> {
     auto resTy = typeConverter->convertType(op.getType());
     if (!resTy)
       return failure();
+    if (op.getBitcast().has_value()) {
+      // reinterpret the bits (DTR, TRUNC input): int <-> float, same width
+      rewriter.replaceOpWithNewOp<arith::BitcastOp>(op, resTy,
+                                                    adaptor.getValue());
+      return success();
+    }
     Value v = convertScalarTo(rewriter, op.getLoc(), adaptor.getValue(), resTy,
                               op.getZext().has_value());
     if (!v)
@@ -2721,6 +2727,289 @@ struct AwlNopOpLowering : public OpConversionPattern<awl::NopOp> {
   matchAndRewrite(awl::NopOp op, awl::NopOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// MARK: status word lowerings (awlsim statusword; bits NER=0 VKE/RLO=1
+// STA=2 OR=3 OS=4 OV=5 A0/CC0=6 A1/CC1=7 BIE/BR=8)
+
+// L STW -> @scl_rt_stw_get() -> i32
+struct AwlStwGetLowering : public OpConversionPattern<awl::StwGetOp> {
+  using OpConversionPattern<awl::StwGetOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::StwGetOp op, awl::StwGetOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_stw_get",
+                                rewriter.getFunctionType({}, {rewriter.getI32Type()}));
+    auto word = rewriter.create<func::CallOp>(loc, fn, TypeRange{rewriter.getI32Type()},
+                                              ValueRange{})
+                    .getResult(0);
+    rewriter.replaceOp(op, word);
+    return success();
+  }
+};
+
+// T STW -> @scl_rt_stw_set(word: i32)
+struct AwlStwSetLowering : public OpConversionPattern<awl::StwSetOp> {
+  using OpConversionPattern<awl::StwSetOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::StwSetOp op, awl::StwSetOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i32 = rewriter.getI32Type();
+    Value word = convertScalarTo(rewriter, loc, adaptor.getWord(), i32);
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_stw_set",
+                                rewriter.getFunctionType({i32}, {}));
+    rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{word});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// __STW bit -> (stw >> bit) & 1, computed from @scl_rt_stw_get()
+struct AwlStwBitLowering : public OpConversionPattern<awl::StwBitOp> {
+  using OpConversionPattern<awl::StwBitOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::StwBitOp op, awl::StwBitOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i32 = rewriter.getI32Type();
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_stw_get",
+                                rewriter.getFunctionType({}, {i32}));
+    Value word = rewriter.create<func::CallOp>(loc, fn, TypeRange{i32}, ValueRange{})
+                     .getResult(0);
+    Value bitC = rewriter.create<arith::ConstantOp>(
+        loc, i32, rewriter.getI32IntegerAttr(op.getBit()));
+    Value shifted = rewriter.create<arith::ShRUIOp>(loc, word, bitC);
+    Value one = rewriter.create<arith::ConstantOp>(loc, i32,
+                                                   rewriter.getI32IntegerAttr(1));
+    Value bit = rewriter.create<arith::AndIOp>(loc, shifted, one);
+    // arith.cmpi returns i1 for any integer operands
+    Value zero = rewriter.create<arith::ConstantOp>(
+        loc, i32, rewriter.getI32IntegerAttr(0));
+    Value res = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
+                                                bit, zero);
+    rewriter.replaceOp(op, res);
+    return success();
+  }
+};
+
+// SAVE -> @scl_rt_stw_set_bit(bit: i8, value: i8)
+struct AwlStwSetBitLowering : public OpConversionPattern<awl::StwSetBitOp> {
+  using OpConversionPattern<awl::StwSetBitOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::StwSetBitOp op, awl::StwSetBitOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i8 = rewriter.getI8Type();
+    Value bitC = rewriter.create<arith::ConstantOp>(
+        loc, i8, rewriter.getI8IntegerAttr(op.getBit()));
+    Value val = rewriter.create<arith::ExtUIOp>(loc, i8, adaptor.getValue());
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_stw_set_bit",
+                                rewriter.getFunctionType({i8, i8}, {}));
+    rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{bitC, val});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// U >0 / ==0 / <>0 / <0 / >=0 / <=0 / UO -> A0/A1 bits of the STW.
+// awlsim cpu.__fetchSTW_*: 0=Z(!A0&!A1), 1=NZ(A0|A1), 2=POS(!A0&A1),
+// 3=NEG(A0&!A1), 4=GE(!A0), 5=LE(!A1), 6=UO(A0&A1).
+struct AwlStwCondLowering : public OpConversionPattern<awl::StwCondOp> {
+  using OpConversionPattern<awl::StwCondOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::StwCondOp op, awl::StwCondOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i32 = rewriter.getI32Type();
+    auto i1 = rewriter.getI1Type();
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_stw_get",
+                                rewriter.getFunctionType({}, {i32}));
+    Value word = rewriter.create<func::CallOp>(loc, fn, TypeRange{i32}, ValueRange{})
+                     .getResult(0);
+    auto bitOf = [&](int bit) -> Value {
+      Value c = rewriter.create<arith::ConstantOp>(loc, i32,
+                                                   rewriter.getI32IntegerAttr(bit));
+      Value sh = rewriter.create<arith::ShRUIOp>(loc, word, c);
+      Value one = rewriter.create<arith::ConstantOp>(
+          loc, i32, rewriter.getI32IntegerAttr(1));
+      return rewriter.create<arith::AndIOp>(loc, sh, one);
+    };
+    Value a0 = bitOf(6); // CC0: result < 0
+    Value a1 = bitOf(7); // CC1: result > 0
+    Value zero = rewriter.create<arith::ConstantOp>(loc, i32,
+                                                    rewriter.getI32IntegerAttr(0));
+    Value isZ = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                                rewriter.create<arith::OrIOp>(loc, a0, a1),
+                                                zero);
+    Value isNZ = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
+                                                 rewriter.create<arith::OrIOp>(loc, a0, a1),
+                                                 zero);
+    Value a0b = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne, a0, zero);
+    Value a1b = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne, a1, zero);
+    Value trueC = rewriter.create<arith::ConstantOp>(loc, i1, rewriter.getBoolAttr(true));
+    Value notA0 = rewriter.create<arith::XOrIOp>(loc, a0b, trueC);
+    Value notA1 = rewriter.create<arith::XOrIOp>(loc, a1b, trueC);
+    Value pos = rewriter.create<arith::AndIOp>(loc, a1b, notA0); // > 0
+    Value neg = rewriter.create<arith::AndIOp>(loc, a0b, notA1); // < 0
+    // awlsim: >=0 is !A0 and <=0 is !A1 (so unordered A0=A1=1 gives 0)
+    Value ge = notA0;
+    Value le = notA1;
+    Value uo = rewriter.create<arith::AndIOp>(loc, a0b, a1b); // unordered
+    Value res;
+    switch (op.getCond()) {
+    case 0: res = isZ; break;
+    case 1: res = isNZ; break;
+    case 2: res = pos; break;
+    case 3: res = neg; break;
+    case 4: res = ge; break;
+    case 5: res = le; break;
+    case 6: res = uo; break;
+    default: return rewriter.notifyMatchFailure(op, "bad stw cond");
+    }
+    rewriter.replaceOp(op, res);
+    return success();
+  }
+};
+
+// __STWRST -> @scl_rt_stw_reset()
+struct AwlStwResetLowering : public OpConversionPattern<awl::StwResetOp> {
+  using OpConversionPattern<awl::StwResetOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::StwResetOp op, awl::StwResetOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_stw_reset",
+                                rewriter.getFunctionType({}, {}));
+    rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// comparison -> record into A0/A1: @scl_rt_stw_cmp_i/f(pred: i8, lhs, rhs)
+struct AwlStwCmpLowering : public OpConversionPattern<awl::StwCmpOp> {
+  using OpConversionPattern<awl::StwCmpOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::StwCmpOp op, awl::StwCmpOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i8 = rewriter.getI8Type();
+    Value predC = rewriter.create<arith::ConstantOp>(
+        loc, i8, rewriter.getI8IntegerAttr(op.getPred()));
+    if (adaptor.getLhs().getType().isa<FloatType>()) {
+      auto f64 = rewriter.getF64Type();
+      Value l = convertScalarTo(rewriter, loc, adaptor.getLhs(), f64);
+      Value r = convertScalarTo(rewriter, loc, adaptor.getRhs(), f64);
+      auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_stw_cmp_f",
+                                  rewriter.getFunctionType({i8, f64, f64}, {}));
+      rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{predC, l, r});
+    } else {
+      auto i64 = rewriter.getI64Type();
+      Value l = convertScalarTo(rewriter, loc, adaptor.getLhs(), i64);
+      Value r = convertScalarTo(rewriter, loc, adaptor.getRhs(), i64);
+      auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_stw_cmp_i",
+                                  rewriter.getFunctionType({i8, i64, i64}, {}));
+      rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{predC, l, r});
+    }
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// +/-/mul I/D/R -> @scl_rt_stw_sign_i/f(value, lhs, rhs, op, range)
+struct AwlStwSignLowering : public OpConversionPattern<awl::StwSignOp> {
+  using OpConversionPattern<awl::StwSignOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::StwSignOp op, awl::StwSignOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    if (adaptor.getValue().getType().isa<FloatType>()) {
+      auto f64 = rewriter.getF64Type();
+      Value v = convertScalarTo(rewriter, loc, adaptor.getValue(), f64);
+      auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_stw_sign_f",
+                                  rewriter.getFunctionType({f64}, {}));
+      rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{v});
+    } else {
+      auto i64 = rewriter.getI64Type();
+      auto i32 = rewriter.getI32Type();
+      auto i8 = rewriter.getI8Type();
+      Value v = convertScalarTo(rewriter, loc, adaptor.getValue(), i64);
+      Value l = convertScalarTo(rewriter, loc, adaptor.getLhs(), i64);
+      Value r = convertScalarTo(rewriter, loc, adaptor.getRhs(), i64);
+      Value opC = rewriter.create<arith::ConstantOp>(
+          loc, i8, rewriter.getI8IntegerAttr(op.getOp()));
+      Value rangeC = rewriter.create<arith::ConstantOp>(
+          loc, i32, rewriter.getI32IntegerAttr(op.getRange()));
+      auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_stw_sign_i",
+                                  rewriter.getFunctionType({i64, i64, i64, i8, i32}, {}));
+      rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{v, l, r, opC, rangeC});
+    }
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// / I/D -> @scl_rt_stw_div_i/f(divisor, result)
+struct AwlStwDivLowering : public OpConversionPattern<awl::StwDivOp> {
+  using OpConversionPattern<awl::StwDivOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::StwDivOp op, awl::StwDivOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    if (adaptor.getResult().getType().isa<FloatType>()) {
+      auto f64 = rewriter.getF64Type();
+      Value d = convertScalarTo(rewriter, loc, adaptor.getDivisor(), f64);
+      Value r = convertScalarTo(rewriter, loc, adaptor.getResult(), f64);
+      auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_stw_div_f",
+                                  rewriter.getFunctionType({f64, f64}, {}));
+      rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{d, r});
+    } else {
+      auto i64 = rewriter.getI64Type();
+      Value d = convertScalarTo(rewriter, loc, adaptor.getDivisor(), i64);
+      Value r = convertScalarTo(rewriter, loc, adaptor.getResult(), i64);
+      auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_stw_div_i",
+                                  rewriter.getFunctionType({i64, i64}, {}));
+      rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{d, r});
+    }
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// TRUNC/RND/RND+/RND- -> @scl_rt_f2i(value: f64, orig: i64, mode: i8) -> i64 -> i32
+struct AwlF2ILowering : public OpConversionPattern<awl::F2IOp> {
+  using OpConversionPattern<awl::F2IOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::F2IOp op, awl::F2IOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto f64 = rewriter.getF64Type();
+    auto i64 = rewriter.getI64Type();
+    auto i8 = rewriter.getI8Type();
+    Value v = convertScalarTo(rewriter, loc, adaptor.getValue(), f64);
+    Value orig = convertScalarTo(rewriter, loc, adaptor.getOrig(), i64);
+    Value modeC = rewriter.create<arith::ConstantOp>(
+        loc, i8, rewriter.getI8IntegerAttr(op.getMode()));
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_f2i",
+                                rewriter.getFunctionType({f64, i64, i8}, {i64}));
+    Value r = rewriter.create<func::CallOp>(loc, fn, TypeRange{i64},
+                                            ValueRange{v, orig, modeC})
+                  .getResult(0);
+    rewriter.replaceOpWithNewOp<arith::TruncIOp>(op, rewriter.getI32Type(), r);
     return success();
   }
 };
@@ -3576,6 +3865,10 @@ void SclToStdLoweringPass::runOnOperation() {
       AwlSetDbvOpLowering, AwlSetDbSizeOpLowering, AwlSetDbRefOpLowering,
       AwlSetDiOpLowering, AwlFeatureOpLowering,
       AwlShiftOpLowering, AwlSleepOpLowering, AwlStoreIndirectOpLowering,
+      AwlF2ILowering,
+      AwlStwBitLowering, AwlStwCmpLowering, AwlStwCondLowering,
+      AwlStwDivLowering, AwlStwGetLowering, AwlStwResetLowering,
+      AwlStwSetBitLowering, AwlStwSetLowering, AwlStwSignLowering,
       AwlTimerResetLowering, AwlWriteBitIndirectOpLowering,
       AwlRloLowering<awl::RloAndOp, false>,
       AwlRloLowering<awl::RloOrOp, true>, AwlSetResetLowering<awl::ResetOp, false>,

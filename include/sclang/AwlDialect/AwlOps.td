@@ -166,8 +166,9 @@ def NegOp : AwlOp<"neg"> {
 }
 
 def CastOp : AwlOp<"cast"> {
-  let summary = "cast between accumulator widths/types";
-  let arguments = (ins AnyType:$value, OptionalAttr<UnitAttr>:$zext);
+  let summary = "cast between accumulator widths/types (bitcast: reinterpret bits)";
+  let arguments = (ins AnyType:$value, OptionalAttr<UnitAttr>:$zext,
+                       OptionalAttr<UnitAttr>:$bitcast);
   let results = (outs AnyType:$result);
   let assemblyFormat = "attr-dict $value `:` type($value) `to` type($result)";
 }
@@ -256,6 +257,62 @@ def PackAreaOp : AwlOp<"pack_area", [Pure]> {
   let arguments = (ins I32Attr:$area, I32:$byte, I32Attr:$bit);
   let results = (outs I64:$result);
   let assemblyFormat = "attr-dict $area `,` $byte `:` type($byte) `,` $bit `->` type($result)";
+}
+
+// MARK: status word (STW): bits NER=0 VKE/RLO=1 STA=2 OR=3 OS=4 OV=5
+// A0/CC0=6 A1/CC1=7 BIE/BR=8 (awlsim statusword). Sim-only, like the rest
+// of the runtime state.
+def StwGetOp : AwlOp<"stw_get", [Pure]> {
+  let summary = "L STW: read the 16-bit status word";
+  let results = (outs I32:$word);
+  let assemblyFormat = "attr-dict `->` type($word)";
+}
+def StwSetOp : AwlOp<"stw_set"> {
+  let summary = "T STW: write the 16-bit status word";
+  let arguments = (ins I32:$word);
+  let assemblyFormat = "attr-dict $word `:` type($word)";
+}
+def StwBitOp : AwlOp<"stw_bit", [Pure]> {
+  let summary = "U OV / __STW A0 ...: read one STW bit";
+  let arguments = (ins I32Attr:$bit);
+  let results = (outs I1:$result);
+  let assemblyFormat = "attr-dict $bit `->` type($result)";
+}
+def StwSetBitOp : AwlOp<"stw_set_bit"> {
+  let summary = "SAVE: write one STW bit from a value";
+  let arguments = (ins I32Attr:$bit, I1:$value);
+  let assemblyFormat = "attr-dict $bit `,` $value `:` type($value)";
+}
+def StwCondOp : AwlOp<"stw_cond", [Pure]> {
+  let summary = "U >0 / ==0 / ... / UO: STW condition from A0/A1 (0=Z,1=NZ,2=POS,3=NEG,4=GE,5=LE,6=UO)";
+  let arguments = (ins I32Attr:$cond);
+  let results = (outs I1:$result);
+  let assemblyFormat = "attr-dict $cond `->` type($result)";
+}
+def StwResetOp : AwlOp<"stw_reset"> {
+  let summary = "__STWRST: clear the status word";
+  let assemblyFormat = "attr-dict";
+}
+def StwCmpOp : AwlOp<"stw_cmp"> {
+  let summary = "record a comparison into A0/A1 (pred: 0 eq,1 ne,2 lt,3 le,4 gt,5 ge)";
+  let arguments = (ins I32Attr:$pred, AnyType:$lhs, AnyType:$rhs);
+  let assemblyFormat = "attr-dict $pred `,` $lhs `:` type($lhs) `,` $rhs `:` type($rhs)";
+}
+def StwSignOp : AwlOp<"stw_sign"> {
+  let summary = "arith (+,-,mul I/D/R; op 0=add,1=sub,2=mul): A0/A1 from the result `value`; OV/OS=1 when the untruncated lhs-op-rhs leaves +-`range` (float: full classification of `value` incl. inf/nan/denorm)";
+  let arguments = (ins AnyType:$value, AnyType:$lhs, AnyType:$rhs, I32Attr:$op, I32Attr:$range);
+  let assemblyFormat = "attr-dict $value `:` type($value) `,` $lhs `:` type($lhs) `,` $rhs `:` type($rhs) `,` $op `,` $range";
+}
+def StwDivOp : AwlOp<"stw_div"> {
+  let summary = "/ I/D: like stw_sign, but divisor==0 sets A0=A1=OV=OS=1 (unordered)";
+  let arguments = (ins AnyType:$divisor, AnyType:$result);
+  let assemblyFormat = "attr-dict $divisor `:` type($divisor) `,` $result `:` type($result)";
+}
+def F2IOp : AwlOp<"f2i"> {
+  let summary = "TRUNC/RND/RND+/RND- (mode 0..3): real -> int32; out of range keeps `orig` and sets OV/OS (runtime)";
+  let arguments = (ins AnyType:$value, I32Attr:$mode, AnyType:$orig);
+  let results = (outs I32:$result);
+  let assemblyFormat = "attr-dict $mode `,` $value `:` type($value) `,` $orig `:` type($orig) `->` type($result)";
 }
 
 // MARK: timers (SP/SE/SS/SV/SI T n) and counters (ZV/ZR/S/R C n)

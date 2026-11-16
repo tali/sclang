@@ -16,6 +16,7 @@
 
 #include "sclang/Runtime/Runtime.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -60,6 +61,7 @@ struct CounterState {
 };
 
 struct SimState {
+  uint16_t stw = 0; // status word: NER=0 VKE=1 STA=2 OR=3 OS=4 OV=5 A0=6 A1=7 BIE=8
   std::vector<uint8_t> areaBytes[256];   // indexed by area code (ASCII)
   uint64_t areaSize[256] = {};           // configured size, 0 = default
   std::map<uint32_t, std::vector<uint8_t>> dbs; // DB number -> bytes
@@ -1220,6 +1222,14 @@ void scl_rt_iec(uint32_t n) {
     s.vtable->iec(n);
     return;
   }
+  // the IEC library FCs are AWL functions that end with SAVE (BIE := RLO):
+  // success sets BIE=1, an error path sets BIE=0 (awlsim library/iec/fc*)
+  auto bie = [&](bool ok) {
+    if (ok)
+      s.stw |= (uint16_t)(1u << 8);
+    else
+      s.stw &= (uint16_t)~(1u << 8);
+  };
   auto anyByte = [&](uint32_t base, uint32_t i) -> uint8_t {
     return (uint8_t)scl_rt_read(SCL_RT_AREA_M, 0, kParamBase + base + i, 1);
   };
@@ -1261,19 +1271,24 @@ void scl_rt_iec(uint32_t n) {
   if (n == 21) { // LEN: RET_VAL := actual length of S (string byte 1)
     uint8_t a, bit;
     uint32_t d, b;
-    if (!anyResolve(0, a, d, b, bit))
+    if (!anyResolve(0, a, d, b, bit)) {
+      bie(false);
       return;
+    }
     int len = (int)(uint8_t)scl_rt_read(a, d, b + 1, 1);
     scl_rt_write(SCL_RT_AREA_M, 0, kParamBase + 20, 2,
                  (uint64_t)(uint16_t)len);
+    bie(true);
     return;
   }
   if (n == 9 || n == 12) { // EQ_DT / GE_DT: compare two DATE_AND_TIMEs
     uint8_t a1, a2, bit1, bit2;
     uint32_t d1, d2, b1, b2;
     if (!anyResolve(0, a1, d1, b1, bit1) ||
-        !anyResolve(10, a2, d2, b2, bit2))
+        !anyResolve(10, a2, d2, b2, bit2)) {
+      bie(false);
       return;
+    }
     uint8_t t1[8], t2[8];
     readBytes(a1, d1, b1, 8, t1);
     readBytes(a2, d2, b2, 8, t2);
@@ -1285,8 +1300,10 @@ void scl_rt_iec(uint32_t n) {
       auto bcdOk = [](uint8_t b) {
         return ((b >> 4) & 0xF) <= 9 && (b & 0xF) <= 9;
       };
-      if (!bcdOk(t1[0]) || !bcdOk(t2[0]))
+      if (!bcdOk(t1[0]) || !bcdOk(t2[0])) {
+        bie(false); // BCD failure: BIE := 0, RET_VAL untouched
         return;
+      }
       // year correction (1990-1999 -> +1900, 2000-2089 -> +2000), then
       // compare the remaining 7 bytes as BCD fields
       auto yearKey = [](uint8_t bcd) {
@@ -1297,20 +1314,24 @@ void scl_rt_iec(uint32_t n) {
       res = y1 > y2 || (y1 == y2 && memcmp(t1 + 1, t2 + 1, 7) >= 0);
     }
     scl_rt_write_bit(SCL_RT_AREA_M, 0, kParamBase + 20, 0, res);
+    bie(true);
     return;
   }
   if (n == 4) { // DELETE: RET_VAL := IN with L chars deleted from position P
     uint8_t ai, ar, biti, bitr;
     uint32_t di, dr, bi, br;
     if (!anyResolve(0, ai, di, bi, biti) ||
-        !anyResolve(20, ar, dr, br, bitr))
+        !anyResolve(20, ar, dr, br, bitr)) {
+      bie(false);
       return;
+    }
     int L = (int16_t)(uint16_t)scl_rt_read(SCL_RT_AREA_M, 0, kParamBase + 10, 2);
     int P = (int16_t)(uint16_t)scl_rt_read(SCL_RT_AREA_M, 0, kParamBase + 12, 2);
     int inLen = (int)(uint8_t)scl_rt_read(ai, di, bi + 1, 1);
     int outMax = (int)(uint8_t)scl_rt_read(ar, dr, br, 1);
-    if (L < 0 || P < 0) { // awlsim ERR: RET_VAL actual length := 0
+    if (L < 0 || P < 0) { // awlsim ERR: RET_VAL actual length := 0, BIE := 0
       scl_rt_write(ar, dr, br + 1, 1, 0);
+      bie(false);
       return;
     }
     int maxCopy = inLen < outMax ? inLen : outMax;
@@ -1339,6 +1360,7 @@ void scl_rt_iec(uint32_t n) {
       scl_rt_write(ar, dr, br + w, 1,
                    (uint64_t)(uint8_t)scl_rt_read(ai, di, bi + off, 1));
     scl_rt_write(ar, dr, br + 1, 1, w - 2); // RET_VAL actual length
+    bie(true);
     return;
   }
 }
@@ -1396,6 +1418,171 @@ void scl_rt_fr_ptr(uint64_t ptr, uint8_t in) {
     scl_rt_counter_op(n, SCL_RT_COUNTER_FR, 0, in);
 }
 
+// MARK: status word (awlsim statusword; bits NER=0 VKE/RLO=1 STA=2 OR=3
+// OS=4 OV=5 A0/CC0=6 A1/CC1=7 BIE/BR=8)
+uint32_t scl_rt_stw_get(void) {
+  auto &s = state();
+  if (s.vtable && s.vtable->stw_get)
+    return s.vtable->stw_get();
+  return s.stw;
+}
+void scl_rt_stw_set(uint32_t word) {
+  auto &s = state();
+  if (s.vtable && s.vtable->stw_set) {
+    s.vtable->stw_set(word);
+    return;
+  }
+  s.stw = (uint16_t)word;
+}
+void scl_rt_stw_reset(void) {
+  auto &s = state();
+  if (s.vtable && s.vtable->stw_reset) {
+    s.vtable->stw_reset();
+    return;
+  }
+  s.stw = 0;
+}
+void scl_rt_stw_set_bit(uint8_t bit, uint8_t value) {
+  auto &s = state();
+  if (s.vtable && s.vtable->stw_set_bit) {
+    s.vtable->stw_set_bit(bit, value);
+    return;
+  }
+  if (value)
+    s.stw |= (uint16_t)(1u << bit);
+  else
+    s.stw &= (uint16_t)~(1u << bit);
+}
+static void stw_cmp_set(SimState &s, uint8_t pred, bool gt, bool lt, bool eq) {
+  // awlsim insn_eq_i etc.: A1=1 when lhs>rhs, A0=1 when lhs<rhs, and
+  // VKE = whether the comparison predicate holds (VKE mirrors the RLO)
+  bool res;
+  switch (pred) {
+  case 0: res = eq; break;   // ==
+  case 1: res = !eq; break;  // <>
+  case 2: res = lt; break;   // <
+  case 3: res = lt || eq; break; // <=
+  case 4: res = gt; break;   // >
+  default: res = gt || eq; break; // >=
+  }
+  s.stw = (uint16_t)((s.stw & ~((1u << 6) | (1u << 7) | (1u << 1))) |
+                     (gt ? (1u << 7) : 0u) | (lt ? (1u << 6) : 0u) |
+                     (res ? (1u << 1) : 0u));
+}
+void scl_rt_stw_cmp_i(uint8_t pred, int64_t lhs, int64_t rhs) {
+  auto &s = state();
+  if (s.vtable && s.vtable->stw_cmp_i) {
+    s.vtable->stw_cmp_i(pred, lhs, rhs);
+    return;
+  }
+  stw_cmp_set(s, pred, lhs > rhs, lhs < rhs, lhs == rhs);
+}
+void scl_rt_stw_cmp_f(uint8_t pred, double lhs, double rhs) {
+  auto &s = state();
+  if (s.vtable && s.vtable->stw_cmp_f) {
+    s.vtable->stw_cmp_f(pred, lhs, rhs);
+    return;
+  }
+  stw_cmp_set(s, pred, lhs > rhs, lhs < rhs, lhs == rhs);
+}
+// v9: arithmetic STW recording (awlsim statusword.setForInteger /
+// setForFloatingPointDWord). A0/A1 = result sign, OV cleared unless the
+// value is inf/nan/denorm; OS only ever latches (until stw_reset).
+static void stw_set_a0a1(SimState &s, bool a1, bool a0) {
+  s.stw = (uint16_t)((s.stw & ~((1u << 6) | (1u << 7))) |
+                     (a0 ? (1u << 6) : 0u) | (a1 ? (1u << 7) : 0u));
+}
+void scl_rt_stw_sign_i(int64_t value, int64_t lhs, int64_t rhs, uint8_t op,
+                       int32_t range) {
+  auto &s = state();
+  if (s.vtable && s.vtable->stw_sign_i) {
+    s.vtable->stw_sign_i(value, lhs, rhs, op, range);
+    return;
+  }
+  if (value == 0)
+    stw_set_a0a1(s, false, false);
+  else if (value < 0)
+    stw_set_a0a1(s, false, true);
+  else
+    stw_set_a0a1(s, true, false);
+  // overflow: the untruncated result left the accumulator range
+  int64_t wide = op == 1 ? lhs - rhs : op == 2 ? lhs * rhs : lhs + rhs;
+  if (wide > (int64_t)range || wide < -(int64_t)range - 1)
+    s.stw |= (1u << 4) | (1u << 5); // OV sets, OS latches
+  else
+    s.stw &= (uint16_t)~(1u << 5); // OV=0
+}
+void scl_rt_stw_sign_f(double value) {
+  auto &s = state();
+  if (s.vtable && s.vtable->stw_sign_f) {
+    s.vtable->stw_sign_f(value);
+    return;
+  }
+  // classify the float32 bit pattern (awlsim setForFloatingPointDWord)
+  float f = (float)value;
+  uint32_t dword;
+  std::memcpy(&dword, &f, 4);
+  uint32_t noSign = dword & 0x7FFFFFFFu;
+  if (noSign == 0) { // zero
+    stw_set_a0a1(s, false, false);
+    s.stw &= (uint16_t)~(1u << 5);
+  } else if (noSign < 0x00800000u) { // denorm
+    stw_set_a0a1(s, false, false);
+    s.stw |= (1u << 4) | (1u << 5);
+  } else if (noSign >= 0x7F800000u) {
+    if (noSign == 0x7F800000u) { // inf
+      stw_set_a0a1(s, !(dword & 0x80000000u), (dword & 0x80000000u) != 0);
+    } else { // nan: unordered
+      stw_set_a0a1(s, true, true);
+    }
+    s.stw |= (1u << 4) | (1u << 5);
+  } else if (dword & 0x80000000u) { // norm neg
+    stw_set_a0a1(s, false, true);
+    s.stw &= (uint16_t)~(1u << 5);
+  } else { // norm pos
+    stw_set_a0a1(s, true, false);
+    s.stw &= (uint16_t)~(1u << 5);
+  }
+}
+void scl_rt_stw_div_i(int64_t divisor, int64_t result) {
+  auto &s = state();
+  if (s.vtable && s.vtable->stw_div_i) {
+    s.vtable->stw_div_i(divisor, result);
+    return;
+  }
+  if (divisor == 0) { // division by zero: unordered + overflow
+    stw_set_a0a1(s, true, true);
+    s.stw |= (1u << 4) | (1u << 5);
+    return;
+  }
+  scl_rt_stw_sign_i(result, result, 0, 0, INT32_MAX);
+}
+void scl_rt_stw_div_f(double divisor, double result) {
+  auto &s = state();
+  if (s.vtable && s.vtable->stw_div_f) {
+    s.vtable->stw_div_f(divisor, result);
+    return;
+  }
+  (void)divisor;
+  scl_rt_stw_sign_f(result); // 1.0/0.0 = inf etc. is classified by the result
+}
+int64_t scl_rt_f2i(double value, int64_t orig, uint8_t mode) {
+  auto &s = state();
+  if (s.vtable && s.vtable->f2i)
+    return s.vtable->f2i(value, orig, mode);
+  // awlsim insn_trunc/insn_rnd: out of int32 range -> OV=OS=1, ACCU unchanged
+  if (!(value >= -2147483648.0 && value <= 2147483647.0)) {
+    s.stw |= (1u << 4) | (1u << 5);
+    return orig;
+  }
+  switch (mode) {
+  case 1: return (int64_t)std::llround(value); // RND
+  case 2: return (int64_t)std::ceil(value);    // RND+
+  case 3: return (int64_t)std::floor(value);   // RND-
+  default: return (int64_t)value;              // TRUNC
+  }
+}
+
 // MARK: OB-temp presets (awlsim obtemp.OB1TempPresets; only OB 1 has them)
 void scl_rt_ob_start(uint32_t obNum) {
   auto &s = state();
@@ -1403,6 +1590,7 @@ void scl_rt_ob_start(uint32_t obNum) {
     s.vtable->ob_start(obNum);
     return;
   }
+  s.stw = 0; // STW is cleared at OB entry (awlsim statusWord.reset)
   if (obNum != 1)
     return; // OBTempPresets_table only has OB 1
   // write the 20-byte header into the current L frame (bytes 0..19)
