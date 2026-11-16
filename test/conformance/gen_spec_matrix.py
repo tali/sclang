@@ -5,14 +5,17 @@
 # from the code. See docs/spec-conformance.md ("How to trace") and AGENTS.md.
 #
 # Tag format (in any // comment):
-#   // SPEC[AWL] IEC 61131-3 STL, load instruction (L)          -> full
-#   // SPEC[AWL] Siemens AWL manual, timer instructions (approx) -> approx
-#   // SPEC[SCL] IEC 61131-3 ST, CASE statement (gap)            -> gap
+#   // SPEC[AWL] IEC 61131-3 STL, load instruction (L)            -> full
+#   // SPEC[AWL] Siemens AWL manual, timer instructions (approx)   -> approx
+#   // SPEC[SCL] IEC 61131-3 ST, CASE statement (gap)              -> gap
+#   // SPEC[AWL] ... RND (approx: truncation)                      -> approx
 # The language tag is AWL/STL (IEC 61131-3 instruction list, Siemens AWL)
 # or SCL/ST (IEC 61131-3 structured text, Siemens SCL). The status in the
 # trailing parentheses is optional and defaults to "full":
 # full = implemented per the reference, approx = implemented with a
-# documented approximation, gap = known missing/unsupported.
+# documented approximation, gap = known missing/unsupported. The status
+# may carry a reason after a colon — "(approx: truncation)" — which is kept
+# in the reference text and still counts as that status (NOT as "full").
 #
 # Usage: gen_spec_matrix.py [--check]
 #   (default) rewrites docs/spec-conformance.md in place
@@ -39,7 +42,9 @@ SCAN = [
     ('AWL lit tests', 'test/AwlGen'),
 ]
 
-TAG = re.compile(r'//+\s*SPEC\[([A-Za-z]+)\]\s*(.+?)(?:\s*\((full|approx|gap)\))?\s*$')
+# Trailing "(status)" or "(status: reason)"; a reason must not silently
+# downgrade the status to full (e.g. "(approx: truncation)" is approx).
+TAG = re.compile(r'//+\s*SPEC\[([A-Za-z]+)\]\s*(.+?)(?:\s*\((full|approx|gap)(?::\s*([^)]*))?\))?\s*$')
 
 # Known external conformance corpora groups (awlsim test suite layout), used
 # to link the spec matrix to the executable test corpora.
@@ -61,6 +66,9 @@ def scan_file(path):
                 lang = m.group(1).upper()
                 ref = m.group(2).strip()
                 status = m.group(3) or 'full'
+                if m.group(3) and m.group(4):
+                    # keep the reason in the reference text, unchanged
+                    ref = '%s (%s: %s)' % (ref, status, m.group(4).strip())
                 rows.append((lang, ref, status, n))
     return rows
 

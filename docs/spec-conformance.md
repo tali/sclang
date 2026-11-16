@@ -33,7 +33,9 @@ Every feature in the sources carries a greppable tag in a `//` comment:
 ```
 
 Format: `SPEC[<lang>] <reference> [<status>]`, where `<lang>` is `AWL`/`STL`
-or `SCL`/`ST` and `<status>` is `full` (default), `approx` or `gap`.
+or `SCL`/`ST` and `<status>` is `full` (default), `approx` or `gap`. The
+status may carry a reason — `(approx: truncation)` — which stays in the
+reference text and still counts as that status, not as `full`.
 
 To trace: `grep -rn "SPEC\[" lib include test` lists every tagged site with
 file:line. The matrix below is **generated** from those tags by
@@ -77,18 +79,18 @@ plus the lit tests under `test/` and the external corpus tests listed in
 | AWL | IEC 61131-3 STL TAK (exchange accumulators), Siemens AWL manual "Accumulator instructions" | full | [lib/AwlGen/AwlGen.cpp:3087](../lib/AwlGen/AwlGen.cpp#L3087) |
 | AWL | IEC 61131-3 STL NEGI/NEGD (two's-complement ACCU1) | full | [lib/AwlGen/AwlGen.cpp:3093](../lib/AwlGen/AwlGen.cpp#L3093) |
 | AWL | Siemens AWL manual "Shift and rotate" (SLW/SRW/SSI/SSD/SLD/SRD/RLD/RRD/RLDA/RRDA), awl.shift | full | [lib/AwlGen/AwlGen.cpp:3101](../lib/AwlGen/AwlGen.cpp#L3101) |
-| AWL | Siemens AWL manual "Real math" (ABS/NEGR/SIN/COS/TAN/...), awl.real_math (approx: float32 host math) | full | [lib/AwlGen/AwlGen.cpp:3106](../lib/AwlGen/AwlGen.cpp#L3106) |
-| AWL | Siemens AWL manual "Value conversions" TRUNC/RND (approx: truncation) | full | [lib/AwlGen/AwlGen.cpp:3111](../lib/AwlGen/AwlGen.cpp#L3111) |
+| AWL | Siemens AWL manual "Real math" (ABS/NEGR/SIN/COS/TAN/...), awl.real_math (approx: float32 host math) | approx | [lib/AwlGen/AwlGen.cpp:3106](../lib/AwlGen/AwlGen.cpp#L3106) |
+| AWL | Siemens AWL manual "Value conversions" TRUNC/RND (approx: truncation) | approx | [lib/AwlGen/AwlGen.cpp:3111](../lib/AwlGen/AwlGen.cpp#L3111) |
 | AWL | Siemens AWL manual "Value conversions" DTR (dword->real), plus BTI/BTD/ITB/DTB BCD and ITD/DTI/INVI/INVD below | full | [lib/AwlGen/AwlGen.cpp:3138](../lib/AwlGen/AwlGen.cpp#L3138) |
 | AWL | Siemens AWL manual "Enabling" FR (timer/counter), runtime scl_rt_timer_fr | full | [lib/AwlGen/AwlGen.cpp:3144](../lib/AwlGen/AwlGen.cpp#L3144) |
-| AWL | Siemens AWL manual TDB (swap DB/DI registers) (approx: not modelled) | full | [lib/AwlGen/AwlGen.cpp:3154](../lib/AwlGen/AwlGen.cpp#L3154) |
+| AWL | Siemens AWL manual TDB (swap DB/DI registers) (approx: not modelled) | approx | [lib/AwlGen/AwlGen.cpp:3154](../lib/AwlGen/AwlGen.cpp#L3154) |
 | AWL | Siemens AWL manual "Opening a data block" OPN (= AUF) | full | [lib/AwlGen/AwlGen.cpp:3165](../lib/AwlGen/AwlGen.cpp#L3165) |
 | AWL | awlsim test directive __STWRST (reset status word) | full | [lib/AwlGen/AwlGen.cpp:3198](../lib/AwlGen/AwlGen.cpp#L3198) |
 | AWL | awlsim test directive __FEATURE t [, v] (nrAccus / OB-temp presets), runtime scl_rt_feature | full | [lib/AwlGen/AwlGen.cpp:3206](../lib/AwlGen/AwlGen.cpp#L3206) |
 | AWL | awlsim test directive __SLEEP ms (advance virtual clock), runtime scl_rt_sleep | full | [lib/AwlGen/AwlGen.cpp:3226](../lib/AwlGen/AwlGen.cpp#L3226) |
 | AWL | Siemens AWL manual LC (load timer/counter current value, BCD-coded) | full | [lib/AwlGen/AwlGen.cpp:3236](../lib/AwlGen/AwlGen.cpp#L3236) |
-| AWL | Siemens AWL manual FP/FN edge memory (approx: approximated by U/UN — no edge memory) | full | [lib/AwlGen/AwlGen.cpp:3255](../lib/AwlGen/AwlGen.cpp#L3255) |
-| AWL | Siemens AWL manual MCR (master control relay) (approx: bracket only) | full | [lib/AwlGen/AwlGen.cpp:3258](../lib/AwlGen/AwlGen.cpp#L3258) |
+| AWL | Siemens AWL manual FP/FN edge memory (approx: approximated by U/UN — no edge memory) | approx | [lib/AwlGen/AwlGen.cpp:3255](../lib/AwlGen/AwlGen.cpp#L3255) |
+| AWL | Siemens AWL manual MCR (master control relay) (approx: bracket only) | approx | [lib/AwlGen/AwlGen.cpp:3258](../lib/AwlGen/AwlGen.cpp#L3258) |
 | AWL | Siemens AWL manual BLD <n> (display code — no-op) | full | [lib/AwlGen/AwlGen.cpp:3261](../lib/AwlGen/AwlGen.cpp#L3261) |
 | AWL | Siemens AWL manual MCR( / MCR ) nesting | approx | [lib/AwlGen/AwlGen.cpp:3267](../lib/AwlGen/AwlGen.cpp#L3267) |
 | AWL | IEC 61131-3 STL SPBB/SPB-branch save (save RLO into BR) | full | [lib/AwlGen/AwlGen.cpp:3286](../lib/AwlGen/AwlGen.cpp#L3286) |

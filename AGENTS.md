@@ -160,7 +160,9 @@ has no `\b` — use python3 for regex edits.
 - Spec traceability: every language feature carries a `// SPEC[<lang>]
   <spec ref> [(full|approx|gap)]` comment (lang = AWL/STL or SCL/ST) at its
   implementation site (AwlGen dispatch, AwlOps.td ops, lowerings, runtime
-  fns, tests). `docs/spec-conformance.md` contains a matrix GENERATED from
+  fns, tests); a reason may follow the status (`(approx: reason)`) and
+  still counts as that status, never as full. `docs/spec-conformance.md`
+  contains a matrix GENERATED from
   those tags by `test/conformance/gen_spec_matrix.py` — after adding or
   changing a SPEC tag, ALWAYS regenerate it (`python3
   test/conformance/gen_spec_matrix.py`); the lit test
