@@ -141,7 +141,7 @@ has no `\b` — use python3 for regex edits.
   line). sclang driver exits 2 when scl_rt_assert_failures() > 0 after the
   cycle loop.
   Current: AWL 116/116 (100%), SCL single 15/15, SCL per-project 16/17,
-  JIT smoke 75/77 (97%), oracle (__ASSERT value-level) 51/53 (96%).
+  JIT smoke 76/77 (99%), oracle (__ASSERT value-level) 52/53 (98%).
   String handling: `VAR := 'lit'` in DB-init/statement stores len @+1, chars
   @+2.., zero-fills to maxlen; STRING[n] size is (n+2) even-aligned;
   ARRAY OF STRING[n] keeps the dim in elemType; STRING[i] = char at +2+(i-1)
@@ -326,6 +326,25 @@ has no `\b` — use python3 for regex edits.
     suffixes like `P#M 10.0 BYTE 7`); `consumePtrLiteral()` resolves the
     byte/bit offset via `resolveDbMember` (sub-lexer over "DB<n>.<sym>").
     Used at all P# consumption sites (LAR/TAR/`+AR`/indirect offsets).
+  - LARn/TARn semantics (awlsim insn_larN/insn_tarN): LARn <mem> loads the
+    operand's 32-bit CONTENT as the pointer value (ar.set(fetch(op,32))),
+    LARn P#x.y loads the literal, bare LARn takes ACCU1. TARn <mem> stores
+    the AR as a RAW 32-bit S7 pointer (awl.ar_raw -> scl_rt_ar_raw), TARn
+    LD/LW/LB uses the mnemonic width (LD=32). TARn ARm does ARm := ARn.
+    `[LD n]`/`[LW n]`/`[#var]`/`[MD 4]` as an indirect base load the
+    operand's VALUE as the base pointer; a raw P#x.y value (area byte 0)
+    takes the ACCESS instruction's area byte (DIX -> 0x85, DBX -> 0x84,
+    M -> 0x83, L -> 0x86 ...), T/Z [..] treat the value as the block NUMBER
+    (awl.pack_area). An indirect RHS in a CALL param is loaded through
+    (load_indirect), not passed as the address (lastOperandIndirect flag).
+    AUF/OPN DI [LW 0] sets the DI register (awl.set_div ->
+    scl_rt_set_current_di); AUF DB [LW 0] reads the L area (not M).
+  - AR2 multi-instance base is added to DI-area accesses ONLY inside FB
+    frames (awlsim __fetchDI/__storeDI check callStackTop.block.isFB):
+    runtime state curIsFb, set per L-frame via scl_rt_frame_set_fb from
+    the block's `fb` attr; ar2ByteOff() returns 0 outside FBs (an AR2 set
+    by LAR2 in an OB/FC must not leak into DID/DBD offsets — pointer.awl
+    FC2 DB3 OOB).
   - `+ARn P#x.y` (also `+ ARn P#x.y` after an arith operator) emits
     `awl.indirect` (ar_add) + `awl.ar_set` — ARn += offset in bits.
     LARn/TARn with no operand pop ACCU1 ZERO-extended to i64 (`zextTo64`):

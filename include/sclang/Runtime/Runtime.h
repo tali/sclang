@@ -221,6 +221,7 @@ uint32_t scl_rt_current_db(void);
 int64_t scl_rt_timer_lc(uint32_t n); // LC T n: S5TIME-format current value
 void scl_rt_ar_set(uint8_t ar, uint64_t ptr);
 uint64_t scl_rt_ar_get(uint8_t ar);
+uint32_t scl_rt_ar_raw(uint8_t ar);
 /// Pointer = AR<ar> + offBits (added to the byte/bit field), repacked.
 uint64_t scl_rt_ar_add(uint8_t ar, uint32_t offBits);
 /// Indirect access through a packed pointer.
@@ -245,6 +246,7 @@ uint64_t scl_rt_assert_failures(void);
 /// The block lowering emits scl_rt_l_push at function entry and
 /// scl_rt_l_pop before every return. Sim-only (a host vtable receives raw
 /// L offsets and manages its own frames).
+void scl_rt_frame_set_fb(uint8_t isFb);
 void scl_rt_l_push(uint32_t bytes);
 /// Copy `bytes` of the FC parameter area between the marker staging area
 /// (offset 8192, where CALL stores the actual parameters) and the callee's

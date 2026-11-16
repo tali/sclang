@@ -338,6 +338,7 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_sim_db_ref", (void *)&scl_rt_sim_db_ref);
     add("scl_rt_timer_fr", (void *)&scl_rt_timer_fr);
     add("scl_rt_sleep", (void *)&scl_rt_sleep);
+    add("scl_rt_frame_set_fb", (void *)&scl_rt_frame_set_fb);
     add("scl_rt_l_push", (void *)&scl_rt_l_push);
     add("scl_rt_l_pop", (void *)&scl_rt_l_pop);
     add("scl_rt_param_in", (void *)&scl_rt_param_in);
@@ -376,6 +377,7 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_current_db", (void *)&scl_rt_current_db);
     add("scl_rt_ar_set", (void *)&scl_rt_ar_set);
     add("scl_rt_ar_get", (void *)&scl_rt_ar_get);
+    add("scl_rt_ar_raw", (void *)&scl_rt_ar_raw);
     add("scl_rt_ar_add", (void *)&scl_rt_ar_add);
     add("scl_rt_read_indirect", (void *)&scl_rt_read_indirect);
     add("scl_rt_write_indirect", (void *)&scl_rt_write_indirect);

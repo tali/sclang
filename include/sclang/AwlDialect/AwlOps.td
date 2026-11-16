@@ -460,6 +460,13 @@ def SetDiOp : AwlOp<"set_di"> {
   let assemblyFormat = "attr-dict $db";
 }
 
+// AUF DI <value>: set the DI register from a runtime value (AUF DI [LW 0]).
+def SetDivOp : AwlOp<"set_div"> {
+  let summary = "AUF/OPN DI <value>: set the DI register from a runtime value";
+  let arguments = (ins AnyType:$db);
+  let assemblyFormat = "attr-dict $db `:` type($db)";
+}
+
 // AUF <value>: set the current DB register from a runtime value (e.g. a
 // BLOCK_DB parameter passed to an FC, or AUF DB [LW n]).
 def SetDbvOp : AwlOp<"set_dbv"> {
@@ -483,6 +490,15 @@ def ArGetOp : AwlOp<"ar_get", [Pure]> {
   let summary = "read address register ar as i64";
   let arguments = (ins I32Attr:$ar);
   let results = (outs I64:$result);
+  let assemblyFormat = "attr-dict $ar `->` type($result)";
+}
+
+// Raw 32-bit S7 pointer value of address register ar (TARn <memory operand>
+// stores the AR as a pointer, not the packed internal form).
+def ArRawOp : AwlOp<"ar_raw", [Pure]> {
+  let summary = "read address register ar as a raw 32-bit S7 pointer value";
+  let arguments = (ins I32Attr:$ar);
+  let results = (outs I32:$result);
   let assemblyFormat = "attr-dict $ar `->` type($result)";
 }
 

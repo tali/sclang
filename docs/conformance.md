@@ -69,15 +69,20 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 - AWL compile: **116/116 pass (100%)**
 - SCL single file: **15/15 pass (100%)**
 - SCL per project: **16/17 pass (94%)**
-- JIT smoke (files with OB 1, full pipeline + execution): **75/77 pass (97%)**
+- JIT smoke (files with OB 1, full pipeline + execution): **76/77 pass (99%)**
 - Oracle (`__ASSERT` files with OB 1, value-level, exit code must be 0):
-  **51/53 pass (96%)** — see "Oracle tier" below. Remaining: startup_multiple
-  (nrAccus, permanent), pointer:45 (TARn LD-operand stores the packed AR,
-  not the raw 32-bit pointer), infinite-recursion (no stack guard), and
-  the pre-existing Formelparser SCL project gap. Fixed since last writing:
-  array.awl (FC ARRAY params now by-ref: 6-byte DB-pointer header in the VL
-  slot, callee derefs it incl. the header DB word for DB/DI areas; FB array
-  params still value-copied; forwarding via copyArrayParamInd),
+  **52/53 pass (98%)** — see "Oracle tier" below. Remaining: startup_multiple
+  (nrAccus, permanent), infinite-recursion (no stack guard), and the
+  pre-existing Formelparser SCL project gap. Fixed since last writing:
+  pointer.awl fully (TARn stores the AR as a raw S7 pointer via the new
+  awl.ar_raw/scl_rt_ar_raw; LARn <mem> loads the operand's 32-bit content;
+  TARn ARm does ARm := ARn; [LD n]/[#var]/[MD 4] indirect bases load the
+  operand's value and raw P#x.y values take the access instruction's area;
+  AUF DI [LW 0] sets the DI register; AR2 base applies to DI accesses only
+  in FB frames), array.awl (FC ARRAY params by-ref: 6-byte DB-pointer
+  header in the VL slot, callee derefs it incl. the header DB word for
+  DB/DI areas; FB array params value-copied; forwarding via
+  copyArrayParamInd),
   anypointer.awl (ANY header type code/count per awlsim makeByAutoType —
   `anyAutoType`/`anyTypeCodeOf`, incl. ARRAY -> (elem code, elem count) —
   plus FB VAR_IN ANY params now stage the full 10-byte header into the

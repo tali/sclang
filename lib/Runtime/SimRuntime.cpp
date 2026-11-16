@@ -93,11 +93,13 @@ struct SimState {
   std::vector<uint64_t> lSizes; // frame size at the same stack depth
   uint64_t lBase = 0;
   uint64_t curFrameSize = 0;
+  uint8_t curIsFb = 0; // awlsim adds the AR2 base to DI accesses only in FBs
   // call-saved block-call state, saved/restored with the L frame (S7 restores
   // the address registers and DB/DI registers when a block returns)
   struct FrameSave {
     uint64_t ar1, ar2;
     uint32_t db, di;
+    uint8_t isFb;
   };
   std::vector<FrameSave> frameSaves;
   // SFB3-5 timer state, keyed by (DI db << 32 | AR2 base byte)
@@ -175,6 +177,8 @@ static uint64_t frameBaseOf(uint8_t area, const SimState &s) {
 /// Byte offset of the AR2 multi-instance base (awlsim adds the AR2 base to
 /// every DI-area access, see cpu.py getArea_DI/setArea_DI).
 static uint32_t ar2ByteOff() {
+  if (!state().curIsFb)
+    return 0; // awlsim adds the AR2 base to DI accesses only inside FBs
   uint64_t p = state().ars[1];
   if ((p >> 56) != 0)
     return (uint32_t)((p >> 16) & 0xFFFF); // internal packed pointer
@@ -549,11 +553,16 @@ uint64_t scl_rt_pack_s7(uint32_t area, uint32_t db, uint32_t byte,
          ((uint64_t)(byte & 0x1FFF) << 3) | (bit & 7);
 }
 
+// Set whether the current L-stack frame belongs to an FB (awlsim
+// __fetchDI/__storeDI add the AR2 multi-instance base only for FB blocks).
+void scl_rt_frame_set_fb(uint8_t isFb) { state().curIsFb = isFb; }
+
 void scl_rt_l_push(uint32_t bytes) {
   auto &s = state();
   s.lFrames.push_back(s.lBase);
   s.lSizes.push_back(s.curFrameSize);
-  s.frameSaves.push_back({s.ars[0], s.ars[1], s.currentDb, s.currentDi});
+  s.frameSaves.push_back({s.ars[0], s.ars[1], s.currentDb, s.currentDi,
+                          s.curIsFb});
   // Frames tile the L-stack without overlap: the new frame starts after the
   // CURRENT (caller's) frame. Frames are even-aligned and always advance by
   // at least 2 bytes, so blocks without TEMP vars still get a separate L
@@ -577,6 +586,7 @@ void scl_rt_l_pop(void) {
       s.ars[1] = f.ar2;
       s.currentDb = f.db;
       s.currentDi = f.di;
+      s.curIsFb = f.isFb;
       s.frameSaves.pop_back();
     }
   }
@@ -1035,6 +1045,22 @@ uint64_t scl_rt_ar_get(uint8_t ar) {
   if (ar >= 1 && ar <= 2)
     return s.ars[ar - 1];
   return 0;
+}
+
+// TARn <memory>: the AR is stored as a raw 32-bit S7 pointer value
+// (area byte << 24 | db << 16 | byte << 3 | bit). A raw pointer value
+// (area byte 0 in the packed format's top byte) is returned as-is.
+uint32_t scl_rt_ar_raw(uint8_t ar) {
+  uint64_t p = scl_rt_ar_get(ar);
+  if (ptrArea(p) == 0)
+    return (uint32_t)(p & 0xFFFFFFFFull);
+  uint8_t a = ptrArea(p);
+  uint8_t s7 = a == 'P' ? 0x80 : a == 'I' ? 0x81 : a == 'Q' ? 0x82
+             : a == 'M' ? 0x83 : a == 'D' ? 0x84 : a == 'L' ? 0x86
+             : a == 'V' ? 0x87 : 0;
+  uint32_t db = ptrDb(p) & 0xFF;
+  uint32_t byte = ptrByte(p) & (s7 == 0x87 ? 0x1FFFFF : 0x1FFF);
+  return ((uint32_t)s7 << 24) | (db << 16) | (byte << 3) | ptrBit(p);
 }
 
 // [ARn, P#x.y] addressing: returns ARn + offset WITHOUT modifying ARn

@@ -3487,6 +3487,26 @@ struct AwlSetDbvOpLowering : public OpConversionPattern<awl::SetDbvOp> {
   }
 };
 
+// AUF DI <value> -> @scl_rt_set_current_di(db: i32)
+struct AwlSetDivOpLowering : public OpConversionPattern<awl::SetDivOp> {
+  using OpConversionPattern<awl::SetDivOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::SetDivOp op, awl::SetDivOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i32 = rewriter.getI32Type();
+    Value dbV = adaptor.getDb();
+    if (!dbV.getType().isInteger(32))
+      dbV = rewriter.create<arith::TruncIOp>(loc, i32, dbV);
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_set_current_di",
+                                rewriter.getFunctionType({i32}, {}));
+    rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{dbV});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 // LAR1/LAR2 <packed ptr> -> @scl_rt_ar_set(ar: i8, ptr: i64)
 struct AwlArSetOpLowering : public OpConversionPattern<awl::ArSetOp> {
   using OpConversionPattern<awl::ArSetOp>::OpConversionPattern;
@@ -3526,6 +3546,25 @@ struct AwlArGetOpLowering : public OpConversionPattern<awl::ArGetOp> {
                                 rewriter.getFunctionType({i8}, {rewriter.getI64Type()}));
     rewriter.replaceOpWithNewOp<func::CallOp>(
         op, fn, TypeRange{rewriter.getI64Type()}, ValueRange{arC});
+    return success();
+  }
+};
+
+// TARn <memory>: AR as raw 32-bit S7 pointer -> @scl_rt_ar_raw(ar: i8) -> i32
+struct AwlArRawOpLowering : public OpConversionPattern<awl::ArRawOp> {
+  using OpConversionPattern<awl::ArRawOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::ArRawOp op, awl::ArRawOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i8 = rewriter.getI8Type();
+    Value arC = rewriter.create<arith::ConstantOp>(
+        loc, i8, rewriter.getI8IntegerAttr(op.getAr()));
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_ar_raw",
+                                rewriter.getFunctionType({i8}, {rewriter.getI32Type()}));
+    rewriter.replaceOpWithNewOp<func::CallOp>(
+        op, fn, TypeRange{rewriter.getI32Type()}, ValueRange{arC});
     return success();
   }
 };
@@ -3833,6 +3872,15 @@ struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
           loc, i32, rewriter.getI32IntegerAttr(frameSize));
       auto pushCall =
           rewriter.create<func::CallOp>(loc, pushFn, TypeRange{}, ValueRange{frameC});
+      // awlsim adds the AR2 base to DI-area accesses only inside FBs
+      {
+        auto i8 = rewriter.getI8Type();
+        auto fbFn = getOrInsertRtFunc(rewriter, module, "scl_rt_frame_set_fb",
+                                      rewriter.getFunctionType({i8}, {}));
+        auto fbC = rewriter.create<arith::ConstantOp>(
+            loc, i8, rewriter.getI8IntegerAttr(op.getFb() ? 1 : 0));
+        rewriter.create<func::CallOp>(loc, fbFn, TypeRange{}, ValueRange{fbC});
+      }
       // OB entry: write the S7 OB-temp preset header into the new frame
       if (op.getSymName().startswith("OB")) {
         int32_t obNum = atoi(op.getSymName().substr(2).str().c_str());
@@ -3954,7 +4002,8 @@ void SclToStdLoweringPass::runOnOperation() {
       AwlNegOpLowering,
       AwlNopOpLowering, AwlNotOpLowering, AwlOrLowering, AwlPackAreaOpLowering,
       AwlPackPtrOpLowering,
-      AwlArGetOpLowering, AwlArSetOpLowering, AwlDbInfoOpLowering,
+      AwlArGetOpLowering, AwlArRawOpLowering, AwlArSetOpLowering,
+      AwlSetDivOpLowering, AwlDbInfoOpLowering,
       AwlArAddOpLowering, AwlIndirectOpLowering, AwlTimerLcOpLowering,
       AwlLoadBitIndirectOpLowering,
       AwlLoadIndirectOpLowering, AwlRealMathOpLowering, AwlSetDbOpLowering,
