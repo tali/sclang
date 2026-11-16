@@ -1,11 +1,11 @@
 // RUN: sclang-gen --emit=mlir-std %s | FileCheck %s
 
-// CHECK: memref.global @db1 : memref<i16, strided<[], offset: ?>>
+// CHECK: memref.global @db1 : memref<i16> = dense<0>
 data_block db1 int
 end_data_block
 
 // CHECK-LABEL: func.func @fc1
-// CHECK:         %[[G:[0-9]+]] = memref.get_global @db1 : memref<i16, strided<[], offset: ?>>
+// CHECK:         %[[G:[0-9]+]] = memref.get_global @db1 : memref<i16>
 function fc1 : int
 begin
   fc1 := "db1";

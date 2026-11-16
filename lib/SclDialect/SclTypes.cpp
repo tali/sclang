@@ -267,7 +267,20 @@ struct StructTypeStorage : public mlir::TypeStorage {
   /// instance. This is used when constructing a new instance to ensure that we
   /// haven't already uniqued an instance of the given key.
   bool operator==(const KeyTy &key) const {
-    return key.first == elementNames || key.second == elementTypes;
+    // Both the element names AND the element types must match; matching only
+    // one of them made uniquing return a struct with the wrong members (e.g.
+    // two structs that share their member types but not their names).
+    return key.first == elementNames && key.second == elementTypes;
+  }
+
+  /// Define a hash function for the key type, hashing both names and types
+  /// (must be consistent with operator==).
+  static llvm::hash_code hashKey(const KeyTy &key) {
+    llvm::hash_code h =
+        llvm::hash_combine_range(key.second.begin(), key.second.end());
+    for (auto name : key.first)
+      h = llvm::hash_combine(h, name.getValue());
+    return h;
   }
 
   /// Define a construction method for creating a new instance of this storage.

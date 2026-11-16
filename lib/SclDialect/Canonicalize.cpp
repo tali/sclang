@@ -60,9 +60,14 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
     if (argCallNames.size() == 1)
       return failure();
 
-    assert(argCallNames.size() == 0);
+    if (argCallNames.size() != 0)
+      return failure();
     auto nameId = StringAttr::get(context, "scl.name");
     auto nameAttr = func.getArgAttrOfType<StringAttr>(0, nameId);
+    // Callees without named parameters (e.g. external stubs) cannot be
+    // matched by name; leave the call as is.
+    if (!nameAttr)
+      return failure();
     SmallVector<Attribute, 1> argNames;
     argNames.push_back(nameAttr);
     auto argNamesAttr = ArrayAttr::get(context, argNames);
@@ -93,11 +98,18 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
     auto defaultLocId = StringAttr::get(context, "scl.defaultLoc");
     for (unsigned i = 0; i < func.getNumArguments(); i++) {
       auto nameAttr = func.getArgAttrOfType<StringAttr>(i, nameId);
+      // Callees without named parameters (e.g. external stubs) cannot be
+      // reordered by name; leave the call as is.
+      if (!nameAttr)
+        return failure();
       argNames.push_back(nameAttr);
       StringRef name = nameAttr.getValue();
       bool found = false;
       for (unsigned j = 0; j < argCallNames.size(); j++) {
-        auto argCallName = argCallNames[j].dyn_cast<StringAttr>().getValue();
+        auto argCallNameAttr = argCallNames[j].dyn_cast<StringAttr>();
+        if (!argCallNameAttr)
+          return failure();
+        auto argCallName = argCallNameAttr.getValue();
 
         if (argCallName == name) {
           if (i != j)
@@ -109,17 +121,18 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
         }
       }
       if (!found) {
-        reordered = true;
+        // Omitted argument: fill in the callee's declared default value.
         auto defaultValue = func.getArgAttr(i, defaultId);
-        if (defaultValue) {
-          Dialect * scl = op->getDialect();
-          auto loc = Location(func.getArgAttrOfType<LocationAttr>(i, defaultId));
-          auto c = scl->materializeConstant(rewriter, defaultValue,
-                                             funcType.getInput(i), loc);
-          arguments.push_back(c->getResult(0));
-        }
-        assert(false && "have to provide value for argument");
-        return failure();
+        if (!defaultValue)
+          return failure(); // no default: cannot canonicalize, leave as is
+        reordered = true;
+        Dialect *scl = op->getDialect();
+        auto loc = Location(func.getArgAttrOfType<LocationAttr>(i, defaultLocId));
+        auto c = scl->materializeConstant(rewriter, defaultValue,
+                                           funcType.getInput(i), loc);
+        if (!c)
+          return failure();
+        arguments.push_back(c->getResult(0));
       }
     }
     if (!argUsed.all() || !reordered)
@@ -137,10 +150,19 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
   /// to interact with it to perform any changes to the IR from here.
   mlir::LogicalResult
   matchAndRewrite(scl::CallFcOp op, PatternRewriter &rewriter) const override {
-    scl::FunctionOp func =
-        SymbolTable::lookupNearestSymbolFrom<scl::FunctionOp>(op->getParentOp(),
-                                                              op.getCalleeAttr());
-    assert(func && "cannot lookup FunctionOp");
+    // SCL functions are always top-level symbols of the module. NB: a plain
+    // lookupNearestSymbolFrom(op) would stop at an enclosing FunctionBlockOp
+    // (it is a symbol table holding the FB's variables) and miss module-level
+    // callees, so look the callee up in the module explicitly. If the callee
+    // does not exist (yet), leave the op alone instead of dereferencing null
+    // (the assert is compiled out in release builds).
+    auto module = op->getParentOfType<ModuleOp>();
+    scl::FunctionOp func = llvm::dyn_cast_or_null<scl::FunctionOp>(
+        module ? SymbolTable::lookupSymbolIn(module.getOperation(),
+                                             op.getCalleeAttr())
+               : nullptr);
+    if (!func)
+      return failure();
 
     switch (func.getNumArguments()) {
     case 0:

@@ -128,14 +128,15 @@ All compile tiers pass 100% (AWL 116/116, SCL single 15/15, SCL projects
 17/17) and the JIT smoke tier passes 103/105. The oracle tier is 70/71 —
 see the list above; accumulator registers are now modeled at runtime
 (awl.accu_get/accu_set), so values persist across labels and calls.
-Known flake: the
-LogMsg SCL project fails intermittently (~4%). The garbage `unknown FB`
-diagnostic was a dangling StringRef in fbInstanceOf (returned a StringRef
-into the temporary from unquote()) — fixed; a residual silent failure
-around the DataLog calls remains open (needs MSan), tracked in AGENTS.md.
+The former LogMsg flake (~4% of runs) is fixed; see AGENTS.md for the two
+root causes (StructTypeStorage uniquing compared names OR types instead of
+AND; the CallFcOp canonicalizer resolved callees via the nearest symbol
+table, which stops at the enclosing FB, and dereferenced the null result in
+release builds). LogMsg now passes 100/100 `--emit=mlir` runs and 50/50 in
+mlir-std/llvm/jit.
 
 Every remaining spec deviation is an `approx` row in the generated SPEC
-matrix ([spec-conformance.md](spec-conformance.md), currently 95 tags, 0
+matrix ([spec-conformance.md](spec-conformance.md), currently 96 tags, 0
 `gap` rows): SF, MCR nesting, TAW, real math via float32 host math,
 TRUNC/RND by truncation, TDB not modelled, FP/FN edge memory, symbolic DB
 members, and the SCL string functions' flat zero-padded buffers
@@ -182,7 +183,7 @@ The only remaining oracle failure is `startup_multiple.awl` (nrAccus: we
 default to 4 accumulators, the file expects 2 — accepted; each failure
 message names the line and actual/expected). The status word IS cleared at
 OB entry (`scl_rt_ob_start`, SPEC-tagged), so `startup_OB100`/`startup_OB102`
-pass; the known LogMsg flake is listed under "Remaining failures" above.
+pass.
 
 The floor in `run_conformance.py` (`FLOOR_ORACLE = 0.15`) guards against
 regressions.

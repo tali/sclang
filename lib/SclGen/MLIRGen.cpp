@@ -1712,9 +1712,14 @@ private:
       return genIdbMember(idbType);
     })
     .Case<StructType>([&](auto structType) -> mlir::Value {
+      auto memberTy = structType.getElementType(name);
+      if (!memberTy) {
+        emitError(location) << "unknown element '" << name << "' in struct";
+        return nullptr;
+      }
       auto result = builder.create<GetElementOp>(location, resultType, address,
                                                  name, mlir::TypeAttr());
-      byteViewTypes[result] = structType.getElementType(name);
+      byteViewTypes[result] = memberTy;
       return result;
     })
     .Case<IntegerType>([&](auto charType) -> mlir::Value {

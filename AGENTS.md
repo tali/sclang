@@ -177,15 +177,26 @@ has no `\b` — use python3 for regex edits.
   @+2.., zero-fills to maxlen; STRING[n] size is (n+2) even-aligned;
   ARRAY OF STRING[n] keeps the dim in elemType; STRING[i] = char at +2+(i-1)
   width 8 (stringIndexed flag in resolveDbMember).
-  Known flake (pre-existing at b7b6d1e): the LogMsg SCL project
-  intermittently fails (~4% of runs). Root cause of the garbage
-  `unknown FB '<binary>'` warning found and fixed: fbInstanceOf returned
-  optional<StringRef> pointing into the temporary std::string from
-  unquote() (dangling StringRef) — now returns optional<std::string>.
-  A residual silent mlir::failure() (~4%, no diagnostic, dies around the
-  DataLogNewFile/Delete calls) is still open — next step is an MSan build
-  of SclGen (needs instrumented libc++), not ASan (uninit reads are
-  invisible to it).
+  The former LogMsg flake (~4% of runs, two distinct bugs) is FIXED:
+  (1) intermittent `error: unknown element '...' in struct` —
+  StructTypeStorage::operator== used `||` instead of `&&`, so uniquing
+  could return a struct with matching names OR types but not both;
+  (2) deterministic SIGSEGV in the parallel canonicalizer on
+  `scl.call.fc` inside a `scl.function_block`: CallFcOp's callee lookup
+  used lookupNearestSymbolFrom, which stops at the FB (a symbol table
+  holding the FB's variables) and never sees module-level functions —
+  the null result was only guarded by an assert (compiled out in
+  release). The canonicalizer now looks the callee up in the module and
+  bails out (failure()) when it is missing or has no named args (stub
+  FCs). Related latent gaps fixed in the same area: func visibility is
+  propagated when lowering scl.function(_block) to func.func (a public
+  func declaration is rejected by the verifier), DB globals are always
+  created with a plain identity-layout memref type (the LLVM lowering of
+  memref.global requires identity maps) with memref.get_global +
+  memref.cast producing the strided byte-window address type, and
+  CallFbOp lowering reinterpret_casts the instance DB to the callee's
+  parameter type (stub FBs have a zero-sized buffer). LogMsg now passes
+  100/100 runs in --emit=mlir and 50/50 in mlir-std/llvm/jit.
   lit is 117/117 (check-sclang). OB-temp presets (OB1 header) are written at OB entry
   (scl_rt_ob_start); the JIT driver runs the startup OB (OB 102 on a
   4-accu CPU, else OB 100) before the OB 1 cycles; __FEATURE t [, v] is

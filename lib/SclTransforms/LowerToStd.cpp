@@ -612,9 +612,12 @@ struct FunctionOpLowering : public OpConversionPattern<scl::FunctionOp> {
     if (failed(typeConverter->convertTypes(sclType.getResults(), results)))
       return failure();
 
-    // Create the converted func op.
+    // Create the converted func op, preserving the visibility: external
+    // stubs (empty body) are private, and a public func declaration is
+    // rejected by the verifier.
     auto newFuncType = rewriter.getFunctionType(inputs, results);
     auto newFuncOp = rewriter.create<FuncOp>(loc, name, newFuncType);
+    newFuncOp.setVisibility(op.getVisibility());
 
     rewriter.inlineRegionBefore(op.getBody(), newFuncOp.getBody(),
                                 newFuncOp.getBody().end());
@@ -1066,13 +1069,14 @@ struct DataBlockOpLowering : public OpConversionPattern<scl::DataBlockOp> {
       if (!elemTy)
         return failure();
       // A DB of composite type is the buffer memref itself; a scalar DB is a
-      // 0-d strided memref (the address type).
+      // 0-d memref. NB: the global always keeps a plain identity-layout type
+      // because the LLVM lowering of memref.global requires identity maps;
+      // memref.get_global results that need a strided window type are cast in
+      // GetGlobalOpLowering.
       if (elemTy.isa<MemRefType>())
         memrefTy = elemTy;
       else
-        memrefTy = MemRefType::get(
-            {}, elemTy,
-            StridedLayoutAttr::get(op.getContext(), ShapedType::kDynamic, {}));
+        memrefTy = MemRefType::get({}, elemTy);
     }
     // An initializer makes the LLVM global defined (not external), so the
     // JIT can resolve its symbol. Initial values are stored as a
@@ -1149,8 +1153,23 @@ struct GetGlobalOpLowering : public OpConversionPattern<scl::GetGlobalOp> {
     auto resTy = getTypeConverter()->convertType(op.getResult().getType());
     if (!resTy)
       return failure();
-    rewriter.replaceOpWithNewOp<memref::GetGlobalOp>(op, resTy,
-                                                     op.getNameAttr());
+    // The global itself is stored with a plain identity-layout memref type
+    // (the LLVM lowering of memref.global requires identity maps), so
+    // memref.get_global must use that plain type; cast the result to the
+    // (possibly strided) address type when it differs.
+    Value result;
+    if (auto memrefRes = resTy.dyn_cast<MemRefType>();
+        memrefRes && memrefRes.getLayout()) {
+      auto plainTy = MemRefType::get(memrefRes.getShape(),
+                                     memrefRes.getElementType());
+      Value global = rewriter.create<memref::GetGlobalOp>(op.getLoc(), plainTy,
+                                                          op.getNameAttr());
+      result = rewriter.create<memref::CastOp>(op.getLoc(), resTy, global);
+    } else {
+      result = rewriter.create<memref::GetGlobalOp>(op.getLoc(), resTy,
+                                                    op.getNameAttr());
+    }
+    rewriter.replaceOp(op, result);
     return success();
   }
 };
@@ -1774,6 +1793,7 @@ struct FunctionBlockOpLowering
 
     auto newFuncType = rewriter.getFunctionType(inputs, results);
     auto newFuncOp = rewriter.create<FuncOp>(loc, op.getName(), newFuncType);
+    newFuncOp.setVisibility(op.getVisibility());
     rewriter.inlineRegionBefore(op.getBody(), newFuncOp.getBody(),
                                 newFuncOp.getBody().end());
     if (failed(rewriter.convertRegionTypes(&newFuncOp.getBody(), *typeConverter,
@@ -1965,9 +1985,31 @@ struct CallFbOpLowering : public OpConversionPattern<scl::CallFbOp> {
       rewriter.eraseOp(op);
       return success();
     }
+    Value idb = adaptor.getIdb();
+    // The callee's instance-DB parameter type is derived from the FB layout
+    // (stub FBs have a zero-sized buffer), while the caller may pass a
+    // dynamic byte view (temp cell for an opaque instance). Adapt the
+    // operand to the callee's parameter type; reinterpret_cast performs no
+    // runtime size check, which is what we want for stub calls.
+    ModuleOp module = op->template getParentOfType<ModuleOp>();
+    if (auto callee = module.lookupSymbol<func::FuncOp>(op.getFbAttr())) {
+      if (auto paramTy = callee.getFunctionType().getInput(0)
+                             .dyn_cast<MemRefType>();
+          paramTy && idb.getType() != paramTy) {
+        if (!paramTy.hasStaticShape())
+          return failure();
+        SmallVector<OpFoldResult, 4> sizes, strides;
+        for (int64_t d : paramTy.getShape()) {
+          sizes.push_back(rewriter.getIndexAttr(d));
+          strides.push_back(rewriter.getIndexAttr(1));
+        }
+        idb = rewriter.create<memref::ReinterpretCastOp>(
+            op.getLoc(), paramTy, idb, rewriter.getIndexAttr(0), sizes,
+            strides);
+      }
+    }
     auto call = rewriter.create<func::CallOp>(op.getLoc(), op.getFb(),
-                                              TypeRange{},
-                                              ValueRange{adaptor.getIdb()});
+                                              TypeRange{}, ValueRange{idb});
     rewriter.replaceOp(op, call.getResults());
     return success();
   }
