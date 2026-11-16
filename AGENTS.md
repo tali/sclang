@@ -141,7 +141,7 @@ has no `\b` — use python3 for regex edits.
   line). sclang driver exits 2 when scl_rt_assert_failures() > 0 after the
   cycle loop.
   Current: AWL 116/116 (100%), SCL single 15/15, SCL per-project 16/17,
-  JIT smoke 75/77 (97%), oracle (__ASSERT value-level) 46/53 (87%).
+  JIT smoke 75/77 (97%), oracle (__ASSERT value-level) 50/53 (94%).
   String handling: `VAR := 'lit'` in DB-init/statement stores len @+1, chars
   @+2.., zero-fills to maxlen; STRING[n] size is (n+2) even-aligned;
   ARRAY OF STRING[n] keeps the dim in elemType; STRING[i] = char at +2+(i-1)
@@ -330,6 +330,18 @@ has no `\b` — use python3 for regex edits.
     `awl.indirect` (ar_add) + `awl.ar_set` — ARn += offset in bits.
     LARn/TARn with no operand pop ACCU1 ZERO-extended to i64 (`zextTo64`):
     S7 pointers are unsigned (0x84010000 must not sign-extend).
+  - ANY header type code/count follows awlsim `ANYPointer.makeByAutoType`:
+    `anyTypeCodeOf` (type name -> S7 type code, INT=0x05 distinct from
+    WORD=0x04) and `anyAutoType` (ARRAY with supported elem type ->
+    (elem code, elem count); otherwise makeByTypeWidth(total bits):
+    DWORD %32, WORD %16, BYTE %8, else BOOL). Symbolic P# literals carry
+    the declared type/array info via `lastOperandType`/`lastPtrCount`/
+    `lastPtrElemType`/`lastPtrElemBits` set by `resolveDbMember`.
+  - FB/SFB VAR_IN ANY params (`isDbParam && section != 2`): the whole
+    10-byte ANY header is copied into the instance-DB slot with
+    `emitAnyParamHeader(..., toVl=false)` — NOT just the raw pointer
+    dword (that was the anypointer.awl FB-section bug: header bytes read
+    back as 0x83/0/0x50/...).
   - By-reference CALL params (`isByRefParam`: ANY/STRING/DATE_AND_TIME):
     ANY params stage a 10-byte ANY header (`emitAnyParamHeader`, incl.
     `P#... TYPE n` literals via ptrTypeCode/ptrCount); STRING/DT params

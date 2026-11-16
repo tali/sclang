@@ -69,14 +69,17 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 - AWL compile: **116/116 pass (100%)**
 - SCL single file: **15/15 pass (100%)**
 - SCL per project: **16/17 pass (94%)**
-- JIT smoke (files with OB 1, full pipeline + execution): **74/77 pass (96%)**
+- JIT smoke (files with OB 1, full pipeline + execution): **75/77 pass (97%)**
 - Oracle (`__ASSERT` files with OB 1, value-level, exit code must be 0):
-  **48/53 pass (91%)** — see "Oracle tier" below. Remaining: startup_multiple
-  (nrAccus, permanent), any-to-instance-db:89, anypointer:166, array:264
-  (ARRAY params still value-copied, not pointer-forwarded), pointer:45
-  (TARn LD-operand stores the packed AR, not the raw 32-bit pointer),
-  infinite-recursion (no stack guard), and the pre-existing Formelparser
-  SCL project gap.
+  **50/53 pass (94%)** — see "Oracle tier" below. Remaining: startup_multiple
+  (nrAccus, permanent), array:264 (ARRAY FC params still value-copied, not
+  pointer-forwarded), pointer:45 (TARn LD-operand stores the packed AR,
+  not the raw 32-bit pointer), infinite-recursion (no stack guard), and
+  the pre-existing Formelparser SCL project gap. Fixed since last writing:
+  anypointer.awl (ANY header type code/count per awlsim makeByAutoType —
+  `anyAutoType`/`anyTypeCodeOf`, incl. ARRAY -> (elem code, elem count) —
+  plus FB VAR_IN ANY params now stage the full 10-byte header into the
+  instance DB, not just the raw pointer dword) and any-to-instance-db.awl.
 
 ## Remaining failures = documented gaps
 

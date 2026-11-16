@@ -1701,6 +1701,9 @@ private:
   std::string lastOperandType;
   // width (bits) of the most recent indirect [ARn, P#x.y] operand
   int32_t lastIndirectWidth = 0;
+  int32_t lastPtrCount = 0; // resolved ARRAY element count of a P#DBn.SYM literal
+  std::string lastPtrElemType;  // resolved ARRAY element type of a P# literal
+  int32_t lastPtrElemBits = 0;  // resolved ARRAY element size in bits
   int32_t ptrParamSlot = -1; // >= 0: parseOperand returned a POINTER-param
                               // VL slot direct at this byte (header store)
   // DB number of the DATA_BLOCK currently being parsed (-1 = none): bare
@@ -5191,16 +5194,20 @@ private:
     std::string dw = upperStr(lexer.getIdent());
     lexer.next();
     int32_t byte = 0, bit = 0, width = 16;
-    bool ok = resolveDbMember(sdb, dw, false, byte, bit, width);
+    std::string mtype;
+    bool ok = resolveDbMember(sdb, dw, false, byte, bit, width, &mtype);
     lexer = savedLexer;
     if (!ok)
       return v;
+    if (!mtype.empty())
+      lastOperandType = mtype; // e.g. INT for the ANY type code
     return (v & ~((int64_t)0x1FFF << 3)) | ((byte & 0x1FFF) << 3) |
            (bit & 7);
   }
 
   bool resolveDbMember(int32_t db, const std::string &dw, bool bitCtxt,
-                       int32_t &byte, int32_t &bit, int32_t &width) {
+                       int32_t &byte, int32_t &bit, int32_t &width,
+                       std::string *typeOut = nullptr) {
     byte = 0;
     bit = 0;
     width = bitCtxt ? 1 : 16;
@@ -5214,6 +5221,7 @@ private:
         bit = it0->second.bit;
         width = it0->second.widthBits;
         mi = &it0->second;
+        if (typeOut) *typeOut = mi->type;
       }
     } else {
       // no DATA_BLOCK declaration: auto-assign the symbolic member in
@@ -5290,6 +5298,7 @@ private:
                 width = it2->second.widthBits;
                 mi = &it2->second;
                 lay = next;
+                if (typeOut) *typeOut = mi->type;
                 continue;
               }
             }
@@ -5305,6 +5314,14 @@ private:
       width = mi->widthBits ? mi->widthBits : width;
       if (width == 1)
         bit = mi->bit;
+      if (typeOut && !stringIndexed)
+        *typeOut = mi->type;
+      if (mi->type == "ARRAY") {
+        lastPtrCount = mi->count > 0 ? mi->count : 1;
+        lastPtrElemType = mi->elemType;
+        lastPtrElemBits = mi->elemSize ? mi->elemSize * 8
+                                       : (mi->widthBits ? mi->widthBits : 16);
+      }
     }
     if (width != 1 && width != 8 && width != 16 && width != 32 &&
         width != 64)
@@ -5317,8 +5334,11 @@ private:
   mlir::Value parseDbMemberSymbolic(int32_t db, const std::string &dw,
                                     bool bitCtxt) {
     int32_t byte = 0, bit = 0, width = bitCtxt ? 1 : 16;
-    if (!resolveDbMember(db, dw, bitCtxt, byte, bit, width))
+    std::string mtype;
+    if (!resolveDbMember(db, dw, bitCtxt, byte, bit, width, &mtype))
       return nullptr;
+    if (!mtype.empty())
+      lastOperandType = mtype;
     if (width != 1 && width != 8 && width != 16 && width != 32 && width != 64)
       width = 32; // UDT/STRING whole-access: dword granularity
     return builder.create<awl::DirectOp>(
@@ -5458,6 +5478,46 @@ private:
     return callRhsAddressable();
   }
 
+  // awlsim ANYPointer.makeByAutoType: an ARRAY with a supported element
+  // type uses (elem type code, elem count); anything else falls back to
+  // makeByTypeWidth(totalBits): DWORD if %32, else WORD if %16, else BYTE
+  // if %8, else BOOL.
+  static int32_t anyTypeCodeOf(const std::string &ty) {
+    static const std::pair<const char *, int32_t> tc[] = {
+        {"BOOL", 0x01}, {"BYTE", 0x02}, {"CHAR", 0x03}, {"WORD", 0x04},
+        {"INT", 0x05}, {"DWORD", 0x06}, {"DINT", 0x07}, {"REAL", 0x08},
+        {"DATE", 0x09}, {"TOD", 0x0A}, {"TIME", 0x0B}, {"TIME_OF_DAY", 0x0A},
+        {"S5TIME", 0x0C}, {"S5T", 0x0C}, {"DATE_AND_TIME", 0x0E},
+        {"DT", 0x0E}, {"STRING", 0x13}, {"TIMER", 0x1D}, {"COUNTER", 0x1C},
+        {"BLOCK_FB", 0x17}, {"BLOCK_FC", 0x18}, {"BLOCK_DB", 0x19},
+        {"BLOCK_SDB", 0x1A}, {"POINTER", 0x13}, {"ANY", 0x10}};
+    for (auto &t : tc)
+      if (ty == t.first)
+        return t.second;
+    return 0;
+  }
+  static void anyAutoType(const std::string &ty, bool isArray, int32_t count,
+                          const std::string &elemTy, int32_t elemBits,
+                          int32_t &typeCode, int32_t &repCount) {
+    if (isArray) {
+      int32_t ec = anyTypeCodeOf(elemTy);
+      if (ec && elemTy != "STRUCT") {
+        typeCode = ec;
+        repCount = count > 0 ? count : 1;
+        return;
+      }
+      int32_t bits = count * (elemBits > 0 ? elemBits : 16);
+      if (bits % 32 == 0) { typeCode = 0x06; repCount = bits / 32; }
+      else if (bits % 16 == 0) { typeCode = 0x04; repCount = bits / 16; }
+      else if (bits % 8 == 0) { typeCode = 0x02; repCount = bits / 8; }
+      else { typeCode = 0x01; repCount = bits; }
+      return;
+    }
+    typeCode = anyTypeCodeOf(ty);
+    if (repCount <= 0)
+      repCount = 1;
+  }
+
   // Stage a 10-byte ANY header at (area, db, byte) for the operand at the
   // current lexer position. `#anyvar` copies the variable's own header; any
   // other operand is wrapped in a synthesized ANY header (awlsim converts
@@ -5474,7 +5534,20 @@ private:
       int typeCode = lexer.curPtrTypeCode() >= 0 ? lexer.curPtrTypeCode()
                                                  : 0x06; // DWORD default
       int count = lexer.curPtrCount() > 0 ? lexer.curPtrCount() : 1;
+      lastOperandType = "";
+      lastPtrCount = 0;
+      lastPtrElemType = "";
+      lastPtrElemBits = 0;
       int64_t p = consumePtrLiteral(); // resolves P#DBn.SYM byte offset
+      if (lexer.curPtrCount() <= 0 && lastPtrCount > 0)
+        count = lastPtrCount; // P#DBn.ARRAYVAR: element count from the layout
+      // a symbolic member carries its declared type and (for arrays) the
+      // element type/count for the ANY header (awlsim makeByAutoType:
+      // INT -> 0x05, an ARRAY -> (elem type code, elem count))
+      if (lexer.curPtrTypeCode() < 0 && !lastOperandType.empty())
+        anyAutoType(lastOperandType, lastOperandType == "ARRAY", lastPtrCount,
+                    upperStr(lastPtrElemType), lastPtrElemBits, typeCode,
+                    count);
       auto put = [&](int32_t i, int32_t w, int32_t val) {
         builder.create<awl::StoreOp>(
             loc(), constInt(builder.getI32Type(), val),
@@ -5524,29 +5597,23 @@ private:
       return true; // not an addressable operand: nothing to point at
     int32_t width = dt.getWidth();
     int32_t repCount = 1;
-    int32_t typeCode = width == 1   ? 0x01
-                       : width == 8 ? 0x02
-                       : width == 16 ? 0x04
-                                     : 0x06;
+    // ANY type code from the operand's declared TYPE when known
+    // (awlsim ANYPointer.makeByAutoType: INT=0x05 differs from WORD=0x04);
+    // fall back to the access width otherwise
+    int32_t typeCode = anyTypeCodeOf(lastOperandType);
+    if (!typeCode)
+      typeCode = width == 1   ? 0x01
+                 : width == 8 ? 0x02
+                 : width == 16 ? 0x04
+                               : 0x06;
     if (opMember && opMember->type == "ARRAY") {
-      // ANY of an ARRAY: element type code + element count (awlsim
-      // makeANYPointer by element type/width)
-      repCount = opMember->count > 0 ? opMember->count : 1;
-      std::string et = upperStr(opMember->elemType);
-      int32_t ew = 32;
-      if (et == "BOOL") ew = 1;
-      else if (et == "BYTE" || et == "CHAR") ew = 8;
-      else if (et == "WORD" || et == "INT" || et == "DATE" || et == "S5TIME" ||
-               et == "BLOCK_DB" || et == "BLOCK_FB" || et == "COUNTER" ||
-               et == "TIMER") ew = 16;
-      else if (et == "DWORD" || et == "DINT" || et == "REAL" ||
-               et == "TIME" || et == "TOD") ew = 32;
-      else if (et == "DATE_AND_TIME") ew = 64;
-      typeCode = ew == 1 ? 0x01
-               : ew == 8 ? 0x02
-               : ew == 16 ? 0x04
-               : ew == 64 ? 0x0E
-                          : 0x06;
+      // ANY of an ARRAY: element type code + element count, or the
+      // width-derived fallback (awlsim makeByAutoType / makeByTypeWidth)
+      int32_t eb = opMember->elemSize ? opMember->elemSize * 8
+                                      : (opMember->widthBits ? opMember->widthBits
+                                                             : 16);
+      anyAutoType("ARRAY", true, opMember->count, upperStr(opMember->elemType),
+                  eb, typeCode, repCount);
     }
     // L-stack r-values are forwarded to the callee as VL (0x87, the
     // caller's frame) — awlsim _FC_trans_dbpointerInVL maps L -> VL
@@ -6340,6 +6407,16 @@ private:
           builder.create<awl::StoreOp>(
               loc(), constInt(builder.getI32Type(), (int32_t)ptr),
               mkDirect(area, isDbParam ? paramDb : 0, byte + 2, 0, 32));
+          continue;
+        }
+        if (!isOutput && m->type == "ANY" && isDbParam && m->section != 2) {
+          // FB/SFB VAR_IN ANY param: the whole 10-byte ANY header is copied
+          // into the instance-DB slot (awlsim FB param translation copies
+          // ANY fields verbatim; the header keeps its original area bytes,
+          // so no L->VL translation: toVl=false)
+          bool ok = emitAnyParamHeader(area, paramDb, byte, /*toVl=*/false);
+          if (!ok)
+            return false;
           continue;
         }
         if (!isOutput && byRef && byRefRhs(m->type == "ANY")) {
