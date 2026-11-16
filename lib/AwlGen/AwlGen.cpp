@@ -682,10 +682,6 @@ private:
       int64_t base = 0;
       auto readDigits = [&](int b) -> int64_t {
         int64_t v = 0;
-        while (!cur.empty() && isdigit(cur.front())) {
-          v = v * 10 + (cur.front() - '0');
-          cur = cur.drop_front();
-        }
         if (b == 16) {
           while (!cur.empty() && isxdigit(cur.front())) {
             char h = cur.front();
@@ -697,6 +693,11 @@ private:
           while (!cur.empty() && cur.front() >= '0' &&
                  cur.front() < (char)('0' + b)) {
             v = v * b + (cur.front() - '0');
+            cur = cur.drop_front();
+          }
+        } else {
+          while (!cur.empty() && isdigit(cur.front())) {
+            v = v * 10 + (cur.front() - '0');
             cur = cur.drop_front();
           }
         }
@@ -1672,21 +1673,29 @@ private:
   llvm::StringRef file;
   mlir::ModuleOp module;
 
-  // Accumulator model (per block): ACC stack and RLO.
+  // Accumulator model (per block): ACC stack and the RLO logic state.
+  // awlsim models the status word bits VKE/OR/STA/NER; `rlo` is the VKE.
+  // The other three are parse-time SSA values too (null = default: OR=0,
+  // STA=1, NER=0 — the state after BE / at block start).
   llvm::SmallVector<mlir::Value, 4> acc;
-  mlir::Value rlo;
+  mlir::Value rlo;        // VKE
+  mlir::Value stOr, stSta, stNer; // OR/STA/NER (null = default)
   bool rloActive = false;
-  bool rloFresh = false; // NER == 0 (after CLR / at block start): next U/O is neutral
   // true while the current statement is a logic-chain op (U/O/A/NOT/X/...):
   // awlsim sets NER=0 on all other instructions, so the next statement's
   // first U/O starts a fresh chain (VKE = operand)
   bool stmtLogic = false;
   struct Bracket {
-    mlir::Value savedRlo;
+    mlir::Value savedRlo; // VKE at the bracket open
+    mlir::Value savedNer, savedOr;
     bool isOr;
     bool isXor = false;
+    bool neg = false;     // UN(/ON(/XN( — negated inner group
+    bool isMcr = false;   // MCR( ... )MCR: savedRlo is a pushed mcrStack VKE
   };
   llvm::SmallVector<Bracket, 4> brackets;
+  // compile-time approximation of awlsim's runtime mcrActive flag (MCRA/MCRD)
+  bool mcrActive = false;
   bool sawOB1 = false;
   std::vector<std::string> obBlockNames; // OB block names, for JIT wrappers
   // awl.block "__scl_db_init" collecting DATA_BLOCK initial values, created
@@ -1755,6 +1764,7 @@ private:
   }
 
   bool parseModule() {
+    bool sawAnyBlock = false;
     while (lexer.getCurToken() != Tok::eof) {
       if (lexer.getCurToken() != Tok::ident) {
         lexer.next(); // stray token between blocks (e.g. after a BEA): skip
@@ -1764,11 +1774,13 @@ private:
       if (w == "ORGANIZATION_BLOCK") {
         // long block form: ORGANIZATION_BLOCK OB 1 ... END_ORGANIZATION_BLOCK
         lexer.next();
+        sawAnyBlock = true;
         if (!parseBlockBody(/*longForm=*/true))
           return false;
         continue;
       }
       if (w == "DATA_BLOCK") {
+        sawAnyBlock = true;
         if (!parseDataBlock())
           return false;
         continue;
@@ -1778,6 +1790,7 @@ private:
         // CALL can invoke it (layouts were collected by the pre-scan)
         forcedKind = w == "FUNCTION" ? "FC" : "FB";
         lexer.next();
+        sawAnyBlock = true;
         if (!parseBlockBody(/*longForm=*/false))
           return false;
         forcedKind.clear();
@@ -1795,6 +1808,7 @@ private:
         continue;
       }
       if (w == "OB" || w == "FB" || w == "FC") {
+        sawAnyBlock = true;
         if (!parseBlockBody(/*longForm=*/false))
           return false;
         continue;
@@ -1839,11 +1853,17 @@ private:
       // bare instruction list (no block header): wrap in an implicit OB 1
       // (only if no real OB 1 was parsed — e.g. dead code after a BEA)
       if (!sawOB1) {
+        sawAnyBlock = true;
         if (!parseBlockBody(/*longForm=*/false, /*implicitOB1=*/true))
           return false;
         continue;
       }
       lexer.next(); // stray token after the blocks: skip
+    }
+    if (!sawAnyBlock && !sawOB1) {
+      // empty bare file: wrap in an implicit empty OB 1 (awlsim does the same)
+      if (!parseBlockBody(/*longForm=*/false, /*implicitOB1=*/true))
+        return false;
     }
     return true;
   }
@@ -2460,8 +2480,8 @@ private:
     builder.setInsertionPointToStart(entry);
     acc.clear();
     rlo = nullptr;
+    stOr = stSta = stNer = nullptr; // defaults: OR=0, STA=1, NER=0
     rloActive = false;
-    rloFresh = true; // NER = 0 at block start
     brackets.clear();
 
     // header lines between the block header and BEGIN (TITLE, VERSION, ...)
@@ -2546,8 +2566,8 @@ private:
         // lowering splits at labels).
         acc.clear();
         rlo = nullptr;
+        stOr = stSta = stNer = nullptr;
         rloActive = false;
-        rloFresh = true; // NER = 0 at block/statement-chain start
         brackets.clear();
         continue;
       }
@@ -2569,11 +2589,20 @@ private:
         return false;
       if (!stmtLogic)
         rloActive = false; // non-logic statement ends the logic chain
-      // the STW VKE/RLO bit mirrors the RLO at the end of each statement
-      // (awlsim: VKE tracks the result of logic operations)
-      if (rloActive && rlo)
+      // note: awlsim does NOT reset NER/OR on non-logic instructions (only
+      // BE/CLR/SET/brackets do), so stNer/stOr persist across statements
+      // the STW logic bits mirror the parse-time state at the end of each
+      // logic statement (awlsim: VKE/STA/NER/OR are runtime status bits)
+      if (rloActive && rlo) {
         builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(1),
-                                          rlo);
+                                          rlo);              // VKE
+        builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(0),
+                                          nerD());            // NER
+        builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(2),
+                                          staD());            // STA
+        builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(3),
+                                          orD());             // OR
+      }
       if (blockEnded) {
         // dead code after BEA/BEB up to the END_* keyword: labels still
         // exist (jumps may target them); other instructions are skipped
@@ -2643,26 +2672,52 @@ private:
                     : t == Tok::times ? ArithKind::Mul
                                       : ArithKind::Div;
       lexer.next();
-      // `+ <immediate>` (awlsim convenience): add/sub/... constant to ACCU1
+      // `+ <immediate>` (awlsim insn_pl, TYPE_PL): plain int literal -> word
+      // add with setWord, L#.. literal -> dword add with setDWord, real ->
+      // real op. Unlike +I/+D, the STW is NOT updated.
       if (lexer.getCurToken() == Tok::integer ||
           lexer.getCurToken() == Tok::real || lexer.getCurToken() == Tok::minus) {
-        mlir::Type ty = lexer.getCurToken() == Tok::real
-                            ? (mlir::Type)builder.getF32Type()
-                            : (mlir::Type)builder.getI32Type();
+        Lexer ahead = lexer;
+        if (ahead.getCurToken() == Tok::minus)
+          ahead.next();
+        bool isReal = lexer.getCurToken() == Tok::real;
+        bool isD = !isReal && ahead.getLitWidth() == 32;
         mlir::Value b = parseConst();
         if (!b)
           return false;
-        if (acc.empty())
-          acc.push_back(constInt(builder.getI32Type(), 0));
+        padAcc();
         mlir::Value a = popAcc();
-        a = castTo(a, ty);
-        b = castTo(b, ty);
+        if (!a)
+          return false;
+        auto i16 = builder.getI16Type();
+        auto i32 = builder.getI32Type();
         mlir::Value r;
-        switch (k) {
-        case ArithKind::Add: r = builder.create<awl::AddOp>(loc(), ty, a, b); break;
-        case ArithKind::Sub: r = builder.create<awl::SubOp>(loc(), ty, a, b); break;
-        case ArithKind::Mul: r = builder.create<awl::MulOp>(loc(), ty, a, b); break;
-        case ArithKind::Div: r = builder.create<awl::DivOp>(loc(), ty, a, b); break;
+        if (isReal) {
+          auto f32 = builder.getF32Type();
+          mlir::Value as = castTo(a, f32), bs = castTo(b, f32);
+          switch (k) {
+          case ArithKind::Add: r = builder.create<awl::AddOp>(loc(), f32, as, bs); break;
+          case ArithKind::Sub: r = builder.create<awl::SubOp>(loc(), f32, as, bs); break;
+          case ArithKind::Mul: r = builder.create<awl::MulOp>(loc(), f32, as, bs); break;
+          case ArithKind::Div: r = builder.create<awl::DivOp>(loc(), f32, as, bs); break;
+          }
+        } else {
+          mlir::Value as = isD ? castTo(a, i32) : castTo(castTo(a, i16), i32);
+          mlir::Value bs = isD ? castTo(b, i32) : castTo(castTo(b, i16), i32);
+          mlir::Value r32;
+          switch (k) {
+          case ArithKind::Add: r32 = builder.create<awl::AddOp>(loc(), i32, as, bs); break;
+          case ArithKind::Sub: r32 = builder.create<awl::SubOp>(loc(), i32, as, bs); break;
+          case ArithKind::Mul: r32 = builder.create<awl::MulOp>(loc(), i32, as, bs); break;
+          case ArithKind::Div: r32 = builder.create<awl::DivOp>(loc(), i32, as, bs); break;
+          }
+          r = isD ? r32
+                  : builder.create<awl::OrOp>(
+                        loc(), i32,
+                        builder.create<awl::AndOp>(loc(), i32, a,
+                            constInt(i32, (int64_t)(int32_t)0xFFFF0000)).getResult(),
+                        builder.create<awl::AndOp>(loc(), i32, r32,
+                            constInt(i32, 0xFFFF)).getResult()).getResult();
         }
         acc.push_back(r);
         rloActive = false;
@@ -2761,7 +2816,7 @@ private:
       // UN L 0.0); only if no address follows and the ident is an
       // instruction keyword is the logic op bare (O / L STW).
       if (lexer.getCurToken() == Tok::semi || lexer.getCurToken() == Tok::rparen)
-        return ensureRlo(); // bare `O ;`
+        return bareLogicEnd(m); // bare `O ;`
       if (lexer.getCurToken() == Tok::eq || lexer.getCurToken() == Tok::ne ||
           lexer.getCurToken() == Tok::lt || lexer.getCurToken() == Tok::le ||
           lexer.getCurToken() == Tok::gt || lexer.getCurToken() == Tok::ge) {
@@ -2784,7 +2839,7 @@ private:
       }
       if (lexer.getCurToken() == Tok::ident && !lexer.curQuoted() &&
           lexer.curLine() != insnLine)
-        return ensureRlo(); // next line starts a new instruction: bare op
+        return bareLogicEnd(m); // next line starts a new instruction: bare op
       if (lexer.getCurToken() == Tok::ident && !lexer.curQuoted()) {
         std::string w = upperStr(lexer.getIdent()); // not consumed yet
         Tok nxt = lexer.peekToken();
@@ -2796,7 +2851,7 @@ private:
              w == "CLR" || w == "BE" || w == "NOP" || w == "CALL" ||
              w == "SPA" || w == "SPB" || w == "SPN")) {
           lexer.next(); // consume the keyword: bare logic op
-          return ensureRlo();
+          return bareLogicEnd(m);
         }
       }
       return parseRloLogic(m == "AN" ? "UN" : m);
@@ -2805,28 +2860,31 @@ private:
     if (m == "NOT") {
       stmtLogic = true;
       // NOT inverts the *current* RLO, even across non-logic statements
-      // (awlsim insn_not: VKE ^= 1, independent of NER)
-      if (!rlo)
-        rlo = builder.create<awl::ConstOp>(
-            loc(), builder.getI1Type(), builder.getIntegerAttr(builder.getI1Type(), 0));
-      rlo = builder.create<awl::NotOp>(loc(), builder.getI1Type(), rlo);
+      // (awlsim insn_not: STA=1, VKE ^= 1, NER unchanged)
+      if (!ensureRlo())
+        return false;
+      rlo = builder.create<awl::NotOp>(loc(), builder.getI1Type(), vkeD());
+      stSta = i1Const(true);
       rloActive = true;
       return true;
     }
     // SPEC[AWL] IEC 61131-3 STL SET (RLO := 1)
-    if (m == "SET") { // RLO := 1 (also sets VKE, awlsim insn_set)
+    if (m == "SET") { // awlsim insn_set: OR=0, STA=1, VKE=1, NER=0
       stmtLogic = true;
-      rlo = builder.create<awl::ConstOp>(loc(), builder.getI1Type(),
-                                          builder.getIntegerAttr(builder.getI1Type(), 1));
+      rlo = i1Const(true);
+      stOr = i1Const(false);
+      stSta = i1Const(true);
+      stNer = i1Const(false);
       rloActive = true;
       return true;
     }
     // SPEC[AWL] IEC 61131-3 STL CLR (RLO := 0)
-    if (m == "CLR") {
-      stmtLogic = true; // RLO := 0, NER := 0 (awlsim insn_clr)
-      rlo = builder.create<awl::ConstOp>(loc(), builder.getI1Type(),
-                                          builder.getIntegerAttr(builder.getI1Type(), 0));
-      rloFresh = true; // next U/O starts from the neutral accumulator
+    if (m == "CLR") { // awlsim insn_clr: OR=STA=VKE=NER=0
+      stmtLogic = true;
+      rlo = i1Const(false);
+      stOr = i1Const(false);
+      stSta = i1Const(false);
+      stNer = i1Const(false);
       rloActive = true;
       return true;
     }
@@ -3036,13 +3094,22 @@ private:
     }
     if (lexer.getCurToken() == Tok::lparen &&
         (m == "A" || m == "O" || m == "U" || m == "UN" || m == "ON")) {
+      // awlsim insn_ub/ob/...: push (VKE, NER, OR); set OR=0, STA=1, NER=0
+      // (VKE itself is unchanged — the inner chain starts neutral via NER=0)
       stmtLogic = true;
       lexer.next();
       if (!ensureRlo())
         return false;
-      brackets.push_back({rlo, m == "O" || m == "ON", false});
-      rlo = builder.create<awl::ConstOp>(loc(), builder.getI1Type(),
-                                          builder.getIntegerAttr(builder.getI1Type(), 1));
+      Bracket b;
+      b.savedRlo = vkeD();
+      b.savedNer = nerD();
+      b.savedOr = orD();
+      b.isOr = (m == "O" || m == "ON");
+      b.neg = (m == "UN" || m == "ON");
+      brackets.push_back(b);
+      stOr = i1Const(false);
+      stSta = i1Const(true);
+      stNer = i1Const(false);
       rloActive = true;
       return true;
     }
@@ -3064,7 +3131,7 @@ private:
       return parseCounterZW(m == "ZV" || m == "CU");
     // SPEC[AWL] IEC 61131-3 STL unconditional/conditional jumps (SPA/SPB/SPN/SPBN/JU/JB/JNB/JBI/JC/LOOP), Siemens AWL manual "Jumps"
     if (m == "SPA" || m == "SPB" || m == "SPN" || m == "SPBN" || m == "JU")
-      return parseJump(m == "SPBN" || m == "JU" ? (m == "JU" ? "SPA" : "SPN") : m);
+      return parseJump(m == "JU" ? "SPA" : m);
     // SPEC[AWL] Siemens AWL manual "SAVE" (RLO -> BR status bit)
     if (m == "SAVE") { // SAVE: RLO -> BR (STW bit 8)
       if (!ensureRlo())
@@ -3075,27 +3142,67 @@ private:
       rloActive = false;
       return true;
     }
-    // SPEC[AWL] Siemens AWL S5-compat SF (timer/counter enable) (approx)
-    if (m == "SF") { // S5-era: consume a timer/counter operand, not modelled
-      lexer.next();
-      if (lexer.getCurToken() == Tok::integer)
-        lexer.next();
-      if (lexer.getCurToken() == Tok::semi)
-        lexer.next();
-      return true;
-    }
+    // SPEC[AWL] Siemens AWL manual S5-compat SF (english alias of SA, off-delay timer start — awlsim english2german "SF" -> "SA")
+    if (m == "SF")
+      return parseTimerStart("SA");
     // SPEC[AWL] IEC 61131-3 STL TAK (exchange accumulators), Siemens AWL manual "Accumulator instructions"
     if (m == "TAK") { // exchange ACCU1/ACCU2
       padAcc();
       std::swap(acc[acc.size() - 1], acc[acc.size() - 2]);
       return true;
     }
-    // SPEC[AWL] IEC 61131-3 STL NEGI/NEGD (two's-complement ACCU1)
-    if (m == "NEGI" || m == "NEGD") { // negate ACCU1
+    // SPEC[AWL] IEC 61131-3 STL NEGI/NEGD (two's-complement ACCU1); awlsim
+    // insn_negi/insn_negd: negate the signed word/dword and store with
+    // setWord/setDWord; STW A0/A1 from the truncated result, OV=0 (NEGD:
+    // OV=OS=1 only for the 0x80000000 overflow)
+    if (m == "NEGI" || m == "NEGD") {
+      padAcc();
       mlir::Value a = popAcc();
       if (!a)
         return false;
-      acc.push_back(builder.create<awl::NegOp>(loc(), a.getType(), a));
+      auto i16 = builder.getI16Type();
+      auto i32 = builder.getI32Type();
+      auto i1 = builder.getI1Type();
+      mlir::Value r, trunc;
+      mlir::Value ovf; // awlsim: OV=OS=1 when the untruncated value leaves the range
+      if (m == "NEGI") {
+        mlir::Value sw = castTo(castTo(a, i16), i32); // sign-extended word
+        mlir::Value val = builder.create<awl::NegOp>(loc(), i32, sw).getResult();
+        trunc = builder.create<awl::AndOp>(loc(), i32, val,
+                                           constInt(i32, 0xFFFF)).getResult();
+        r = builder.create<awl::OrOp>(
+            loc(), i32,
+            builder.create<awl::AndOp>(loc(), i32, a,
+                                       constInt(i32, (int64_t)(int32_t)0xFFFF0000)).getResult(),
+            trunc).getResult();
+        ovf = builder.create<awl::OrOp>(
+            loc(), i1,
+            builder.create<awl::CmpGtOp>(loc(), i1, val, constInt(i32, 0x7FFF)).getResult(),
+            builder.create<awl::CmpLtOp>(loc(), i1, val, constInt(i32, -32768))).getResult();
+      } else {
+        mlir::Value val = builder.create<awl::NegOp>(loc(), i32, castTo(a, i32)).getResult();
+        r = val;
+        trunc = val;
+        ovf = builder.create<awl::CmpEqOp>(
+            loc(), i1, castTo(a, i32), constInt(i32, (int64_t)(int32_t)0x80000000));
+      }
+      builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(5), ovf); // OV
+      mlir::Value os = builder.create<awl::StwBitOp>(loc(), i1, builder.getI32IntegerAttr(4));
+      builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(4),
+                                       builder.create<awl::OrOp>(loc(), i1, os, ovf).getResult()); // OS latches
+      acc.push_back(r);
+      mlir::Value nz = builder.create<awl::CmpNeOp>(loc(), i1, trunc, constInt(i32, 0));
+      mlir::Value sign = builder.create<awl::CmpNeOp>(
+          loc(), i1,
+          builder.create<awl::AndOp>(loc(), i32, trunc,
+              constInt(i32, m == "NEGI" ? 0x8000 : (int64_t)(int32_t)0x80000000)).getResult(),
+          constInt(i32, 0));
+      builder.create<awl::StwSetBitOp>(
+          loc(), builder.getI32IntegerAttr(7), // A1
+          builder.create<awl::AndOp>(
+              loc(), i1, nz,
+              builder.create<awl::NotOp>(loc(), i1, sign).getResult()).getResult());
+      builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(6), sign); // A0
       return true;
     }
     // SPEC[AWL] Siemens AWL manual "Shift and rotate" (SLW/SRW/SSI/SSD/SLD/SRD/RLD/RRD/RLDA/RRDA), awl.shift
@@ -3196,10 +3303,14 @@ private:
       return true;
     }
     // SPEC[AWL] awlsim test directive __STWRST (reset status word)
-    if (m == "__STWRST") { // awlsim test directive: reset status word, RLO=0
+    if (m == "__STWRST") { // awlsim statusword.reset(): ALL bits 0,
+      // including NER/STA/OR (also in the parse-time RLO state)
       builder.create<awl::StwResetOp>(loc());
       auto i1 = builder.getI1Type();
       rlo = builder.create<awl::ConstOp>(loc(), i1, builder.getIntegerAttr(i1, 0));
+      stOr = nullptr;
+      stSta = nullptr;
+      stNer = nullptr;
       rloActive = true;
       return true;
     }
@@ -3252,28 +3363,66 @@ private:
       }
       return parseLoad(); // LC Z n: load counter value into ACCU1
     }
-    // SPEC[AWL] Siemens AWL manual FP/FN edge memory (approx: approximated by U/UN — no edge memory)
-    if (m == "FP" || m == "FN") // edge memory not modelled: approximated
-      return parseRloLogic(m == "FP" ? "U" : "UN"); // by U/UN
-    // SPEC[AWL] Siemens AWL manual MCR (master control relay) (approx: bracket only)
-    if (m == "SAVE" || m == "MCRA" || m == "MCRD")
-      return true; // BR / master-control-relay bits are not modelled
+    // SPEC[AWL] Siemens AWL manual FP/FN edge memory — the operand bit itself is the edge flag (awlsim insn_FP/FN): store flag := RLO, then new RLO = RLO & !oldFlag (FP) / !RLO & oldFlag (FN)
+    if (m == "FP" || m == "FN") {
+      stmtLogic = true;
+      if (!ensureRlo())
+        return false;
+      mlir::Value addr = parseBitOperand();
+      if (!addr)
+        return false;
+      auto i1 = builder.getI1Type();
+      mlir::Value old = addr.getType().isInteger(64)
+          ? (mlir::Value)builder.create<awl::LoadBitIndirectOp>(loc(), i1, addr)
+          : (mlir::Value)builder.create<awl::LoadOp>(loc(), addr);
+      if (addr.getType().isInteger(64))
+        builder.create<awl::WriteBitIndirectOp>(loc(), rlo, addr);
+      else
+        builder.create<awl::AssignOp>(loc(), rlo, addr);
+      rlo = m == "FP"
+          ? (mlir::Value)builder.create<awl::AndOp>(
+                loc(), i1, rlo,
+                builder.create<awl::NotOp>(loc(), i1, old).getResult())
+          : (mlir::Value)builder.create<awl::AndOp>(
+                loc(), i1,
+                builder.create<awl::NotOp>(loc(), i1, rlo).getResult(), old);
+      rloActive = true;
+      return true;
+    }
+    // SPEC[AWL] Siemens AWL manual MCR (master control relay) — MCRA/MCRD set the (compile-time tracked) mcrActive flag; SAVE (RLO -> BR) stays a no-op
+    if (m == "MCRA") {
+      mcrActive = true;
+      return true;
+    }
+    if (m == "MCRD") {
+      mcrActive = false;
+      return true;
+    }
+    if (m == "SAVE")
+      return true; // BR bit is not modelled
     // SPEC[AWL] Siemens AWL manual BLD <n> (display code — no-op)
     if (m == "BLD") { // BLD <n>: display code, no-op
       if (lexer.getCurToken() == Tok::integer)
         lexer.next();
       return true;
     }
-    // SPEC[AWL] Siemens AWL manual MCR( / MCR ) nesting (approx)
-    if (m == "MCR") { // MCR( ... MCR): master control relay — bracket only
+    // SPEC[AWL] Siemens AWL manual MCR( / MCR ) nesting — the pushed VKE (savedRlo of the isMcr bracket) gates stores via mcrOn()/gatedRlo()
+    if (m == "MCR") { // MCR( ... MCR): master control relay — bracket, store gate
       if (lexer.getCurToken() == Tok::lparen) {
+        // awlsim insn_mcrb: push VKE onto the mcrStack; OR=0, STA=1, NER=0
         lexer.next();
         if (!ensureRlo())
           return false;
-        brackets.push_back({rlo, false});
-        rlo = builder.create<awl::ConstOp>(
-            loc(), builder.getI1Type(),
-            builder.getIntegerAttr(builder.getI1Type(), 1));
+        Bracket b;
+        b.savedRlo = vkeD(); // pushed mcrStack VKE (gates stores via mcrOn)
+        b.savedNer = nerD();
+        b.savedOr = orD();
+        b.isOr = false;
+        b.isMcr = true;
+        brackets.push_back(b);
+        stOr = i1Const(false);
+        stSta = i1Const(true);
+        stNer = i1Const(false);
         rloActive = true;
         return true;
       }
@@ -3285,7 +3434,7 @@ private:
     }
     // SPEC[AWL] IEC 61131-3 STL SPBB/SPB-branch save (save RLO into BR)
     if (m == "SPBB")
-      return parseJump("SPB");
+      return parseJump(m);
     // SPEC[AWL] Siemens AWL manual ENT/PUSH (push accumulators), POP/LEAVE below
     if (m == "ENT" || m == "PUSH") { // push a copy of ACCU1
       acc.push_back(acc.empty() ? constInt(builder.getI32Type(), 0) : acc.back());
@@ -3301,101 +3450,150 @@ private:
       return true;
     }
     // SPEC[AWL] Siemens AWL manual INC/DEC (ACCU1 +/- n)
-    if (m == "INC" || m == "DEC") { // ACCU1 +/-= n (default 1)
+    // SPEC[AWL] Siemens AWL manual INC/DEC n — byte op on ACCU1 (awlsim setByte)
+    if (m == "INC" || m == "DEC") {
       int64_t n = 1;
       if (lexer.getCurToken() == Tok::integer) {
         n = lexer.getInteger();
         lexer.next();
       }
-      mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
-      auto c = constInt(a.getType(), m == "INC" ? n : -n);
-      acc.push_back(builder.create<awl::AddOp>(loc(), a.getType(), a, c));
+      auto i32 = builder.getI32Type();
+      mlir::Value a = acc.empty() ? constInt(i32, 0) : castTo(popAcc(), i32);
+      mlir::Value sum = builder.create<awl::AddOp>(
+          loc(), i32, a, constInt(i32, m == "INC" ? n : -n)).getResult();
+      // setByte: low byte of the sum, rest of ACCU1 preserved
+      acc.push_back(builder.create<awl::OrOp>(
+          loc(), i32,
+          builder.create<awl::AndOp>(loc(), i32, a,
+                                     constInt(i32, (int64_t)(int32_t)0xFFFFFF00)).getResult(),
+          builder.create<awl::AndOp>(loc(), i32, sum,
+                                     constInt(i32, 0xFF)).getResult()).getResult());
       rloActive = false;
       return true;
     }
-    // SPEC[AWL] Siemens AWL manual "Value conversions" ITD/DTI
-    if (m == "ITD" || m == "DTI") { // int <-> dword (sign/zero extend)
+    // SPEC[AWL] Siemens AWL manual "Value conversions" ITD/DTI — ITD sign-extends the low word of ACCU1 to a dword (awlsim setDWord(getSignedWord))
+    if (m == "ITD" || m == "DTI") {
       mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
-      acc.push_back(castTo(a, m == "ITD" ? builder.getI32Type()
-                                         : builder.getI16Type()));
+      if (m == "ITD")
+        acc.push_back(castTo(castTo(a, builder.getI16Type()), builder.getI32Type()));
+      else
+        acc.push_back(castTo(a, builder.getI16Type()));
       rloActive = false;
       return true;
     }
-    // SPEC[AWL] Siemens AWL manual INVI/INVD (one's complement)
-    if (m == "INVI" || m == "INVD") { // one's complement
-      mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
-      auto ty = m == "INVI" ? builder.getI16Type() : builder.getI32Type();
-      a = castTo(a, ty);
-      acc.push_back(
-          builder.create<awl::XOrOp>(loc(), ty, a, constInt(ty, -1)));
+    // SPEC[AWL] Siemens AWL manual INVI/INVD (one's complement) — INVI inverts the low word keeping the high word (awlsim setWord), INVD inverts the full dword
+    if (m == "INVI" || m == "INVD") {
+      auto i32 = builder.getI32Type();
+      mlir::Value a = acc.empty() ? constInt(i32, 0) : castTo(popAcc(), i32);
+      if (m == "INVD") {
+        acc.push_back(builder.create<awl::XOrOp>(loc(), i32, a, constInt(i32, -1)));
+      } else {
+        acc.push_back(builder.create<awl::OrOp>(
+            loc(), i32,
+            builder.create<awl::AndOp>(loc(), i32, a,
+                                       constInt(i32, (int64_t)(int32_t)0xFFFF0000)).getResult(),
+            builder.create<awl::XOrOp>(
+                loc(), i32,
+                builder.create<awl::AndOp>(loc(), i32, a, constInt(i32, 0xFFFF)).getResult(),
+                constInt(i32, 0xFFFF)).getResult()).getResult());
+      }
       rloActive = false;
       return true;
     }
     // SPEC[AWL] Siemens AWL manual MOD (remainder)
-    if (m == "MOD") { // ACCU1 %% ACCU2: a - (a / b) * b
+    if (m == "MOD") { // awlsim insn_mod: ACCU1 = dword remainder (sign of
+      // the dividend); division by zero leaves ACCU1 unchanged and sets
+      // A0=A1=OV=OS=1
       padAcc();
       mlir::Value b = popAcc();
       mlir::Value a = popAcc();
-      auto ty = (a.getType() == builder.getI16Type() &&
-                 b.getType() == builder.getI16Type())
-                    ? builder.getI16Type()
-                    : builder.getI32Type();
-      a = castTo(a, ty);
-      b = castTo(b, ty);
-      mlir::Value q = builder.create<awl::DivOp>(loc(), ty, a, b);
-      acc.push_back(builder.create<awl::SubOp>(
-          loc(), ty, a, builder.create<awl::MulOp>(loc(), ty, q, b)));
+      if (!a || !b)
+        return false;
+      auto i32 = builder.getI32Type();
+      auto i64 = builder.getI64Type();
+      auto i1 = builder.getI1Type();
+      mlir::Value as = castTo(a, i32), bs = castTo(b, i32);
+      mlir::Value as64 = castTo(as, i64), bs64 = castTo(bs, i64);
+      mlir::Value quo = builder.create<awl::DivOp>(loc(), i64, as64, bs64);
+      mlir::Value rem = builder.create<awl::SubOp>(
+          loc(), i64, as64,
+          builder.create<awl::MulOp>(loc(), i64, quo, bs64).getResult()).getResult();
+      mlir::Value isZero = builder.create<awl::CmpEqOp>(loc(), i1, bs, constInt(i32, 0));
+      acc.push_back(mux(isZero, castTo(b, i32), castTo(rem, i32)));
+      auto div = builder.create<awl::StwDivOp>(loc(), bs, rem);
+      div.setRangeAttr(builder.getI32IntegerAttr(0x7FFFFFFF));
       rloActive = false;
       return true;
     }
     // SPEC[AWL] Siemens AWL manual TAD (dword accumulator exchange)
-    if (m == "TAD") // exchange ACCU1/ACCU2 (dword view) — same as TAK
-      return parseIdentInstruction("TAK", blockName);
+    // SPEC[AWL] Siemens AWL manual TAD (swapEndianDWord(ACCU1): reverse all four bytes — awlsim insn_TAD)
+    if (m == "TAD") {
+      padAcc();
+      auto i32 = builder.getI32Type();
+      mlir::Value v = castTo(popAcc(), i32);
+      auto shl = [&](mlir::Value x, int64_t n) {
+        return builder.create<awl::ShiftOp>(loc(), i32,
+            builder.getStringAttr("sld"), x, constInt(i32, n)).getResult();
+      };
+      auto shr = [&](mlir::Value x, int64_t n) {
+        return builder.create<awl::ShiftOp>(loc(), i32,
+            builder.getStringAttr("srd"), x, constInt(i32, n)).getResult();
+      };
+      auto band = [&](mlir::Value x, int64_t mask) {
+        return builder.create<awl::AndOp>(loc(), i32, x, constInt(i32, mask)).getResult();
+      };
+      mlir::Value b0 = band(v, 0xFF), b1 = band(shr(v, 8), 0xFF),
+                  b2 = band(shr(v, 16), 0xFF), b3 = band(shr(v, 24), 0xFF);
+      acc.push_back(builder.create<awl::OrOp>(
+          loc(), i32,
+          builder.create<awl::OrOp>(loc(), i32, shl(b0, 24), shl(b1, 16)).getResult(),
+          builder.create<awl::OrOp>(loc(), i32, shl(b2, 8), b3).getResult()).getResult());
+      return true;
+    }
     if ((m == "X" || m == "XN") && lexer.getCurToken() == Tok::lparen) {
       lexer.next();
       if (!ensureRlo())
         return false;
-      brackets.push_back({rlo, false, true});
-      rlo = builder.create<awl::ConstOp>(loc(), builder.getI1Type(),
-                                          builder.getIntegerAttr(builder.getI1Type(), 1));
+      Bracket b;
+      b.savedRlo = vkeD();
+      b.savedNer = nerD();
+      b.savedOr = orD();
+      b.isOr = false;
+      b.isXor = true;
+      b.neg = (m == "XN");
+      brackets.push_back(b);
+      stOr = i1Const(false);
+      stSta = i1Const(true);
+      stNer = i1Const(false);
       rloActive = true;
       return true;
     }
     // SPEC[AWL] IEC 61131-3 STL X/XN (XOR RLO with bit)
-    if (m == "X" || m == "XN") { // X/XN bit: rlo = rlo XOR bit (XN: negated)
+    if (m == "X" || m == "XN") { // X/XN bit: awlsim insn_X: VKE = (VKE & NER) ^ x (XN: ^ !x)
       stmtLogic = true;
+      if (!ensureRlo())
+        return false;
+      auto i1 = builder.getI1Type();
       if (lexer.getCurToken() == Tok::ident) {
         std::string w = upperIdent();
         if (w == "TRUE" || w == "FALSE") {
           lexer.next();
-          if (!ensureRlo())
-            return false;
-          auto i1 = builder.getI1Type();
-          mlir::Value c = builder.create<awl::ConstOp>(
-              loc(), i1, builder.getIntegerAttr(i1, w == "TRUE" ? 1 : 0));
-          rlo = builder.create<awl::XOrOp>(loc(), i1, rlo, c);
-          if (m == "XN")
-            rlo = builder.create<awl::NotOp>(loc(), i1, rlo);
+          rloCombine(false, true, i1Const(w == "TRUE"), m == "XN");
           return true;
         }
       }
       mlir::Value addr = parseBitOperand();
       if (!addr)
         return false;
-      if (!rlo) // no RLO yet: start from 0
-        rlo = builder.create<awl::ConstOp>(
-            loc(), builder.getI1Type(), builder.getIntegerAttr(builder.getI1Type(), 0));
-      rloActive = true;
-      auto i1 = builder.getI1Type();
       mlir::Value b;
       if (addr.getType().isInteger(64))
         // X [AR1, P#x.y] / X #timer_var: indirect bit through the packed ptr
         b = builder.create<awl::LoadBitIndirectOp>(loc(), i1, addr);
+      else if (addr.getType().isInteger(1))
+        b = addr;
       else
         b = builder.create<awl::LoadOp>(loc(), addr);
-      rlo = builder.create<awl::XOrOp>(loc(), i1, rlo, castTo(b, i1));
-      if (m == "XN")
-        rlo = builder.create<awl::NotOp>(loc(), i1, rlo);
+      rloCombine(false, true, castTo(b, i1), m == "XN");
       return true;
     }
     // SPEC[AWL] Siemens AWL manual SPL (jump to label via ACCU1)
@@ -3435,17 +3633,19 @@ private:
     // SPEC[AWL] IEC 61131-3 STL conditional jumps JNB/JBI/SPBNB/SPBI/SPBIN (with BR save)
     if (m == "SPBNB" || m == "SPBI" || m == "SPBIN" || m == "JNB" ||
         m == "JNBI" || m == "SPO" || m == "SOS" || m == "SPU" || m == "JCN")
-      return parseJump("SPN");
+      return parseJump(m);
     // SPEC[AWL] IEC 61131-3 STL conditional jumps JB/JBI/JC (RLO/BR conditions)
     if (m == "JB" || m == "JBI" || m == "JC")
-      return parseJump("SPB");
+      return parseJump(m);
     // SPEC[AWL] IEC 61131-3 STL LOOP (decrement ACCU1, jump if != 0)
-    if (m == "LOOP") { // jump if ACCU1 != 0
+    if (m == "LOOP") { // jump if ACCU1 != 0 (awlsim insn_loop also decrements
+      // ACCU1's word first; that needs runtime accumulator registers, which
+      // the frontend does not model across labels yet — approx: no decrement)
       if (lexer.getCurToken() != Tok::ident)
         return error("expected label after LOOP");
       std::string label = upperIdent();
       lexer.next();
-        mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
+      mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
       auto ty = a.getType();
       auto c = builder.create<awl::CmpNeOp>(loc(), builder.getI1Type(),
                                             castTo(a, ty), constInt(ty, 0));
@@ -3475,29 +3675,102 @@ private:
       rloActive = false;
       return true;
     }
-    // SPEC[AWL] Siemens AWL manual "Value conversions" BTI/BTD (BCD -> binary)
-    if (m == "BTI" || m == "BTD") { // BCD -> binary
-      mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
-      auto ty = m == "BTI" ? builder.getI16Type() : builder.getI32Type();
-      acc.push_back(bcdToInt(castTo(a, ty), ty, m == "BTI" ? 4 : 8));
+    // SPEC[AWL] Siemens AWL manual "Value conversions" BTI/BTD (BCD -> binary);
+    // awlsim insn_bti/insn_btd: 3/7 BCD digits in the low nibbles plus a sign
+    // nibble (bit15/bit31); BTI stores with setWord, BTD with setDWord
+    if (m == "BTI" || m == "BTD") {
+      padAcc();
+      mlir::Value a = popAcc();
+      if (!a)
+        return false;
+      auto i32 = builder.getI32Type();
+      bool word = m == "BTI";
+      mlir::Value digits = bcdToInt(
+          builder.create<awl::AndOp>(loc(), i32, a,
+              constInt(i32, word ? 0xFFF : 0x0FFFFFFF)).getResult(),
+          i32, word ? 3 : 7);
+      mlir::Value s = builder.create<awl::AndOp>(loc(), i32,
+          builder.create<awl::ShiftOp>(loc(), i32, builder.getStringAttr("srd"),
+                                       a, constInt(i32, word ? 15 : 31)).getResult(),
+          constInt(i32, 1)).getResult();
+      mlir::Value negmask = builder.create<awl::SubOp>(loc(), i32, constInt(i32, 0), s).getResult();
+      mlir::Value bin = builder.create<awl::SubOp>(
+          loc(), i32,
+          builder.create<awl::XOrOp>(loc(), i32, digits, negmask).getResult(),
+          negmask).getResult(); // digits or -digits
+      if (word)
+        acc.push_back(builder.create<awl::OrOp>(
+            loc(), i32,
+            builder.create<awl::AndOp>(loc(), i32, a,
+                                       constInt(i32, (int64_t)(int32_t)0xFFFF0000)).getResult(),
+            builder.create<awl::AndOp>(loc(), i32, bin, constInt(i32, 0xFFFF)).getResult()).getResult());
+      else
+        acc.push_back(bin);
       rloActive = false;
       return true;
     }
-    // SPEC[AWL] Siemens AWL manual "Value conversions" ITB/DTB (binary -> BCD)
-    if (m == "ITB" || m == "DTB") { // binary -> BCD
-      mlir::Value a = acc.empty() ? constInt(builder.getI32Type(), 0) : popAcc();
-      auto ty = m == "ITB" ? builder.getI16Type() : builder.getI32Type();
-      acc.push_back(intToBcd(castTo(a, ty), ty, m == "ITB" ? 4 : 8));
+    // SPEC[AWL] Siemens AWL manual "Value conversions" ITB/DTB (binary -> BCD);
+    // awlsim insn_itb/insn_dtb: sign nibble 0xF000/0xF0000000, |v| > 999/9999999
+    // sets OV=OS=1 and leaves ACCU1 unchanged, else OV=0; A0/A1 untouched
+    if (m == "ITB" || m == "DTB") {
+      padAcc();
+      mlir::Value a = popAcc();
+      if (!a)
+        return false;
+      auto i16 = builder.getI16Type();
+      auto i32 = builder.getI32Type();
+      auto i1 = builder.getI1Type();
+      bool word = m == "ITB";
+      mlir::Value sv = word ? castTo(castTo(a, i16), i32) : castTo(a, i32);
+      mlir::Value negmask = builder.create<awl::ShiftOp>(
+          loc(), i32, builder.getStringAttr("ssd"), sv, constInt(i32, 31)).getResult(); // 0 / -1 (arithmetic)
+      mlir::Value absv = builder.create<awl::SubOp>(
+          loc(), i32,
+          builder.create<awl::XOrOp>(loc(), i32, sv, negmask).getResult(),
+          negmask).getResult();
+      mlir::Value over = builder.create<awl::CmpGtOp>(
+          loc(), i1, absv, constInt(i32, word ? 999 : 9999999));
+      mlir::Value bcd = intToBcd(absv, i32, word ? 3 : 7);
+      mlir::Value w = builder.create<awl::OrOp>(
+          loc(), i32, bcd,
+          builder.create<awl::AndOp>(loc(), i32, negmask,
+                                     constInt(i32, word ? 0xF000 : (int64_t)(int32_t)0xF0000000)).getResult()).getResult();
+      mlir::Value r = word
+          ? builder.create<awl::OrOp>(loc(), i32,
+                builder.create<awl::AndOp>(loc(), i32, a,
+                                           constInt(i32, (int64_t)(int32_t)0xFFFF0000)).getResult(),
+                builder.create<awl::AndOp>(loc(), i32, w, constInt(i32, 0xFFFF)).getResult()).getResult()
+          : w;
+      acc.push_back(mux(over, a, r)); // out of range: ACCU1 unchanged
+      // OV = over (else 0), OS = OS | over
+      builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(5), over);
+      mlir::Value os = builder.create<awl::StwBitOp>(loc(), i1, builder.getI32IntegerAttr(4));
+      builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(4),
+                                       builder.create<awl::OrOp>(loc(), i1, os, over).getResult());
       rloActive = false;
       return true;
     }
-    // SPEC[AWL] Siemens AWL manual TAW (ACCU1 -> status word) (approx)
-    if (m == "TAW") { // ACCU1 -> status word (approximated: marker word 0)
-      mlir::Value v = acc.empty() ? constInt(builder.getI32Type(), 0) : acc.back();
-      auto stw = builder.create<awl::DirectOp>(
-          loc(), mlir::scl::DirectArea::Marker, 0, 0, 0, 16);
-      builder.create<awl::StoreOp>(loc(), castTo(v, builder.getI16Type()), stw);
-      rloActive = false;
+    // SPEC[AWL] Siemens AWL manual TAW (swap the two bytes of ACCU1's low word — awlsim insn_TAW: accu1 = (accu1 & 0xFFFF0000) | swapEndianWord(accu1 & 0xFFFF))
+    if (m == "TAW") {
+      padAcc();
+      mlir::Value v = popAcc();
+      auto i32 = builder.getI32Type();
+      v = castTo(v, i32);
+      mlir::Value lo = builder.create<awl::AndOp>(
+          loc(), i32, v, constInt(i32, 0xFFFF)).getResult();
+      mlir::Value hi = builder.create<awl::AndOp>(
+          loc(), i32, v, constInt(i32, (int64_t)(int32_t)0xFFFF0000)).getResult();
+      // swapEndianWord(lo) = ((lo << 8) | (lo >> 8)) & 0xFFFF, via shift ops
+      mlir::Value swapped = builder.create<awl::AndOp>(
+          loc(), i32,
+          builder.create<awl::OrOp>(
+              loc(), i32,
+              builder.create<awl::ShiftOp>(loc(), i32, builder.getStringAttr("sld"),
+                                           lo, constInt(i32, 8)).getResult(),
+              builder.create<awl::ShiftOp>(loc(), i32, builder.getStringAttr("srd"),
+                                           lo, constInt(i32, 8)).getResult()).getResult(),
+          constInt(i32, 0xFFFF)).getResult();
+      acc.push_back(builder.create<awl::OrOp>(loc(), i32, hi, swapped).getResult());
       return true;
     }
     // SPEC[AWL] awlsim test directive __ASSERT<cmp> (value oracles, runtime scl_rt_assert_cmp[_r])
@@ -3565,6 +3838,30 @@ private:
     return builder.create<awl::ConstOp>(loc(), ty, builder.getIntegerAttr(ty, v));
   }
 
+  // mux(cond, a, b) = cond ? a : b on integer types (arithmetic select; both
+  // sides are always evaluated — callers must ensure that is safe)
+  mlir::Value mux(mlir::Value cond, mlir::Value a, mlir::Value b) {
+    auto ty = a.getType();
+    auto cop = builder.create<awl::CastOp>(loc(), ty, cond);
+    cop.setZextAttr(builder.getUnitAttr());
+    mlir::Value c = cop.getResult();
+    mlir::Value nc = builder.create<awl::SubOp>(
+        loc(), ty, constInt(ty, 1), c).getResult();
+    return builder.create<awl::AddOp>(
+        loc(), ty,
+        builder.create<awl::MulOp>(loc(), ty, a, c).getResult(),
+        builder.create<awl::MulOp>(loc(), ty, b, nc).getResult()).getResult();
+  }
+  // i1 variant: (a & cond) | (b & !cond)
+  mlir::Value muxI1(mlir::Value cond, mlir::Value a, mlir::Value b) {
+    auto i1 = builder.getI1Type();
+    return builder.create<awl::OrOp>(
+        loc(), i1,
+        builder.create<awl::AndOp>(loc(), i1, a, cond).getResult(),
+        builder.create<awl::AndOp>(loc(), i1, b,
+                                  builder.create<awl::NotOp>(loc(), i1, cond).getResult()).getResult()).getResult();
+  }
+
   // The S7 accumulators are initialized to 0; pad a short stack so that
   // arithmetic/comparisons on an "empty" accumulator still produce SSA.
   void padAcc() {
@@ -3621,17 +3918,71 @@ private:
     return constInt(builder.getI1Type(), 0);
   }
 
+  mlir::Value i1Const(bool v) {
+    return builder.create<awl::ConstOp>(
+        loc(), builder.getI1Type(),
+        builder.getIntegerAttr(builder.getI1Type(), v ? 1 : 0));
+  }
+  // status-word logic state with defaults (block start / after BE: VKE=1,
+  // OR=0, STA=1, NER=0)
+  mlir::Value vkeD() { return rlo ? rlo : i1Const(true); }
+  mlir::Value orD() { return stOr ? stOr : i1Const(false); }
+  mlir::Value staD() { return stSta ? stSta : i1Const(true); }
+  mlir::Value nerD() { return stNer ? stNer : i1Const(false); }
+
   bool ensureRlo() {
-    // The RLO value persists across statements (awlsim: VKE is only changed
-    // by logic ops); only a completely fresh chain starts from RLO = 1.
-    // awlsim's NER bit models this: after CLR (or at block start) NER = 0,
-    // and the next U/O computes VKE = ((VKE | !NER) & STA) | (OR & NER),
-    // i.e. the accumulator behaves as neutral 1 for the first AND-chain op.
+    // The RLO (VKE) value persists across statements; it defaults to 1 at
+    // block start. The full awlsim logic formula is applied in
+    // parseRloLogic/parseCloseBracket using the NER/OR/STA state bits.
     if (!rlo)
-      rlo = builder.create<awl::ConstOp>(loc(), builder.getI1Type(),
-                                          builder.getIntegerAttr(builder.getI1Type(), 1));
+      rlo = i1Const(true);
     rloActive = true;
     return true;
+  }
+
+  // A logic instruction without an operand at the end of a chain. awlsim
+  // insn_o __run_noOps (bare O): OR=(VKE|OR)&NER, STA=1, NER=VKE&NER, VKE
+  // unchanged. Bare U/A have no awlsim semantics (they require an operand),
+  // so they leave the state untouched.
+  bool bareLogicEnd(const std::string &m) {
+    if (!ensureRlo())
+      return false;
+    if (m == "O" || m == "ON") {
+      auto i1 = builder.getI1Type();
+      mlir::Value vke = vkeD(), orB = orD(), ner = nerD();
+      stOr = builder.create<awl::AndOp>(
+          loc(), i1,
+          builder.create<awl::OrOp>(loc(), i1, vke, orB).getResult(),
+          ner).getResult();
+      stNer = builder.create<awl::AndOp>(loc(), i1, vke, ner).getResult();
+      stSta = i1Const(true);
+    }
+    return true;
+  }
+
+  // awlsim MCR model: MCR( pushes the current VKE onto the mcrStack, )MCR
+  // pops it; MCRA/MCRD set mcrActive; stores execute only if
+  // mcrIsOn() = !mcrActive || all(mcrStack). The MCR( brackets save the pushed
+  // VKE values, so the gate is an SSA AND of them.
+  mlir::Value mcrOn() {
+    mlir::Value g;
+    auto i1 = builder.getI1Type();
+    for (auto &b : brackets)
+      if (b.isMcr)
+        g = g ? (mlir::Value)builder.create<awl::AndOp>(loc(), i1, g, b.savedRlo)
+              : b.savedRlo;
+    return g;
+  }
+  // RLO ANDed with the MCR gate (awlsim store condition for = / S / R bits)
+  mlir::Value gatedRlo() {
+    if (!ensureRlo())
+      return nullptr;
+    if (!mcrActive)
+      return rlo;
+    mlir::Value g = mcrOn();
+    if (!g)
+      return rlo;
+    return builder.create<awl::AndOp>(loc(), builder.getI1Type(), rlo, g).getResult();
   }
 
   // The four ACCU registers always hold a value (0 at block start), so an
@@ -4673,16 +5024,44 @@ private:
       return false;
     // T does not pop ACCU1 (S7 semantics): several T can store the same value
     mlir::Value v = acc.empty() ? constInt(builder.getI32Type(), 0) : acc.back();
+    // awlsim insn_T: inside an open MCR area the store is skipped unless
+    // mcrIsOn() — emulated by storing old + (v-old)*gate
+    mlir::Value mcrG = mcrActive ? mcrOn() : mlir::Value();
     if (isPseudoValue(addr)) {
       popAcc(); // store to a pseudo operand: value dropped
     } else if (addr.getType().isInteger(64)) {
       // indirect store T [AR1, P#x.y]
+      mlir::Value sv = castTo(v, builder.getI64Type());
+      if (mcrG) {
+        mlir::Value old = builder.create<awl::LoadIndirectOp>(
+            loc(), builder.getI64Type(), addr);
+        auto gzOp = builder.create<awl::CastOp>(loc(), builder.getI64Type(), mcrG);
+        gzOp.setZextAttr(builder.getUnitAttr()); // i1 gate: 0/1, not 0/-1
+        mlir::Value gz = gzOp.getResult();
+        sv = builder.create<awl::AddOp>(
+            loc(), builder.getI64Type(), old,
+            builder.create<awl::MulOp>(
+                loc(), builder.getI64Type(),
+                builder.create<awl::SubOp>(loc(), builder.getI64Type(), sv, old).getResult(),
+                gz).getResult()).getResult();
+      }
       builder.create<awl::StoreIndirectOp>(
-          loc(), castTo(v, builder.getI64Type()), addr,
+          loc(), sv, addr,
           builder.getI32IntegerAttr(lastIndirectWidth));
     } else if (mlir::isa_and_nonnull<awl::StwGetOp>(addr.getDefiningOp())) {
       // T STW: write the status word
-      builder.create<awl::StwSetOp>(loc(), castTo(v, builder.getI32Type()));
+      auto stwVal = castTo(v, builder.getI32Type());
+      builder.create<awl::StwSetOp>(loc(), stwVal);
+      // with a constant value, fold the written bits into the parse-time
+      // logic state (NER=bit0, VKE=bit1, STA=bit2, OR=bit3)
+      if (auto c = mlir::dyn_cast_or_null<awl::ConstOp>(v.getDefiningOp())) {
+        int64_t w = c.getValue().cast<mlir::IntegerAttr>().getValue().getSExtValue();
+        stNer = i1Const(w & 1);
+        rlo = i1Const((w >> 1) & 1);
+        stSta = i1Const((w >> 2) & 1);
+        stOr = i1Const((w >> 3) & 1);
+        rloActive = true;
+      }
     } else if (mlir::isa<mlir::scl::DirectType>(addr.getType())) {
       if (ptrParamSlot >= 0) {
         // T #ptrParam: write the 6-byte DB-pointer header into the VL slot
@@ -4711,7 +5090,23 @@ private:
             loc(), constInt(builder.getI32Type(), (int32_t)ptr),
             mkDirect(slot.getArea(), 0, ptrParamSlot + 2, 0, 32));
       } else {
-        builder.create<awl::StoreOp>(loc(), v, addr);
+        mlir::Value sv = v;
+        if (mcrG) {
+          mlir::Value old = builder.create<awl::LoadOp>(loc(), addr);
+          auto vt = old.getType();
+          sv = castTo(sv, vt);
+          old = castTo(old, vt);
+          auto gzOp = builder.create<awl::CastOp>(loc(), vt, mcrG);
+          gzOp.setZextAttr(builder.getUnitAttr()); // i1 gate: 0/1, not 0/-1
+          mlir::Value gz = gzOp.getResult();
+          sv = builder.create<awl::AddOp>(
+              loc(), vt, old,
+              builder.create<awl::MulOp>(
+                  loc(), vt,
+                  builder.create<awl::SubOp>(loc(), vt, sv, old).getResult(),
+                  gz).getResult()).getResult();
+        }
+        builder.create<awl::StoreOp>(loc(), sv, addr);
       }
     } else {
       popAcc(); // store to a pseudo operand: value dropped
@@ -4720,66 +5115,66 @@ private:
     return true;
   }
 
+  // Combine the operand bit x into the RLO with awlsim's exact status-word
+  // formulas (insn_U/insn_O/insn_X): U: VKE = ((VKE | !NER) & x) | (OR & NER),
+  // O: VKE = (VKE & NER) | x, X: VKE = (VKE & NER) ^ x; then OR/STA/NER are
+  // updated as in awlsim.
+  void rloCombine(bool isOr, bool isXor, mlir::Value raw, bool neg = false) {
+    auto i1 = builder.getI1Type();
+    mlir::Value vke = vkeD(), orB = orD(), ner = nerD();
+    mlir::Value x = neg ? (mlir::Value)builder.create<awl::NotOp>(loc(), i1, raw) : raw;
+    mlir::Value newOr;
+    if (isOr || isXor) {
+      newOr = i1Const(false);
+      rlo = isOr ? (mlir::Value)builder.create<awl::OrOp>(
+                       loc(), i1, builder.create<awl::AndOp>(loc(), i1, vke, ner).getResult(), x)
+                 : (mlir::Value)builder.create<awl::XOrOp>(
+                       loc(), i1, builder.create<awl::AndOp>(loc(), i1, vke, ner).getResult(), x);
+    } else {
+      newOr = builder.create<awl::AndOp>(loc(), i1, orB, ner).getResult();
+      rlo = builder.create<awl::OrOp>(
+          loc(), i1,
+          builder.create<awl::AndOp>(
+              loc(), i1,
+              builder.create<awl::OrOp>(loc(), i1, vke,
+                                        builder.create<awl::NotOp>(loc(), i1, ner).getResult()).getResult(),
+              x).getResult(),
+          newOr).getResult();
+    }
+    stOr = newOr;
+    stSta = raw; // awlsim: STA is the scanned operand, before negation
+    stNer = i1Const(true);
+    rloActive = true;
+  }
+
   bool parseRloLogic(const std::string &m) {
     stmtLogic = true;
     bool isOr = (m == "O" || m == "ON");
-    bool neg = (m == "UN" || m == "ON");
+    bool isXor = (m == "X" || m == "XN");
+    bool neg = (m == "UN" || m == "ON" || m == "AN" || m == "XN");
     auto i1 = builder.getI1Type();
-    // a fresh logic chain starts from 1 for U/A and from 0 for O
-    // (awlsim: with NER=0, VKE = STA, i.e. the first operand itself;
-    // NER=0 holds after CLR and at block start — rloFresh)
-    if (!rloActive || rloFresh) {
-      rlo = builder.create<awl::ConstOp>(
-          loc(), i1, builder.getIntegerAttr(i1, isOr ? 0 : 1));
-      rloFresh = false;
-      rloActive = true;
-    }
+    if (!ensureRlo())
+      return false;
     // U/O TRUE/FALSE: constant RLO operand (awlsim extension)
     if (lexer.getCurToken() == Tok::ident) {
       std::string w = upperIdent();
       if (w == "TRUE" || w == "FALSE") {
         lexer.next();
-        mlir::Value c = builder.create<awl::ConstOp>(
-            loc(), i1, builder.getIntegerAttr(i1, w == "TRUE" ? 1 : 0));
-        if (neg)
-          c = builder.create<awl::NotOp>(loc(), i1, c);
-        rlo = isOr ? (mlir::Value)builder.create<awl::OrOp>(loc(), i1, rlo, c)
-                   : (mlir::Value)builder.create<awl::AndOp>(loc(), i1, rlo, c);
+        rloCombine(isOr, isXor, i1Const(w == "TRUE"), neg);
         return true;
       }
     }
     mlir::Value addr = parseBitOperand();
     if (!addr)
       return false;
-    if (addr.getType().isInteger(1)) {
-      // STW bit/condition operand (U __STW OV, U UO): plain logic combine
-      mlir::Value bit = addr;
-      if (neg)
-        bit = builder.create<awl::NotOp>(loc(), i1, bit);
-      rlo = isOr ? (mlir::Value)builder.create<awl::OrOp>(loc(), i1, rlo, bit)
-                 : (mlir::Value)builder.create<awl::AndOp>(loc(), i1, rlo, bit);
-      return true;
-    }
-    if (addr.getType().isInteger(64)) {
-      // U/O [AR1, P#x.y]: indirect bit through the packed pointer
-      mlir::Value bit =
-          builder.create<awl::LoadBitIndirectOp>(loc(), i1, addr);
-      if (neg)
-        bit = builder.create<awl::NotOp>(loc(), i1, bit);
-      rlo = isOr ? (mlir::Value)builder.create<awl::OrOp>(loc(), i1, rlo, bit)
-                 : (mlir::Value)builder.create<awl::AndOp>(loc(), i1, rlo, bit);
-      return true;
-    }
-    llvm::SmallVector<mlir::NamedAttribute, 1> attrs;
-    if (neg)
-      attrs.push_back(
-          builder.getNamedAttr("negate", builder.getUnitAttr()));
-    if (isOr)
-      rlo = builder.create<awl::RloOrOp>(loc(), mlir::TypeRange{i1},
-                                         mlir::ValueRange{rlo, addr}, attrs);
+    mlir::Value bit;
+    if (addr.getType().isInteger(1))
+      bit = addr; // STW bit/condition operand (U __STW OV, U UO)
+    else if (addr.getType().isInteger(64))
+      bit = builder.create<awl::LoadBitIndirectOp>(loc(), i1, addr); // U/O [AR1, ...]
     else
-      rlo = builder.create<awl::RloAndOp>(loc(), mlir::TypeRange{i1},
-                                          mlir::ValueRange{rlo, addr}, attrs);
+      bit = builder.create<awl::LoadOp>(loc(), addr); // bit load -> i1
+    rloCombine(isOr, isXor, bit, neg);
     return true;
   }
 
@@ -4790,11 +5185,42 @@ private:
     Bracket b = brackets.pop_back_val();
     if (!rloActive) // e.g. MCR) without a preceding MCR(
       return true;
-    mlir::Value group = rlo;
     auto i1 = builder.getI1Type();
-    rlo = b.isXor ? (mlir::Value)builder.create<awl::XOrOp>(loc(), i1, b.savedRlo, group)
-          : b.isOr ? (mlir::Value)builder.create<awl::OrOp>(loc(), i1, b.savedRlo, group)
-                   : (mlir::Value)builder.create<awl::AndOp>(loc(), i1, b.savedRlo, group);
+    if (b.isMcr) {
+      // awlsim insn_bmcr: pop the mcrStack, reset OR/STA/NER, VKE unchanged
+      stOr = i1Const(false);
+      stSta = i1Const(true);
+      stNer = i1Const(false);
+      rloActive = true;
+      return true;
+    }
+    // awlsim insn_bend __run_UB/OB/...: combine the saved (VKE,NER,OR) with
+    // the inner group result per the bracket type
+    mlir::Value inner = vkeD();
+    if (b.neg)
+      inner = builder.create<awl::NotOp>(loc(), i1, inner);
+    mlir::Value pv = b.savedRlo, pn = b.savedNer, po = b.savedOr;
+    mlir::Value newOr = (b.isOr || b.isXor)
+        ? (mlir::Value)i1Const(false)
+        : (mlir::Value)builder.create<awl::AndOp>(loc(), i1, po, pn);
+    if (b.isXor)
+      rlo = builder.create<awl::XOrOp>(
+          loc(), i1, builder.create<awl::AndOp>(loc(), i1, pv, pn).getResult(), inner);
+    else if (b.isOr)
+      rlo = builder.create<awl::OrOp>(
+          loc(), i1, builder.create<awl::AndOp>(loc(), i1, pv, pn).getResult(), inner);
+    else
+      rlo = builder.create<awl::OrOp>(
+          loc(), i1,
+          builder.create<awl::AndOp>(
+              loc(), i1,
+              builder.create<awl::OrOp>(loc(), i1, pv,
+                                        builder.create<awl::NotOp>(loc(), i1, pn).getResult()).getResult(),
+              inner).getResult(),
+          newOr).getResult();
+    stOr = newOr;
+    stSta = i1Const(true);
+    stNer = i1Const(true);
     rloActive = true;
     return true;
   }
@@ -4803,12 +5229,15 @@ private:
     mlir::Value addr = parseBitOperand();
     if (!addr)
       return false;
-    if (!ensureRlo())
+    // awlsim: `=` stores VKE, or 0 when inside an inactive MCR area —
+    // i.e. the stored value is the RLO ANDed with the MCR gate
+    mlir::Value rv = gatedRlo();
+    if (!rv)
       return false;
     if (addr.getType().isInteger(64))
-      builder.create<awl::WriteBitIndirectOp>(loc(), rlo, addr);
+      builder.create<awl::WriteBitIndirectOp>(loc(), rv, addr);
     else
-      builder.create<awl::AssignOp>(loc(), rlo, addr);
+      builder.create<awl::AssignOp>(loc(), rv, addr);
     rloActive = false;
     return true;
   }
@@ -4841,12 +5270,19 @@ private:
         builder.create<awl::TimerResetOp>(loc(), v);
         return true;
       }
-      // S/R [AR1, P#x.y]: indirect bit store
+      // S/R [AR1, P#x.y]: indirect bit store (gated like the direct bit path)
       auto i1 = builder.getI1Type();
-      builder.create<awl::WriteBitIndirectOp>(
-          loc(), builder.create<awl::ConstOp>(
-                     loc(), i1, builder.getIntegerAttr(i1, set ? 1 : 0)),
-          v);
+      mlir::Value gate = gatedRlo();
+      if (!gate)
+        return false;
+      mlir::Value old = builder.create<awl::LoadBitIndirectOp>(
+          loc(), builder.getI1Type(), v);
+      mlir::Value newVal = set
+          ? (mlir::Value)builder.create<awl::OrOp>(loc(), i1, old, gate)
+          : (mlir::Value)builder.create<awl::AndOp>(
+                loc(), i1, old,
+                builder.create<awl::NotOp>(loc(), i1, gate).getResult());
+      builder.create<awl::WriteBitIndirectOp>(loc(), newVal, v);
       rlo = builder.create<awl::ConstOp>(
           loc(), i1, builder.getIntegerAttr(i1, set ? 1 : 0));
       rloActive = true;
@@ -4885,10 +5321,21 @@ private:
     if (!isBit(v))
       return error("expected a bit operand (e.g. M 0.0)");
     auto i1 = builder.getI1Type();
-    if (set)
-      rlo = builder.create<awl::SetOp>(loc(), i1, v);
-    else
-      rlo = builder.create<awl::ResetOp>(loc(), i1, v);
+    // awlsim insn_S/insn_R: the bit is stored only if VKE && mcrIsOn; emulate
+    // the conditional store by read-modify-write: S: new = old | gate,
+    // R: new = old & !gate (gate = RLO ANDed with the open MCR brackets)
+    mlir::Value gate = gatedRlo();
+    if (!gate)
+      return false;
+    mlir::Value old = builder.create<awl::LoadOp>(loc(), v);
+    mlir::Value newVal = set
+        ? (mlir::Value)builder.create<awl::OrOp>(loc(), i1, old, gate)
+        : (mlir::Value)builder.create<awl::AndOp>(
+              loc(), i1, old,
+              builder.create<awl::NotOp>(loc(), i1, gate).getResult());
+    builder.create<awl::AssignOp>(loc(), newVal, v);
+    rlo = builder.create<awl::ConstOp>(
+        loc(), i1, builder.getIntegerAttr(i1, set ? 1 : 0));
     rloActive = true;
     return true;
   }
@@ -4899,22 +5346,57 @@ private:
     padAcc();
     mlir::Value v = popAcc();
     bool throughCarry = m == "RLDA" || m == "RRDA";
-    mlir::Value amount = constInt(builder.getI32Type(), 1);
-    if (!throughCarry) {
-      if (lexer.getCurToken() == Tok::integer) {
-        amount = constInt(builder.getI32Type(), (int64_t)lexer.getInteger());
-        lexer.next();
-      } else {
-        amount = popAcc(); // no immediate: shift count is in ACCU2
-        amount = castTo(amount, builder.getI32Type());
-      }
+    auto i32 = builder.getI32Type();
+    auto i1 = builder.getI1Type();
+    mlir::Value amount;
+    if (lexer.getCurToken() == Tok::integer) {
+      amount = constInt(i32, (int64_t)lexer.getInteger());
+      lexer.next();
+    } else if (throughCarry) {
+      amount = constInt(i32, 1); // rotate through carry by one
+    } else {
+      amount = popAcc(); // no immediate: shift count is ACCU2's low byte
+      amount = builder.create<awl::AndOp>(loc(), i32, castTo(amount, i32),
+                                          constInt(i32, 0xFF)).getResult();
     }
-    v = castTo(v, builder.getI32Type());
+    v = castTo(v, i32);
     std::string kind = m;
     for (auto &c : kind)
       c = (char)tolower((unsigned char)c);
-    acc.push_back(builder.create<awl::ShiftOp>(
-        loc(), builder.getI32Type(), builder.getStringAttr(kind), v, amount));
+    mlir::Value shifted = builder.create<awl::ShiftOp>(
+        loc(), i32, builder.getStringAttr(kind), v, amount);
+    // awlsim: count <= 0 leaves ACCU1 and STW unchanged
+    mlir::Value pos = builder.create<awl::CmpGtOp>(loc(), i1, amount, constInt(i32, 0));
+    mlir::Value r = mux(pos, shifted, v);
+    acc.push_back(r);
+    // awlsim: A1 = the bit shifted out of the ORIGINAL value — bit
+    // (width-count) for left shifts/rotates (SLW/SLD/RLD/RLDA), bit
+    // (count-1) for right shifts/rotates (SRW/SSI/SRD/SSD/RRD/RRDA);
+    // A0=0, OV=0. count is clamped to the operand width.
+    bool word = kind == "slw" || kind == "srw" || kind == "ssi";
+    int width = word ? 16 : 32;
+    bool left = kind == "slw" || kind == "sld" || kind == "rld" || kind == "rlda";
+    mlir::Value clamped = mux(
+        builder.create<awl::CmpGtOp>(loc(), i1, amount, constInt(i32, width)).getResult(),
+        constInt(i32, width), amount);
+    mlir::Value idx = left
+        ? builder.create<awl::SubOp>(loc(), i32, constInt(i32, width), clamped).getResult()
+        : builder.create<awl::SubOp>(loc(), i32, clamped, constInt(i32, 1)).getResult();
+    mlir::Value bit = builder.create<awl::AndOp>(
+        loc(), i32,
+        builder.create<awl::ShiftOp>(loc(), i32, builder.getStringAttr("srd"),
+                                     v, idx).getResult(),
+        constInt(i32, 1)).getResult();
+    mlir::Value a1 = builder.create<awl::CmpNeOp>(loc(), i1, bit, constInt(i32, 0));
+    mlir::Value oldA1 = builder.create<awl::StwBitOp>(loc(), i1, builder.getI32IntegerAttr(7));
+    mlir::Value oldA0 = builder.create<awl::StwBitOp>(loc(), i1, builder.getI32IntegerAttr(6));
+    mlir::Value oldOV = builder.create<awl::StwBitOp>(loc(), i1, builder.getI32IntegerAttr(5));
+    builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(7),
+                                     muxI1(pos, a1, oldA1));
+    builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(6),
+                                     muxI1(pos, i1Const(false), oldA0));
+    builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(5),
+                                     muxI1(pos, i1Const(false), oldOV));
     rloActive = false;
     return true;
   }
@@ -4994,31 +5476,109 @@ private:
   bool parseArith(ArithKind k, char w) {
     mlir::Type ty = widthType(w);
     padAcc();
-    mlir::Value b = popAcc();
-    mlir::Value a = popAcc();
+    mlir::Value b = popAcc(); // ACCU1 (top)
+    mlir::Value a = popAcc(); // ACCU2
     if (!a || !b)
       return false;
-    a = castTo(a, ty);
-    b = castTo(b, ty);
-    mlir::Value r;
+    if (w == 'R') {
+      a = castTo(a, ty);
+      b = castTo(b, ty);
+      mlir::Value r;
+      switch (k) {
+      case ArithKind::Add: r = builder.create<awl::AddOp>(loc(), ty, a, b); break;
+      case ArithKind::Sub: r = builder.create<awl::SubOp>(loc(), ty, a, b); break;
+      case ArithKind::Mul: r = builder.create<awl::MulOp>(loc(), ty, a, b); break;
+      case ArithKind::Div: r = builder.create<awl::DivOp>(loc(), ty, a, b); break;
+      }
+      acc.push_back(r);
+      if (k == ArithKind::Div)
+        builder.create<awl::StwDivOp>(loc(), b, r);
+      else
+        builder.create<awl::StwSignOp>(loc(), r, a, b,
+                                        builder.getI32IntegerAttr(
+                                            k == ArithKind::Add ? 0
+                                            : k == ArithKind::Sub ? 1 : 2),
+                                        builder.getI32IntegerAttr(0));
+      rloActive = false;
+      return true;
+    }
+    // integer arith: awlsim computes word ops on the sign-extended words and
+    // stores back with setWord (+I/-I /I: low word, high word of ACCU1 kept)
+    // or setDWord (*I: full 32-bit product replaces ACCU1). STW A0/A1 come
+    // from the UNtruncated result (computed at i64), OV/OS when it leaves
+    // the 16/32-bit range.
+    auto i16 = builder.getI16Type();
+    auto i32 = builder.getI32Type();
+    auto i64 = builder.getI64Type();
+    mlir::Value as = w == 'D' ? castTo(a, i32) : castTo(castTo(a, i16), i32);
+    mlir::Value bs = w == 'D' ? castTo(b, i32) : castTo(castTo(b, i16), i32);
+    mlir::Value b32 = castTo(b, i32);
+    mlir::Value as64 = castTo(as, i64), bs64 = castTo(bs, i64);
+    mlir::Value wide; // untruncated result at i64 (also avoids divsi UB)
     switch (k) {
-    case ArithKind::Add: r = builder.create<awl::AddOp>(loc(), ty, a, b); break;
-    case ArithKind::Sub: r = builder.create<awl::SubOp>(loc(), ty, a, b); break;
-    case ArithKind::Mul: r = builder.create<awl::MulOp>(loc(), ty, a, b); break;
-    case ArithKind::Div: r = builder.create<awl::DivOp>(loc(), ty, a, b); break;
+    case ArithKind::Add: wide = builder.create<awl::AddOp>(loc(), i64, as64, bs64); break;
+    case ArithKind::Sub: wide = builder.create<awl::SubOp>(loc(), i64, as64, bs64); break;
+    case ArithKind::Mul: wide = builder.create<awl::MulOp>(loc(), i64, as64, bs64); break;
+    case ArithKind::Div: wide = builder.create<awl::DivOp>(loc(), i64, as64, bs64); break;
+    }
+    mlir::Value r32 = castTo(wide, i32); // truncated to 32 bits for ACCU1
+    mlir::Value r; // value pushed back to ACCU1
+    if (k == ArithKind::Div) {
+      // awlsim insn_di_i/insn_di_d: division by zero leaves ACCU1 unchanged
+      // (only STW is set). The quotient is computed at i64, so INT_MIN / -1
+      // yields +2^31 there (stored wrapped as 0x80000000, flagged via OV).
+      auto i1 = builder.getI1Type();
+      mlir::Value isZero = builder.create<awl::CmpEqOp>(loc(), i1, bs, constInt(i32, 0));
+      if (w == 'D') {
+        r = mux(isZero, b32, r32); // setDWord(quo)
+      } else {
+        // /I: setDWord with the quotient in the low word and the remainder
+        // in the high word (C truncation: rem = dividend - quo * divisor)
+        mlir::Value rem = builder.create<awl::SubOp>(
+            loc(), i32, as,
+            builder.create<awl::MulOp>(loc(), i32, r32, bs).getResult()).getResult();
+        mlir::Value packed = builder.create<awl::OrOp>(
+            loc(), i32,
+            builder.create<awl::ShiftOp>(
+                loc(), i32, builder.getStringAttr("sld"),
+                builder.create<awl::AndOp>(loc(), i32, rem,
+                                           constInt(i32, 0xFFFF)).getResult(),
+                constInt(i32, 16)).getResult(),
+            builder.create<awl::AndOp>(loc(), i32, r32,
+                                       constInt(i32, 0xFFFF)).getResult()).getResult();
+        r = mux(isZero, b32, packed);
+      }
+    } else if (w == 'D') {
+      r = r32; // setDWord
+    } else if (k == ArithKind::Mul) {
+      r = r32; // *I: setDWord (full product)
+    } else {
+      // setWord: low word of the result, high word of ACCU1 preserved
+      r = builder.create<awl::OrOp>(
+          loc(), i32,
+          builder.create<awl::AndOp>(loc(), i32, b32,
+                                     constInt(i32, (int64_t)(int32_t)0xFFFF0000)).getResult(),
+          builder.create<awl::AndOp>(loc(), i32, r32,
+                                     constInt(i32, 0xFFFF)).getResult()).getResult();
     }
     acc.push_back(r);
-    // record the result into the STW: sign -> A0/A1 (overflow of the
-    // untruncated result -> OV/OS=1); division by zero -> A0=A1=OV=OS=1
+    // STW: A0/A1 from the stored result (16-bit truncated for word ops,
+    // full product for *I), OV/OS when the untruncated result leaves the
+    // 16-bit (word) / 32-bit (dword) range; div-by-zero -> A0=A1=OV=OS=1
     if (k == ArithKind::Div) {
-      builder.create<awl::StwDivOp>(loc(), b, r);
+      auto div = builder.create<awl::StwDivOp>(loc(), bs, wide);
+      div.setRangeAttr(builder.getI32IntegerAttr(w == 'D' ? 0x7FFFFFFF : 0x7FFF));
     } else {
       int op = k == ArithKind::Add ? 0 : k == ArithKind::Sub ? 1 : 2;
-      int32_t range = mlir::isa<mlir::IntegerType>(ty)
-                          ? (ty.getIntOrFloatBitWidth() == 16 ? 0x7FFF
-                                                             : 0x7FFFFFFF)
-                          : 0;
-      builder.create<awl::StwSignOp>(loc(), r, a, b,
+      int32_t range = w == 'D' ? 0x7FFFFFFF : 0x7FFF;
+      // awlsim +D/-D classify the TRUNCATED stored dword for A0/A1, *D/*I
+      // the untruncated product; word ops the truncated word. OV/OS use the
+      // untruncated wide value (lhs/rhs are sign-extended to i64 in the
+      // runtime, which recomputes it).
+      mlir::Value stwVal = k == ArithKind::Mul
+                               ? wide
+                               : w == 'D' ? r32 : castTo(r32, i16);
+      builder.create<awl::StwSignOp>(loc(), stwVal, as64, bs64,
                                       builder.getI32IntegerAttr(op),
                                       builder.getI32IntegerAttr(range));
     }
@@ -5028,36 +5588,68 @@ private:
 
   bool parseWordLogic(const std::string &m) {
     // AW/OW/XOW/UW operate on words (i16), AD/OD/XOD/UD on double words
-    // (i32), AB/OB/UB on bytes (i8); U (Und) = AND, O (Oder) = OR, X = XOR
+    // (i32), AB/OB/UB on bytes (i8); U (Und) = AND, O (Oder) = OR, X = XOR.
+    // Word/byte ops modify only the low word/byte of ACCU1 — the rest of
+    // ACCU1 is preserved (awlsim setWord/setByte) — and set STW A1 = result
+    // != 0, A0 = 0, OV = 0.
     char w = m.back();
     auto ty = w == 'D' ? builder.getI32Type()
              : w == 'B' ? builder.getI8Type()
                         : builder.getI16Type();
     char op = m[0] == 'U' ? 'A' : m[0];
-    mlir::Value b, a;
+    mlir::Value A, B; // A = ACCU1 (top of stack), B = operand
     if (lexer.getCurToken() == Tok::integer || lexer.getCurToken() == Tok::real) {
       // immediate operand: ACCU1 op imm
-      b = parseConst();
+      B = parseConst();
       if (acc.empty())
         acc.push_back(constInt(builder.getI32Type(), 0));
-      a = popAcc();
+      A = popAcc();
     } else {
       padAcc();
-      b = popAcc();
-      a = popAcc();
+      A = popAcc();
+      B = popAcc();
     }
-    if (!a || !b)
+    if (!A || !B)
       return false;
-    a = castTo(a, ty);
-    b = castTo(b, ty);
+    auto i32 = builder.getI32Type();
+    auto logicOp = [&](mlir::Type t, mlir::Value x, mlir::Value y) {
+      if (op == 'A')
+        return (mlir::Value)builder.create<awl::AndOp>(loc(), t, x, y);
+      if (op == 'O')
+        return (mlir::Value)builder.create<awl::OrOp>(loc(), t, x, y);
+      return (mlir::Value)builder.create<awl::XOrOp>(loc(), t, x, y);
+    };
     mlir::Value r;
-    if (op == 'A')
-      r = builder.create<awl::AndOp>(loc(), ty, a, b);
-    else if (op == 'O')
-      r = builder.create<awl::OrOp>(loc(), ty, a, b);
-    else
-      r = builder.create<awl::XOrOp>(loc(), ty, a, b);
+    if (w == 'D') {
+      r = logicOp(i32, castTo(A, i32), castTo(B, i32));
+    } else {
+      int64_t mask = w == 'B' ? 0xFF : 0xFFFF;
+      mlir::Value A32 = castTo(A, i32), B32 = castTo(B, i32);
+      mlir::Value alo = builder.create<awl::AndOp>(loc(), i32, A32,
+                                                   constInt(i32, mask)).getResult();
+      mlir::Value blo = builder.create<awl::AndOp>(loc(), i32, B32,
+                                                   constInt(i32, mask)).getResult();
+      mlir::Value rlo = logicOp(ty, castTo(alo, ty), castTo(blo, ty));
+      mlir::Value rhi = builder.create<awl::AndOp>(
+          loc(), i32, A32,
+          constInt(i32, (int64_t)(int32_t)~(uint32_t)mask)).getResult();
+      auto z = builder.create<awl::CastOp>(loc(), i32, rlo);
+      z.setZextAttr(builder.getUnitAttr());
+      r = builder.create<awl::OrOp>(loc(), i32, rhi, z.getResult()).getResult();
+    }
     acc.push_back(r);
+    // STW: A1 (bit 7) = result != 0, A0 (bit 6) = 0, OV (bit 5) = 0
+    auto i1 = builder.getI1Type();
+    auto cmpTy = w == 'D' ? i32 : ty;
+    mlir::Value nz = builder.create<awl::CmpNeOp>(
+        loc(), i1, castTo(r, cmpTy), castTo(constInt(ty, 0), cmpTy));
+    builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(7), nz);
+    builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(6),
+                                     builder.create<awl::ConstOp>(
+                                         loc(), i1, builder.getIntegerAttr(i1, 0)));
+    builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(5),
+                                     builder.create<awl::ConstOp>(
+                                         loc(), i1, builder.getIntegerAttr(i1, 0)));
     rloActive = false;
     return true;
   }
@@ -5096,8 +5688,20 @@ private:
                : cmp == Tok::le ? 3
                : cmp == Tok::gt ? 4
                                : 5;
+    if (w == 'R') {
+      // awlsim: NaN operand -> unordered: VKE=0, STA=0, A0=A1=OV=OS=1
+      // (the STW bits are set by stw_cmp_f); the comparison result only
+      // counts when both operands are ordered
+      mlir::Value nanA = builder.create<awl::CmpNeOp>(loc(), i1, a, a); // NaN != NaN
+      mlir::Value nanB = builder.create<awl::CmpNeOp>(loc(), i1, b, b);
+      mlir::Value ordered = builder.create<awl::NotOp>(
+          loc(), i1,
+          builder.create<awl::OrOp>(loc(), i1, nanA, nanB).getResult()).getResult();
+      r = builder.create<awl::AndOp>(loc(), i1, r, ordered).getResult();
+    }
     builder.create<awl::StwCmpOp>(loc(), builder.getI32IntegerAttr(pred), a, b);
     rlo = r;
+    stmtLogic = true;
     rloActive = true;
     return true;
   }
@@ -5107,17 +5711,51 @@ private:
       return error("expected label after " + m);
     std::string label = upperIdent();
     lexer.next();
-    if (m == "SPA") {
+    auto i1 = builder.getI1Type();
+    if (m == "SPA" || m == "JU") {
       builder.create<awl::JumpOp>(loc(), builder.getStringAttr(label));
-    } else {
-      if (!ensureRlo())
-        return false;
-      if (m == "SPB")
-        builder.create<awl::JumpIfOp>(loc(), rlo, builder.getStringAttr(label));
-      else
-        builder.create<awl::JumpIfNotOp>(loc(), rlo, builder.getStringAttr(label));
+      rloActive = false;
+      return true;
     }
-    rloActive = false;
+    if (!ensureRlo())
+      return false;
+    // SPBB/SPBNB save the RLO into the BR/BIE bit before the jump test
+    if (m == "SPBB" || m == "SPBNB")
+      builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(8), rlo);
+    mlir::Value cond = rlo;
+    bool brTest = m == "SPBI" || m == "SPBIN" || m == "JBI" || m == "JNBI";
+    if (brTest) // SPBI/SPBIN test the BR bit, not the RLO
+      cond = builder.create<awl::StwBitOp>(loc(), i1, builder.getI32IntegerAttr(8));
+    bool stwTest = m == "SPO" || m == "SOS" || m == "SPU";
+    if (stwTest) {
+      if (m == "SPO")
+        cond = builder.create<awl::StwBitOp>(loc(), i1, builder.getI32IntegerAttr(5)); // OV
+      else if (m == "SOS")
+        cond = builder.create<awl::StwBitOp>(loc(), i1, builder.getI32IntegerAttr(4)); // OS
+      else
+        cond = builder.create<awl::StwCondOp>(loc(), i1, builder.getI32IntegerAttr(6)); // UO = A0&A1
+    }
+    bool jumpIfNot = m == "SPN" || m == "SPBN" || m == "SPBNB" || m == "SPBIN" ||
+                     m == "JNBI" || m == "JNB" || m == "JCN";
+    if (jumpIfNot)
+      builder.create<awl::JumpIfNotOp>(loc(), cond, builder.getStringAttr(label));
+    else
+      builder.create<awl::JumpIfOp>(loc(), cond, builder.getStringAttr(label));
+    if (stwTest) {
+      // awlsim insn_spo/insn_sos/insn_spu: STW (incl. RLO) untouched
+      rloActive = false;
+      return true;
+    }
+    // awlsim: RLO-tested jumps (SPB/SPN/SPBB/SPBNB...) end with OR=0, STA=1,
+    // VKE=1, NER=0; BR-tested jumps (SPBI/SPBIN...) keep VKE, set OR=0,
+    // STA=1, NER=0
+    stOr = i1Const(false);
+    stSta = i1Const(true);
+    stNer = i1Const(false);
+    if (!brTest)
+      rlo = i1Const(true);
+    stmtLogic = true;
+    rloActive = true;
     return true;
   }
 

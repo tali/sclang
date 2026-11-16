@@ -3055,9 +3055,12 @@ struct AwlStwDivLowering : public OpConversionPattern<awl::StwDivOp> {
       auto i64 = rewriter.getI64Type();
       Value d = convertScalarTo(rewriter, loc, adaptor.getDivisor(), i64);
       Value r = convertScalarTo(rewriter, loc, adaptor.getResult(), i64);
+      Value rng = rewriter.create<arith::ConstantOp>(
+          loc, rewriter.getI32Type(),
+          rewriter.getI32IntegerAttr(op.getRange()));
       auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_stw_div_i",
-                                  rewriter.getFunctionType({i64, i64}, {}));
-      rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{d, r});
+                                  rewriter.getFunctionType({i64, i64, rewriter.getI32Type()}, {}));
+      rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{d, r, rng});
     }
     rewriter.eraseOp(op);
     return success();

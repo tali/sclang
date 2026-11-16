@@ -31,11 +31,14 @@ import sys
 
 # Minimum pass rates (fractions) when corpora are present. Current state
 # (LLVM 17 build): compile tier AWL 116/116 = 1.00, SCL single 15/15 = 1.00,
-# SCL per-project 17/17 = 1.00; JIT smoke tier (OB1 files) 77/77 = 1.00;
-# oracle tier (__ASSERT + OB1 files) 52/53 = 0.98 — the only failure is
-# startup_multiple.awl (expects a 2-accu CPU; we default to 4). Remaining
-# spec deviations are the approx rows of the SPEC matrix, see
-# docs/conformance.md and docs/spec-conformance.md.
+# SCL per-project 17/17 = 1.00; JIT smoke tier (OB1 files) 102/105 = 0.97;
+# oracle tier (__ASSERT + OB1/bare-instruction files) 52/71 = 0.73. Known-open
+# oracle failures: startup_multiple (2-accu CPU), insn_4ACCU/insn_JUMP
+# (accumulators not modeled across labels), insn_ARITH_R, insn_SHIFT
+# (RLDA/RRDA carry approx), stw_operators, insn_SE/SS, insn_CALL, sfb0-5,
+# tc200 array/pointer/udt, shutdown. Remaining spec deviations are the
+# approx rows of the SPEC matrix, see docs/conformance.md and
+# docs/spec-conformance.md.
 FLOOR_AWL = 0.90
 FLOOR_SCL_SINGLE = 0.55
 FLOOR_SCL_PROJECT = 0.60
@@ -52,8 +55,21 @@ AWL_RE = re.compile(
 SCL_RE = re.compile(
     r'^[ \t]*(FUNCTION|FUNCTION_BLOCK)[ \t]|^[ \t]*VAR_(INPUT|OUTPUT|IN_OUT)[ \t]'
     r'|^[ \t]*DATA_BLOCK[ \t]+[^"]|^[ \t]*TYPE[ \t]+[^"]', re.M)
-# files defining OB 1 can be JIT-run (the driver invokes _mlir_ciface_OB1)
+# files defining OB 1 can be JIT-run (the driver invokes _mlir_ciface_OB1).
+# Bare instruction lists (no block header at all) are wrapped in an implicit
+# OB 1 by the AWL frontend, exactly like awlsim's own test runner does, so
+# they are JIT-runnable too.
 OB1_RE = re.compile(r'^[ \t]*(ORGANIZATION_BLOCK[ \t]+)?OB[ \t]+1([ \t]|$)', re.M)
+BLOCK_HDR_RE = re.compile(
+    r'^[ \t]*(ORGANIZATION_BLOCK|DATA_BLOCK|TYPE|VAR[ \t]|BEGIN|END_VAR'
+    r'|OB|FB|FC|FUNCTION_BLOCK|FUNCTION)[ \t]', re.M)
+
+
+def has_ob1(text):
+    if OB1_RE.search(text):
+        return True
+    # bare instruction list (awlsim wraps these in OB 1 implicitly)
+    return not BLOCK_HDR_RE.search(text)
 
 
 def read_text(p):
@@ -180,9 +196,16 @@ def main():
     oracle_total = 0
     for p in awl_files + scl_files:
         text = read_text(p)
-        if not OB1_RE.search(text):
+        if not has_ob1(text):
             continue
-        xflag = sniff(text)
+        # .scl files are always SCL (sniff() may misread unquoted DATA_BLOCK
+        # as AWL); .awl files are sniffed per content
+        xflag = '-x=scl' if p.endswith('.scl') else sniff(text)
+        # only JIT-run files that compiled standalone (cross-file references
+        # are covered by the project tier)
+        rc0, _ = run_one(args.sclang, p, xflag)
+        if rc0 != 0:
+            continue
         jit_total += 1
         rc, err = run_one(args.sclang, p, xflag, emit='jit',
                           extra=('--jit-cycles=2',))

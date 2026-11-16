@@ -5,19 +5,20 @@
 // CHECK: %{{.*}} = awl.direct M, 0, 10, 0, 16 : !scl.direct<M, 0, 10, 0, 16>
 // CHECK: %{{.*}} = awl.load %{{.*}} : !scl.direct<M, 0, 10, 0, 16> -> i16
 // CHECK: %{{.*}} = awl.load %{{.*}} : !scl.direct<M, 0, 12, 0, 16> -> i16
-// CHECK: %{{.*}} = awl.add %{{.*}} : i16, %{{.*}} : i16 -> i16
-// CHECK: awl.store %{{.*}}, %{{.*}} : i16, !scl.direct<M, 0, 14, 0, 16>
+// CHECK: %{{.*}} = awl.add %{{.*}} : i64, %{{.*}} : i64 -> i64
+// CHECK: awl.store %{{.*}}, %{{.*}} : i32, !scl.direct<M, 0, 14, 0, 16>
 // CHECK: %{{.*}} = awl.const 5 : i32 -> i32
 // CHECK: %{{.*}} = awl.const 3 : i32 -> i32
 // CHECK: %{{.*}} = awl.cmpeq %{{.*}} : i16, %{{.*}} : i16 -> i1
 // CHECK: awl.jump_if %{{.*}}, "SKIP" : i1
-// CHECK: awl.set %{{.*}} : !scl.direct<Q, 0, 1, 0, 1> -> i1
+// CHECK: awl.assign %{{.*}}, %{{.*}} : i1, !scl.direct<Q, 0, 1, 0, 1>
 // CHECK: awl.label "SKIP"
 // CHECK: %{{.*}} = awl.cmpgt %{{.*}} : i16, %{{.*}} : i16 -> i1
 // CHECK: awl.jump_if %{{.*}}, "BIG" : i1
-// CHECK: awl.reset %{{.*}} : !scl.direct<Q, 0, 1, 0, 1> -> i1
+// CHECK: awl.assign %{{.*}}, %{{.*}} : i1, !scl.direct<Q, 0, 1, 0, 1>
 // CHECK: awl.label "BIG"
-// CHECK: %{{.*}} = awl.rlo_and %{{.*}}, %{{.*}} : i1, !scl.direct<I, 0, 0, 0, 1> -> i1
+// CHECK: %{{.*}} = awl.load %{{.*}} : !scl.direct<I, 0, 0, 0, 1> -> i1
+// CHECK: %{{.*}} = awl.and %{{.*}} : i1, %{{.*}} : i1 -> i1
 // CHECK: awl.assign %{{.*}}, %{{.*}} : i1, !scl.direct<Q, 0, 2, 0, 1>
 // CHECK: awl.be
 // CHECK-LABEL: awl.block "_mlir_ciface_OB1"

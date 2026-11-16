@@ -141,7 +141,15 @@ has no `\b` — use python3 for regex edits.
   line). sclang driver exits 2 when scl_rt_assert_failures() > 0 after the
   cycle loop.
   Current: AWL 116/116 (100%), SCL single 15/15, SCL per-project 17/17,
-  JIT smoke 77/77 (100%), oracle (__ASSERT value-level) 52/53 (98%).
+  JIT smoke 102/105 (97%), oracle (__ASSERT value-level, OB1 + bare
+  instruction files) 52/71 (73%). Known-open oracle failures:
+  startup_multiple (2-accu CPU, permanent), insn_4ACCU + insn_JUMP
+  SPZ/LOOP sections (accumulator registers are not modeled across
+  labels), insn_ARITH_R (real-math STW edge cases), insn_SHIFT
+  RLDA/RRDA (rotate-through-carry approximated as RLD/RRD),
+  stw_operators/insn_SE/insn_SS/insn_CALL, sfb0-5, tc200 array/
+  pointer/udt, shutdown. JIT-tier failures: the two Quine AWL files
+  (intra-block jump loop timeout) and one SCL project invocation.
   When these numbers change, refresh them here AND in docs/conformance.md
   ("Current results") AND in the run_conformance.py header comment.
   String handling: `VAR := 'lit'` in DB-init/statement stores len @+1, chars

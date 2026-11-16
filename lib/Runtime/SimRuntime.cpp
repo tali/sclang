@@ -1597,7 +1597,12 @@ void scl_rt_stw_cmp_f(uint8_t pred, double lhs, double rhs) {
     s.vtable->stw_cmp_f(pred, lhs, rhs);
     return;
   }
+  bool unord = std::isnan(lhs) || std::isnan(rhs);
   stw_cmp_set(s, pred, lhs > rhs, lhs < rhs, lhs == rhs);
+  if (unord) {
+    // awlsim: unordered (NaN) comparison -> A0=A1=OV=OS=1
+    s.stw |= (uint16_t)((1u << 6) | (1u << 7) | (1u << 5) | (1u << 4));
+  }
 }
 // v9: arithmetic STW recording (awlsim statusword.setForInteger /
 // setForFloatingPointDWord). A0/A1 = result sign, OV cleared unless the
@@ -1658,10 +1663,10 @@ void scl_rt_stw_sign_f(double value) {
     s.stw &= (uint16_t)~(1u << 5);
   }
 }
-void scl_rt_stw_div_i(int64_t divisor, int64_t result) {
+void scl_rt_stw_div_i(int64_t divisor, int64_t result, int32_t range) {
   auto &s = state();
   if (s.vtable && s.vtable->stw_div_i) {
-    s.vtable->stw_div_i(divisor, result);
+    s.vtable->stw_div_i(divisor, result, range);
     return;
   }
   if (divisor == 0) { // division by zero: unordered + overflow
@@ -1669,7 +1674,9 @@ void scl_rt_stw_div_i(int64_t divisor, int64_t result) {
     s.stw |= (1u << 4) | (1u << 5);
     return;
   }
-  scl_rt_stw_sign_i(result, result, 0, 0, INT32_MAX);
+  // awlsim insn_di_i/insn_di_d: A0/A1/OV from the quotient, OV=OS=1 when the
+  // quotient leaves +-range (0x7FFF for /I, 0x7FFFFFFF for /D)
+  scl_rt_stw_sign_i(result, result, 0, 0, range);
 }
 void scl_rt_stw_div_f(double divisor, double result) {
   auto &s = state();

@@ -319,9 +319,10 @@ def StwSignOp : AwlOp<"stw_sign"> {
   let assemblyFormat = "attr-dict $value `:` type($value) `,` $lhs `:` type($lhs) `,` $rhs `:` type($rhs) `,` $op `,` $range";
 }
 def StwDivOp : AwlOp<"stw_div"> {
-  let summary = "/ I/D: like stw_sign, but divisor==0 sets A0=A1=OV=OS=1 (unordered)";
-  let arguments = (ins AnyType:$divisor, AnyType:$result);
-  let assemblyFormat = "attr-dict $divisor `:` type($divisor) `,` $result `:` type($result)";
+  let summary = "/ I/D: like stw_sign, but divisor==0 sets A0=A1=OV=OS=1 (unordered); OV/OS=1 when quotient leaves +-`range` (0x7FFF for /I, 0x7FFFFFFF for /D)";
+  let arguments = (ins AnyType:$divisor, AnyType:$result,
+                       DefaultValuedAttr<I32Attr, "2147483647">:$range);
+  let assemblyFormat = "attr-dict $divisor `:` type($divisor) `,` $result `:` type($result) `,` $range";
 }
 def F2IOp : AwlOp<"f2i"> {
   let summary = "TRUNC/RND/RND+/RND- (mode 0..3): real -> int32; out of range keeps `orig` and sets OV/OS (runtime)";

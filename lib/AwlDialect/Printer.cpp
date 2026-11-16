@@ -57,8 +57,8 @@ struct TextPrinter {
   static char typeLetter(Type t) {
     if (t.isInteger(16))
       return 'I';
-    if (t.isInteger(32))
-      return 'D';
+    if (t.isInteger(32) || t.isInteger(64))
+      return 'D'; // i64 only appears in internal wide STW computations
     if (t.isF32())
       return 'R';
     return '?';

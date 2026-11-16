@@ -73,11 +73,19 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 - AWL compile: **116/116 pass (100%)**
 - SCL single file: **15/15 pass (100%)**
 - SCL per project: **17/17 pass (100%)**
-- JIT smoke (files with OB 1, full pipeline + execution): **77/77 pass (100%)**
-- Oracle (`__ASSERT` files with OB 1, value-level, exit code must be 0):
-  **52/53 pass (98%)** — see "Oracle tier" below. The only remaining failure
-  is startup_multiple (expects a 2-accu CPU; awlsim's own runner uses
-  --twoaccu for it — permanent under our 4-accu default). Fixed since last
+- JIT smoke (files with OB 1, full pipeline + execution): **102/105 pass (97%)**
+  — failures are the two Quine AWL snippets (intra-block jump loop, timeout)
+  and one SCL project invocation.
+- Oracle (`__ASSERT` files with OB 1 or bare instruction lists, value-level,
+  exit code must be 0): **52/71 pass (73%)** — see "Oracle tier" below.
+  Known-open: startup_multiple (expects a 2-accu CPU; awlsim's own runner
+  uses --twoaccu for it — permanent under our 4-accu default),
+  insn_4ACCU + the insn_JUMP SPZ/SPMZ/LOOP sections (accumulator registers
+  are parse-time only and reset at labels — awlsim keeps 4 runtime accus),
+  insn_ARITH_R (real-math STW edge cases), insn_SHIFT RLDA/RRDA
+  (rotate-through-carry approximated as RLD/RRD), stw_operators,
+  insn_SE/insn_SS (timer oracles need real elapsed time; run with
+  --cycle-ms=0), insn_CALL, shutdown, sfb0-5, tc200 array/pointer/udt. Fixed since last
   writing: infinite-recursion exits cleanly (call-stack guard at awlsim's
   callStackSize = 256, exit code 2); the Formelparser SCL project compiles
   (const symbols fold in rvalue position via mlirGenConstSymbol; forward
@@ -102,16 +110,17 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 ## Remaining failures and known approximations
 
 All compile tiers pass 100% (AWL 116/116, SCL single 15/15, SCL projects
-17/17) and the JIT smoke tier passes 77/77. The oracle tier is 52/53: the
-only failure is `startup_multiple.awl`, which expects a 2-accumulator CPU
-(awlsim's own runner uses `--twoaccu` for it) — permanent under our 4-accu
-default, which `startup_OB100`/`startup_OB102` require. Known flake: the
+17/17) and the JIT smoke tier passes 102/105. The oracle tier is 52/71 —
+see the list above; the structural one is that accumulator registers are not
+modeled across labels (fix: runtime accu slots in the sim, awl dialect
+accu_get/accu_set ops), which blocks insn_4ACCU and the across-label
+SPZ/LOOP jumps. Known flake: the
 LogMsg SCL project fails intermittently (~10%) with a garbage `unknown FB`
 diagnostic — a pre-existing uninitialized-memory bug in SclGen
 (reproduces at b7b6d1e), tracked in AGENTS.md.
 
 Every remaining spec deviation is an `approx` row in the generated SPEC
-matrix ([spec-conformance.md](spec-conformance.md), currently 12 rows, 0
+matrix ([spec-conformance.md](spec-conformance.md), currently 95 tags, 0
 `gap` rows): SF, MCR nesting, TAW, real math via float32 host math,
 TRUNC/RND by truncation, TDB not modelled, FP/FN edge memory, symbolic DB
 members, and the SCL string functions' flat zero-padded buffers
@@ -119,7 +128,7 @@ members, and the SCL string functions' flat zero-padded buffers
 
 ## Oracle tier: what passes and what the failures mean
 
-52 of 53 `__ASSERT` files pass all their executed oracles. Block
+52 of 71 `__ASSERT` files pass all their executed oracles. Block
 calls are now fully modeled: FC params are frame-relative with
 param_in/param_out copies (recursion works — factorial passes), RET_VAL is an
 implicit interface member, indirect `UC FC [MW x]` dispatches over the
