@@ -99,32 +99,27 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
   plus FB VAR_IN ANY params now stage the full 10-byte header into the
   instance DB, not just the raw pointer dword) and any-to-instance-db.awl.
 
-## Remaining failures = documented gaps
+## Remaining failures and known approximations
 
-AWL (7 files) — need new awl dialect ops (not yet added):
+All compile tiers pass 100% (AWL 116/116, SCL single 15/15, SCL projects
+17/17) and the JIT smoke tier passes 77/77. The oracle tier is 52/53: the
+only failure is `startup_multiple.awl`, which expects a 2-accumulator CPU
+(awlsim's own runner uses `--twoaccu` for it) — permanent under our 4-accu
+default, which `startup_OB100`/`startup_OB102` require. Known flake: the
+LogMsg SCL project fails intermittently (~10%) with a garbage `unknown FB`
+diagnostic — a pre-existing uninitialized-memory bug in SclGen
+(reproduces at b7b6d1e), tracked in AGENTS.md.
 
-- shift/rotate instructions `SSI SLD SRD RLD RRD` (insn_SHIFT, shiftregister,
-  shiftregister_tp, quine AWL): the awl dialect has no shift ops and a
-  variable shift count cannot be expressed with the existing arith ops.
-- real math `ABS`, `TAN` (insn_ARITH_R, benchmark): no float math ops in the
-  awl dialect (RND* is approximated by truncation for the same reason).
-
-SCL (9 single / 6 projects) — all external TIA library types or cross-file
-references when a file is compiled alone:
-
-- `Variant`, `Program_Alarm`, `DataLogCreate`/`DataLog*` (TIA library types,
-  lopez-dev BackupAndRestore/LogMsg/rezept);
-- `Remote` (TIA-Put-Get-OUC PUT/GET);
-- undefined constant `FC_ID_CHECK_ARRAY` (FC_ID_CHECK references a symbol from
-  another TIA library file);
-- cross-file types/symbols in Step7-Formelparser-SCL when compiled per file
-  (the project passes as a whole; the `CONCAT`/`STRING_TO_INT`/
-  `INT_TO_STRING` string functions it uses are implemented since —
-  mlirGenStringBuiltin).
+Every remaining spec deviation is an `approx` row in the generated SPEC
+matrix ([spec-conformance.md](spec-conformance.md), currently 12 rows, 0
+`gap` rows): SF, MCR nesting, TAW, real math via float32 host math,
+TRUNC/RND by truncation, TDB not modelled, FP/FN edge memory, symbolic DB
+members, and the SCL string functions' flat zero-padded buffers
+(STRING_TO_REAL/REAL_TO_STRING/VAL_STRG stay external stubs).
 
 ## Oracle tier: what passes and what the failures mean
 
-35 of 53 `__ASSERT` files pass all their executed oracles (was 34). Block
+52 of 53 `__ASSERT` files pass all their executed oracles. Block
 calls are now fully modeled: FC params are frame-relative with
 param_in/param_out copies (recursion works — factorial passes), RET_VAL is an
 implicit interface member, indirect `UC FC [MW x]` dispatches over the
@@ -159,64 +154,16 @@ TIMER/COUNTER-typed block variables hold the timer/counter NUMBER and
 indirect through the T/C area at it (`awl.pack_area` + `scl_rt_*_ptr`), so
 `insn_Z` and `acme-005/006` pass all oracles.
 
-Remaining oracle failures map to known gaps (each message names the line and
-actual/expected):
-
-- pointers/ANY/DB-pointer types (`pointer`, `anypointer`,
-  `any-to-instance-db`, `dbpointer`, `array:257`): remaining asserts are
-  `__ACCU`/`__AR` checks of raw pointer values (ACCU2-4 and AR save/restore
-  by library FCs are not modeled) and P## VL-area FC params read back as 0;
-- `fc21_len`/`fc12_ge_dt`: `__AR` asserts after the call (AR1/AR2 not set by
-  runtime builtins) and GE_DT BCD-FAIL cases where RET_VAL must stay
-  untouched;
-- `struct`, `udt`, `DB`, `latin1` pass: FB/FC interface sections are
-  re-aligned at section boundaries (BOOL bit-packed, WORD/DWORD even),
-  initializer skipping no longer eats members after `END_STRUCT` without
-  `;`, DB-init member chains resolve arbitrarily deep
-  (VAR10.VAR10_3[1].VAR10_3_2[2]), whole-STRUCT/UDT CALL params are copied
-  byte-wise, TYPE declarations are pre-scanned to a fixpoint so forward UDT
-  references size correctly, and single-char quoted literals ('ä') yield
-  their raw byte value. `array`/`string`/`dbpointer`/`symbols`/IEC-FC files
-  compile now (AUF DB [#var] dynamic open, CALL #var through quoted-typed
-  multi-instance vars, END_STRUCT/initializer edge cases); real math
-  (SIN/COS/TAN/.../LN) lowers to libm double calls rounded to f32,
-  bit-identical to awlsim, so benchmark.awl JITs (math.tan legalization);
-- startup info: `ob_startup_info` and `startup_OB102` pass (OB-temp preset
-  header written at OB entry, startup OB 102/100 run before OB 1,
-  __FEATURE implemented); `startup_OB100`/`startup_multiple` additionally
-  need the status word cleared at OB entry (STW gap below);
-- `insn_SI`/`insn_Z`: timer/counter NUMBER indirection through interface
-  words; `insn_MISC`: BCD/INV edge cases; `latin1`: char literal encoding;
-- IEC library FCs (`fc4_delete`, `fc9_eq_dt`, `fc12_ge_dt`, `fc21_len`):
-  still host stubs;
-- remaining oracle failures: the pointer packing family (dbpointer:220+/
-  array:264 expect the implicit 6-byte DB-pointer content in FC param slots
-  and 0x87 = parent-L-frame deref — needs the VL frame model;
-  pointer:45 TARn-operand store; anypointer:166+ string-length asserts;
-  string.awl FC string-param slots need the implicit 6-byte POINTER +
-  VL-frame model like dbpointer),
-  GE_DT BCD-fail RET_VAL-untouched (fc12:616/634),
-  startup_multiple nrAccus=2 (we default 4 — accepted),
-  string.awl JIT timeout, infinite-recursion (stack overflow guard).
-  Fixed since the last count: symbols:60 (quoted DATA_BLOCK names),
-  immediates:27 (P#DBX byte offset), insn_MISC (TAR swap, POP, +ARn,
-  char literals), insn_CALL_multiinstance + clockmem (AR2 = 0x84 packing),
-  insn_CALL:411 (post-call STW clear), any-to-instance-db (SFC 21 FILL with
-  instance-DB ANY pointers: DINO db word + AR2 base + ARRAY repCount),
-  insn_SI:109/142/145 (LC T S5TIME encoding; NER semantics after CLR),
-  fc12_ge_dt:616 (OUT params staged with current value — BCD-fail leaves
-  RET_VAL untouched), pointer-area asserts (LARn/TARn accu semantics),
-  anypointer:127 (ANY ptr dword = P#DBX style, db field 0),
-  string DB-init string initializers (len byte + chars + zero-fill,
-  STRING[n] even-aligned size, STRING[i] char access).
-- known flake: the LogMsg SCL project fails intermittently (~10%) with a
-  garbage `unknown FB` diagnostic — pre-existing uninitialized-memory bug
-  in SclGen (reproduces at b7b6d1e), unrelated to AWL work.
+The only remaining oracle failure is `startup_multiple.awl` (nrAccus: we
+default to 4 accumulators, the file expects 2 — accepted; each failure
+message names the line and actual/expected). The status word IS cleared at
+OB entry (`scl_rt_ob_start`, SPEC-tagged), so `startup_OB100`/`startup_OB102`
+pass; the known LogMsg flake is listed under "Remaining failures" above.
 
 The floor in `run_conformance.py` (`FLOOR_ORACLE = 0.15`) guards against
 regressions.
 
-## What the corpora caught (fixed this round)
+## Historical log: what the corpora caught (early rounds)
 
 The AWL frontend previously passed 56/116; the corpora drove these fixes in
 `lib/AwlGen/AwlGen.cpp` (all covered by `test/AwlGen/awlsim-extensions.awl`):

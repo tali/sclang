@@ -140,8 +140,10 @@ has no `\b` — use python3 for regex edits.
   scl_rt_assert_cmp[_r], Runtime ABI v4; malformed assert forms skip the
   line). sclang driver exits 2 when scl_rt_assert_failures() > 0 after the
   cycle loop.
-  Current: AWL 116/116 (100%), SCL single 15/15, SCL per-project 16/17,
+  Current: AWL 116/116 (100%), SCL single 15/15, SCL per-project 17/17,
   JIT smoke 77/77 (100%), oracle (__ASSERT value-level) 52/53 (98%).
+  When these numbers change, refresh them here AND in docs/conformance.md
+  ("Current results") AND in the run_conformance.py header comment.
   String handling: `VAR := 'lit'` in DB-init/statement stores len @+1, chars
   @+2.., zero-fills to maxlen; STRING[n] size is (n+2) even-aligned;
   ARRAY OF STRING[n] keeps the dim in elemType; STRING[i] = char at +2+(i-1)
@@ -150,7 +152,7 @@ has no `\b` — use python3 for regex edits.
   project intermittently fails with a garbage `unknown FB '<binary>'`
   line — uninitialized string somewhere in SclGen, NOT caused by recent
   changes; worth debugging (ASan build).
-  lit is 114/114. OB-temp presets (OB1 header) are written at OB entry
+  lit is 117/117 (check-sclang). OB-temp presets (OB1 header) are written at OB entry
   (scl_rt_ob_start); the JIT driver runs the startup OB (OB 102 on a
   4-accu CPU, else OB 100) before the OB 1 cycles; __FEATURE t [, v] is
   implemented (awl.feature op -> scl_rt_feature: nrAccus default 4,

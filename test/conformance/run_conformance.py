@@ -30,14 +30,12 @@ import subprocess
 import sys
 
 # Minimum pass rates (fractions) when corpora are present. Current state
-# (LLVM 17 build): compile tier AWL 109/116 = 0.94, SCL single 13/22 = 0.59,
-# SCL per-project 11/17 = 0.65; JIT smoke tier (OB1 files) 69/77 = 0.90;
-# oracle tier (__ASSERT + OB1 files) 10/53 = 0.19 — the failures map to
-# known feature gaps (data blocks/memory areas, counters, timers, strings,
-# startup info, parameterized calls), see docs/conformance.md.
-# Remaining compile failures are documented gaps (awl shift/rotate + real
-# math ops; TIA library types in SCL; a few awlsim files with exotic
-# syntax), see docs/conformance.md.
+# (LLVM 17 build): compile tier AWL 116/116 = 1.00, SCL single 15/15 = 1.00,
+# SCL per-project 17/17 = 1.00; JIT smoke tier (OB1 files) 77/77 = 1.00;
+# oracle tier (__ASSERT + OB1 files) 52/53 = 0.98 — the only failure is
+# startup_multiple.awl (expects a 2-accu CPU; we default to 4). Remaining
+# spec deviations are the approx rows of the SPEC matrix, see
+# docs/conformance.md and docs/spec-conformance.md.
 FLOOR_AWL = 0.90
 FLOOR_SCL_SINGLE = 0.55
 FLOOR_SCL_PROJECT = 0.60
