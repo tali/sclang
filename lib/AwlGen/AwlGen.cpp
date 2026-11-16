@@ -2784,7 +2784,7 @@ private:
         }
       }
       if (!ptr)
-        ptr = zextTo64(popAcc()); // bare LARn = TARn
+        ptr = zextTo64(peekAcc()); // bare LARn = TARn (ACCU1 stays)
       if (m.rfind("+AR", 0) == 0) {
         // +ARn: ARn += offset in bits. A bare +ARn adds ACCU1's low 24 bits
         // (the byte*8+bit part of the pointer in ACCU1).
@@ -2849,9 +2849,28 @@ private:
           }
         }
       }
-      if (!ptr)
-        ptr = zextTo64(popAcc()); // no operand: ACCU1
-      builder.create<awl::ArSetOp>(loc(), builder.getI32IntegerAttr(ar), ptr);
+      mlir::Value arv = builder.create<awl::ArGetOp>(
+          loc(), builder.getI64Type(), builder.getI32IntegerAttr(ar));
+      if (!ptr) {
+        // bare TARn: ACCU1 := ARn, ACCU2 := old ACCU1, ... (awlsim
+        // insn_tarN: accu2.copyFrom(accu1); accu1.copyFrom(arN))
+        if (acc.empty())
+          acc.push_back(constInt(builder.getI32Type(), 0));
+        else
+          acc.erase(acc.begin()); // ACCU4 drops off (4-accu model)
+        acc.push_back(castTo(arv, builder.getI32Type()));
+        return true;
+      }
+      // TARn <operand> stores ARn INTO the operand (awlsim insn_tarN:
+      // store(oper, arN)) — the opposite direction of LARn
+      if (mlir::isa<mlir::scl::DirectType>(ptr.getType())) {
+        builder.create<awl::StoreOp>(loc(), castTo(arv, builder.getI32Type()),
+                                     ptr);
+      } else {
+        // P#x.y literal / P##name / ARm: store through the packed pointer
+        builder.create<awl::StoreIndirectOp>(
+            loc(), arv, ptr, builder.getI32IntegerAttr(32));
+      }
       return true;
     }
     if (lexer.getCurToken() == Tok::lparen &&
@@ -3419,6 +3438,15 @@ private:
     mlir::Value v = acc.back();
     acc.pop_back();
     return v;
+  }
+
+  // ACCU1 without consuming it: TARn/LARn with no operand copy ACCU1 to an
+  // address register but leave the accumulators untouched (awlsim insn_tar:
+  // ARn := ACCU1, ACCUs unchanged).
+  mlir::Value peekAcc() {
+    if (acc.empty())
+      return constInt(builder.getI32Type(), 0);
+    return acc.back();
   }
 
 
@@ -4918,6 +4946,16 @@ private:
     int64_t db = (v >> 16) & 0xFF;
     if (area != 0x84 && area != 0x85)
       return v; // only DB-area pointers have symbolic members
+    // ".DBX"/".DBB"/... are access-width keywords, not symbolic members:
+    // the literal's own byte.bit is the address (P#DB50.DBX 10.0)
+    if (sym.size() >= 4 && sym[0] == '.') {
+      std::string kw;
+      for (char c : sym.substr(1, 3))
+        kw += (char)toupper((unsigned char)c);
+      if (kw == "DBX" || kw == "DBB" || kw == "DBW" || kw == "DBD" ||
+          kw == "DIX" || kw == "DIB" || kw == "DIW" || kw == "DID")
+        return v;
+    }
     std::string text = "DB" + std::to_string(db) + std::string(sym);
     Lexer sub(text, "<ptrsym>");
     sub.start();
@@ -5202,7 +5240,8 @@ private:
       put(1, 8, typeCode);
       put(2, 16, count);
       put(4, 16, (int32_t)((p >> 16) & 0xFF)); // DB number
-      put(6, 32, (int32_t)p);                   // S7 pointer
+      // S7 pointer dword in P#DBX style: db field 0 (awlsim ANYPointer)
+      put(6, 32, (int32_t)(p & 0xFF00FFFFll));
       return true;
     }
     bool isAnyVar = false;
@@ -5277,8 +5316,10 @@ private:
     bool isInstance = pdb == -1; // FB static: current DI at runtime
     if (isInstance)
       areaS7 = 0x84; // awlsim _trans_anyPointerFromDI: area DB + open DI nr
+    // the S7 pointer dword uses P#DBX style for DB areas: db field 0 (the
+    // DB number lives in the ANY header word @+4, awlsim ANYPointer)
     uint32_t ptr = ((uint32_t)areaS7 << 24) |
-                   ((uint32_t)(isInstance ? 0 : (pdb & 0xFF)) << 16) |
+                   ((uint32_t)(areaS7 == 0x84 ? 0 : (pdb & 0xFF)) << 16) |
                    ((uint32_t)(dt.getByte() & 0x1FFF) << 3) |
                    (uint32_t)(dt.getBit() & 7);
     auto put = [&](int32_t i, int32_t w, int32_t val) {
@@ -5445,6 +5486,24 @@ private:
           mlir::Value target = parseOperand(false);
           if (!target)
             return false;
+          // stage the current value as well (awlsim _FC_trans_copyToVL
+          // copies unconditionally): if the callee leaves the OUT slot
+          // untouched, the copy-back below restores the old value
+          if (mlir::isa<mlir::scl::DirectType>(target.getType())) {
+            mlir::Value cur = builder.create<awl::LoadOp>(loc(), target);
+            builder.create<awl::StoreOp>(
+                loc(), cur,
+                mkDirect(mlir::scl::DirectArea::Marker, 0,
+                         kLocalBase + p->byte, 0, p->width));
+          } else if (target.getType().isInteger(64)) {
+            mlir::Value cur = builder.create<awl::LoadIndirectOp>(
+                loc(), builder.getI64Type(), target,
+                builder.getI32IntegerAttr(p->width));
+            builder.create<awl::StoreOp>(
+                loc(), castTo(cur, builder.getI32Type()),
+                mkDirect(mlir::scl::DirectArea::Marker, 0,
+                         kLocalBase + p->byte, 0, p->width));
+          }
           sfcOuts.push_back({p->byte, p->width, target});
         }
       }

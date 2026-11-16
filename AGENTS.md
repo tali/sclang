@@ -141,7 +141,7 @@ has no `\b` — use python3 for regex edits.
   line). sclang driver exits 2 when scl_rt_assert_failures() > 0 after the
   cycle loop.
   Current: AWL 116/116 (100%), SCL single 15/15, SCL per-project 16/17,
-  JIT smoke 74/77 (96%), oracle (__ASSERT value-level) 44/53 (83%).
+  JIT smoke 75/77 (97%), oracle (__ASSERT value-level) 46/53 (87%).
   Known flake (pre-existing at b7b6d1e, ~10% of runs): the LogMsg SCL
   project intermittently fails with a garbage `unknown FB '<binary>'`
   line — uninitialized string somewhere in SclGen, NOT caused by recent
@@ -190,6 +190,14 @@ has no `\b` — use python3 for regex edits.
   _trans_anyPointerFromDI); ARRAY operands set the element count as
   repetition factor. SFC 21 fails with E_DBNOTEXIST only when the DB is
   really not loaded (DB numbers are NOT limited to 0xFF — tests use DB 900).
+- AR/accu semantics (awlsim insn_larN/insn_tarN): LARn bare = ARn := ACCU1,
+  accus UNCHANGED (peekAcc, not popAcc); TARn bare = ACCU1 := ARn with the
+  accus shifting down (accu2 := old accu1); bare TAR swaps AR1/AR2; TARn
+  <operand> STORES ARn into the operand (opposite of LARn). ANY header
+  pointer dwords use P#DBX style (db field 0; real DB in word @+4), and
+  ".DBX"-style suffixes in P# literals are width keywords, not members.
+  OUT params of runtime-called blocks are staged with their current value
+  so a callee that leaves RET_VAL untouched copies the old value back.
   DI-area S7 pointers (area 0x85) decode to
   db=0xFFFF which resolves to the DI register; FB calls emit
   `scl_rt_set_current_di(db)` so `DIW…`/`P##var` work inside FBs.

@@ -71,7 +71,7 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 - SCL per project: **16/17 pass (94%)**
 - JIT smoke (files with OB 1, full pipeline + execution): **74/77 pass (96%)**
 - Oracle (`__ASSERT` files with OB 1, value-level, exit code must be 0):
-  **44/53 pass (83%)** — see "Oracle tier" below (STW/status-bit asserts
+  **46/53 pass (87%)** — see "Oracle tier" below (STW/status-bit asserts
   are evaluated; remaining failures are real value gaps, see the list)
 
 ## Remaining failures = documented gaps
@@ -163,10 +163,11 @@ actual/expected):
   words; `insn_MISC`: BCD/INV edge cases; `latin1`: char literal encoding;
 - IEC library FCs (`fc4_delete`, `fc9_eq_dt`, `fc12_ge_dt`, `fc21_len`):
   still host stubs;
-- remaining oracle failures: the pointer packing family (dbpointer/
-  anypointer/array expect 0x87 VL-area P## pointers for FC params with the
-  implicit DB-pointer calling convention; pointer.awl aborts on a DB
-  out-of-bounds after the same change — needs the VL frame model),
+- remaining oracle failures: the pointer packing family (dbpointer:220+/
+  array:264 expect the implicit 6-byte DB-pointer content in FC param slots
+  and 0x87 = parent-L-frame deref — needs the VL frame model;
+  pointer:45 TARn-operand store; anypointer:166+ string-length asserts;
+  string.awl:361+ DB string initializers don't set the length byte),
   GE_DT BCD-fail RET_VAL-untouched (fc12:616/634),
   startup_multiple nrAccus=2 (we default 4 — accepted),
   string.awl JIT timeout, infinite-recursion (stack overflow guard).
@@ -175,7 +176,10 @@ actual/expected):
   char literals), insn_CALL_multiinstance + clockmem (AR2 = 0x84 packing),
   insn_CALL:411 (post-call STW clear), any-to-instance-db (SFC 21 FILL with
   instance-DB ANY pointers: DINO db word + AR2 base + ARRAY repCount),
-  insn_SI:109/142/145 (LC T S5TIME encoding; NER semantics after CLR).
+  insn_SI:109/142/145 (LC T S5TIME encoding; NER semantics after CLR),
+  fc12_ge_dt:616 (OUT params staged with current value — BCD-fail leaves
+  RET_VAL untouched), pointer-area asserts (LARn/TARn accu semantics),
+  anypointer:127 (ANY ptr dword = P#DBX style, db field 0).
 - known flake: the LogMsg SCL project fails intermittently (~10%) with a
   garbage `unknown FB` diagnostic — pre-existing uninitialized-memory bug
   in SclGen (reproduces at b7b6d1e), unrelated to AWL work.
