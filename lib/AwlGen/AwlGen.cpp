@@ -3348,10 +3348,11 @@ private:
           lexer.next();
         }
       }
-      builder.create<awl::FeatureOp>(
+      // awlsim insn_feature: accu1 := feature value (nrAccus for target 0)
+      pushAcc(builder.create<awl::FeatureOp>(
           loc(), builder.getI32Type(),
           builder.getI32IntegerAttr((int32_t)target),
-          builder.getI32IntegerAttr((int32_t)value));
+          builder.getI32IntegerAttr((int32_t)value)));
       return true;
     }
     // SPEC[AWL] awlsim test directive __SLEEP ms (advance virtual clock), runtime scl_rt_sleep
@@ -6162,6 +6163,11 @@ private:
       expected = castTo(expected, builder.getI64Type());
       builder.create<awl::AssertOp>(loc(), idAttr, opAttr, actual, expected);
     }
+    // awlsim insn_assert_*: after the comparison NER := 0 (only NER — the
+    // RLO/VKE/OR/STA are untouched), which the next logic statement sees
+    builder.create<awl::StwSetBitOp>(loc(), builder.getI32IntegerAttr(0),
+                                      i1Const(false)); // NER := 0
+    stNer = i1Const(false);
     return true;
   }
 
@@ -7097,8 +7103,16 @@ private:
         tab = sfc64Tab;
         tabLen = 1;
       }
-      return emitRtCall(cond, rloVal, "SFC" + std::to_string(n), (int32_t)n,
-                        false, tab, tabLen);
+      auto call = emitRtCall(cond, rloVal, "SFC" + std::to_string(n), (int32_t)n,
+                             false, tab, tabLen);
+      // awlsim system_sfc_46 / system_sfc_m3: STOP/SHUTDOWN raise a
+      // maintenance request that aborts the current scan — terminate the
+      // block here (like BEA); the rest of the block is dead code
+      if (n == 46 || n == -3) {
+        builder.create<awl::BeOp>(loc());
+        blockEnded = true;
+      }
+      return call;
     }
     if (kind == "SFB" && multiBase < 0) {
       // direct SFB call: CALL SFB n, DB m [(params)] — the instance DB and

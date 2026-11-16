@@ -199,6 +199,7 @@ typedef struct SclRtVTable {
   uint32_t (*accu_get)(uint8_t index);   // ACCU index 1..4
   void (*accu_set)(uint8_t index, uint32_t value);
   void (*stw_reset)(void);
+  int (*stop_requested)(void);        // SFC 46/-3 stop flag
   void (*stw_set_bit)(uint8_t bit, uint8_t value);
   void (*stw_cmp_i)(uint8_t pred, int64_t lhs, int64_t rhs);
   void (*stw_cmp_f)(uint8_t pred, double lhs, double rhs);
@@ -311,6 +312,7 @@ void scl_rt_ob_start(uint32_t obNum);
 /// __FEATURE t [, v]: get/set CPU feature flags (t=0 nrAccus, t=1 OB-temp
 /// presets). value < 0 means get. Returns the current value. Sim-only.
 int32_t scl_rt_feature(uint32_t target, int32_t value);
+int scl_rt_stop_requested(void);
 void scl_rt_l_pop(void);
 
 /// Set the DI register (AUF/OPN DI n). DINO/DILG read it. Sim-only.

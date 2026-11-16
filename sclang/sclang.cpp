@@ -521,6 +521,8 @@ int runJit(mlir::ModuleOp module) {
       llvm::errs() << "JIT invocation failed\n" << invocationResult << "\n";
       return -1;
     }
+    if (scl_rt_stop_requested())
+      break; // SFC 46 (STOP) / SFC -3 (SHUTDOWN): awlsim halts the CPU
     if (i + 1 < jitCycles)
       scl_rt_cycle(cycleMs);
   }

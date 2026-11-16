@@ -71,6 +71,7 @@ struct SimState {
   uint64_t clockMs = 0;
   uint64_t lastCycleMs = 0, minCycleMs = 0, maxCycleMs = 0; // OB1 presets
   uint32_t nrAccus = 4;      // __FEATURE 0 (awlsim tests run 4-accu CPUs)
+  bool stopRequested = false; // SFC 46 (STOP) / SFC -3 (SHUTDOWN)
   uint32_t accus[4] = {0, 0, 0, 0}; // ACCU1..4 (index 0 = ACCU1), persistent across labels/blocks
   bool obTempPresets = false; // __FEATURE 1
   TimerState timers[256];                // indexed by timer number
@@ -1180,6 +1181,12 @@ void scl_rt_sfc(uint32_t n) {
     bie(true);
     return;
   }
+  if (n == 46 || n == -3) {
+    // awlsim system_sfc_46 / system_sfc_m3: STOP/SHUTDOWN abort the scan
+    s.stopRequested = true;
+    bie(true);
+    return;
+  }
   if (n != 21) {
     bie(true); // other SFCs: host-provided stub, BIE := 1
     return;
@@ -1921,6 +1928,12 @@ void scl_rt_ob_start(uint32_t obNum) {
 
 // __FEATURE t [, v] (awlsim insn_feature): t=0 number of accumulator
 // registers (default 4), t=1 OB-temp presets enabled. value < 0: get.
+int scl_rt_stop_requested(void) {
+  auto &s = state();
+  if (s.vtable && s.vtable->stop_requested)
+    return s.vtable->stop_requested();
+  return s.stopRequested ? 1 : 0;
+}
 // SPEC[AWL] awlsim __FEATURE t [, v] -> scl_rt_feature (nrAccus, OB-temp presets)
 int32_t scl_rt_feature(uint32_t target, int32_t value) {
   auto &s = state();

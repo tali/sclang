@@ -142,10 +142,11 @@ has no `\b` — use python3 for regex edits.
   cycle loop.
   Current: AWL 116/116 (100%), SCL single 15/15, SCL per-project 17/17,
   JIT smoke 102/105 (97%), oracle (__ASSERT value-level, OB1 + bare
-  instruction files) 55/71 (77%). Known-open oracle failures:
-  startup_multiple (2-accu CPU, permanent),
-  insn_SE/insn_SS (timer oracles need real elapsed time),
-  insn_CALL, sfb0-5, tc200 array/pointer/udt, shutdown.
+  instruction files) 70/71 (99%). Known-open oracle failure:
+  startup_multiple (expects a 2-accu CPU; awlsim's own runner uses
+  --twoaccu for it — permanent under our 4-accu default).
+  dbpointer.awl line 99 (P#"Data".DTVAR1 quoted-DB-name extension) is
+  also open; awlsim itself needs a symbol table for that file.
   Fixed since last writing: runtime ACCU1..4 registers
   (awl.accu_get/accu_set, values now persist across labels and calls),
   which unblocked insn_4ACCU, the insn_JUMP SPZ/LOOP sections and
@@ -161,7 +162,12 @@ has no `\b` — use python3 for regex edits.
   snapping, STW classification incl. denormal-as-f32); __ASSERT==
   compares raw 32-bit patterns (awlsim asScalar); TRUNC/RND fallback
   keeps the original dword bits, RND is half-to-even. insn_ARITH_R now
-  passes fully. JIT-tier failures: the two Quine AWL files
+  passes fully. __ASSERT sets NER=0 after comparing (awlsim
+  insn_assert_*), __FEATURE pushes the feature value into ACCU1, and
+  CALL SFC 46/-3 terminate the block (awlsim STOP/SHUTDOWN abort the
+  scan) — this unblocked insn_CALL, insn_SE/insn_SS, sfb0-5, tc200
+  array/pointer/udt, shutdown and startup_OB100/102. JIT-tier failures:
+  the two Quine AWL files
   (intra-block jump loop timeout) and one SCL project invocation.
   When these numbers change, refresh them here AND in docs/conformance.md
   ("Current results") AND in the run_conformance.py header comment.

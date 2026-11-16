@@ -32,10 +32,9 @@ import sys
 # Minimum pass rates (fractions) when corpora are present. Current state
 # (LLVM 17 build): compile tier AWL 116/116 = 1.00, SCL single 15/15 = 1.00,
 # SCL per-project 17/17 = 1.00; JIT smoke tier (OB1 files) 102/105 = 0.97;
-# oracle tier (__ASSERT + OB1/bare-instruction files) 55/71 = 0.77. Known-open
-# oracle failures: startup_multiple (2-accu CPU), insn_SE/SS
-# (timer oracles need real time), insn_CALL, sfb0-5, tc200 array/pointer/udt,
-# shutdown. Remaining spec deviations are the
+# oracle tier (__ASSERT + OB1/bare-instruction files) 70/71 = 0.99. Known-open
+# oracle failure: startup_multiple (2-accu CPU, needs awlsim --twoaccu).
+# Remaining spec deviations are the
 # approx rows of the SPEC matrix, see docs/conformance.md and
 # docs/spec-conformance.md.
 FLOOR_AWL = 0.90

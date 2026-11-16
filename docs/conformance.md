@@ -77,11 +77,9 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
   — failures are the two Quine AWL snippets (intra-block jump loop, timeout)
   and one SCL project invocation.
 - Oracle (`__ASSERT` files with OB 1 or bare instruction lists, value-level,
-  exit code must be 0): **55/71 pass (77%)** — see "Oracle tier" below.
+  exit code must be 0): **70/71 pass (99%)** — see "Oracle tier" below.
   Known-open: startup_multiple (expects a 2-accu CPU; awlsim's own runner
-  uses --twoaccu for it — permanent under our 4-accu default),
-  insn_SE/insn_SS (timer oracles need real elapsed time; run with
-  --cycle-ms=0), insn_CALL, shutdown, sfb0-5, tc200 array/pointer/udt.
+  uses --twoaccu for it — permanent under our 4-accu default).
   Fixed since last writing: runtime ACCU1..4 registers
   (awl.accu_get/accu_set — accumulators persist across labels/calls),
   which unblocked insn_4ACCU, the insn_JUMP SPZ/LOOP sections and
@@ -95,7 +93,13 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
   classification incl. denormal-as-f32; __ASSERT== compares raw 32-bit
   patterns like awlsim asScalar; TRUNC/RND keep the original dword on
   out-of-range, RND rounds half-to-even like Python round()). insn_ARITH_R
-  now passes fully. Fixed since last
+  now passes fully. Also fixed: __ASSERT sets NER=0 after comparing
+  (awlsim insn_assert_*), __FEATURE loads the feature value into ACCU1,
+  and CALL SFC 46/-3 terminate the block like BEA (awlsim STOP/SHUTDOWN
+  abort the scan; the driver also stops the scan loop) — this unblocked
+  insn_CALL, insn_SE/insn_SS, sfb0-5, tc200 array/pointer/udt, shutdown
+  and startup_OB100/102. dbpointer.awl line 99 (P#"Data".DTVAR1) remains
+  open — awlsim itself needs a symbol table for that file. Fixed since last
   writing: infinite-recursion exits cleanly (call-stack guard at awlsim's
   callStackSize = 256, exit code 2); the Formelparser SCL project compiles
   (const symbols fold in rvalue position via mlirGenConstSymbol; forward
@@ -120,7 +124,7 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 ## Remaining failures and known approximations
 
 All compile tiers pass 100% (AWL 116/116, SCL single 15/15, SCL projects
-17/17) and the JIT smoke tier passes 102/105. The oracle tier is 55/71 —
+17/17) and the JIT smoke tier passes 102/105. The oracle tier is 70/71 —
 see the list above; accumulator registers are now modeled at runtime
 (awl.accu_get/accu_set), so values persist across labels and calls.
 Known flake: the
