@@ -2827,6 +2827,47 @@ struct AwlStwGetLowering : public OpConversionPattern<awl::StwGetOp> {
   }
 };
 
+// ACCU get -> @scl_rt_accu_get(index: i8) -> i32
+struct AwlAccuGetLowering : public OpConversionPattern<awl::AccuGetOp> {
+  using OpConversionPattern<awl::AccuGetOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::AccuGetOp op, awl::AccuGetOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i8 = rewriter.getI8Type();
+    Value idx = rewriter.create<arith::ConstantOp>(
+        loc, i8, rewriter.getI8IntegerAttr(op.getIndex()));
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_accu_get",
+                                rewriter.getFunctionType({i8}, {rewriter.getI32Type()}));
+    auto v = rewriter.create<func::CallOp>(loc, fn, TypeRange{rewriter.getI32Type()},
+                                           ValueRange{idx}).getResult(0);
+    rewriter.replaceOp(op, v);
+    return success();
+  }
+};
+
+// ACCU set -> @scl_rt_accu_set(index: i8, value: i32)
+struct AwlAccuSetLowering : public OpConversionPattern<awl::AccuSetOp> {
+  using OpConversionPattern<awl::AccuSetOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::AccuSetOp op, awl::AccuSetOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i8 = rewriter.getI8Type();
+    auto i32 = rewriter.getI32Type();
+    Value idx = rewriter.create<arith::ConstantOp>(
+        loc, i8, rewriter.getI8IntegerAttr(op.getIndex()));
+    Value v = convertScalarTo(rewriter, loc, adaptor.getValue(), i32);
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_accu_set",
+                                rewriter.getFunctionType({i8, i32}, {}));
+    rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{idx, v});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 // T STW -> @scl_rt_stw_set(word: i32)
 struct AwlStwSetLowering : public OpConversionPattern<awl::StwSetOp> {
   using OpConversionPattern<awl::StwSetOp>::OpConversionPattern;
@@ -3997,6 +4038,7 @@ void SclToStdLoweringPass::runOnOperation() {
   // AWL dialect (ADR 003)
   patterns.add<
       AwlAddLowering, AwlAndLowering, AwlAssignOpLowering, AwlBlockOpLowering,
+      AwlAccuGetLowering, AwlAccuSetLowering,
       AwlCallOpLowering, AwlCastOpLowering, AwlCmpEqLowering, AwlCmpGeLowering,
       AwlAssertOpLowering, AwlAssertROpLowering,
       AwlCmpGtLowering, AwlCmpLeLowering, AwlCmpLtLowering, AwlCmpNeLowering,

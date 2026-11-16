@@ -71,6 +71,7 @@ struct SimState {
   uint64_t clockMs = 0;
   uint64_t lastCycleMs = 0, minCycleMs = 0, maxCycleMs = 0; // OB1 presets
   uint32_t nrAccus = 4;      // __FEATURE 0 (awlsim tests run 4-accu CPUs)
+  uint32_t accus[4] = {0, 0, 0, 0}; // ACCU1..4 (index 0 = ACCU1), persistent across labels/blocks
   bool obTempPresets = false; // __FEATURE 1
   TimerState timers[256];                // indexed by timer number
   CounterState counters[256];            // indexed by counter number
@@ -1534,6 +1535,26 @@ void scl_rt_fr_ptr(uint64_t ptr, uint8_t in) {
 
 // MARK: status word (awlsim statusword; bits NER=0 VKE/RLO=1 STA=2 OR=3
 // OS=4 OV=5 A0/CC0=6 A1/CC1=7 BIE/BR=8)
+// ACCU registers (awlsim cpu.accu1..4): persistent runtime accumulator
+// state, so the frontend can reload the parse-time acc stack at labels.
+uint32_t scl_rt_accu_get(uint8_t index) {
+  auto &s = state();
+  if (s.vtable && s.vtable->accu_get)
+    return s.vtable->accu_get(index);
+  if (index < 1 || index > 4)
+    return 0;
+  return s.accus[index - 1];
+}
+void scl_rt_accu_set(uint8_t index, uint32_t value) {
+  auto &s = state();
+  if (s.vtable && s.vtable->accu_set) {
+    s.vtable->accu_set(index, value);
+    return;
+  }
+  if (index < 1 || index > 4)
+    return;
+  s.accus[index - 1] = value;
+}
 uint32_t scl_rt_stw_get(void) {
   auto &s = state();
   if (s.vtable && s.vtable->stw_get)

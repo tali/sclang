@@ -298,6 +298,19 @@ def StwSetBitOp : AwlOp<"stw_set_bit"> {
   let arguments = (ins I32Attr:$bit, I1:$value);
   let assemblyFormat = "attr-dict $bit `,` $value `:` type($value)";
 }
+// SPEC[AWL] Siemens AWL manual "Accumulator instructions" (ACCU1..4): runtime
+// accumulator registers, persistent across labels and blocks (awlsim cpu.accu1..4)
+def AccuGetOp : AwlOp<"accu_get", [Pure]> {
+  let summary = "read ACCU register $index (1..4) from the runtime (label reload)";
+  let arguments = (ins I32Attr:$index);
+  let results = (outs I32:$result);
+  let assemblyFormat = "attr-dict $index `->` type($result)";
+}
+def AccuSetOp : AwlOp<"accu_set"> {
+  let summary = "write ACCU register $index (1..4) in the runtime (statement-end sync)";
+  let arguments = (ins I32Attr:$index, I32:$value);
+  let assemblyFormat = "attr-dict $index `,` $value `:` type($value)";
+}
 def StwCondOp : AwlOp<"stw_cond", [Pure]> {
   let summary = "U >0 / ==0 / ... / UO: STW condition from A0/A1 (0=Z,1=NZ,2=POS,3=NEG,4=GE,5=LE,6=UO)";
   let arguments = (ins I32Attr:$cond);

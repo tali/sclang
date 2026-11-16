@@ -352,6 +352,8 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_timer_reset_ptr", (void *)&scl_rt_timer_reset_ptr);
     add("scl_rt_fr_ptr", (void *)&scl_rt_fr_ptr);
     // status word (STW), ABI v8
+    add("scl_rt_accu_get", (void *)&scl_rt_accu_get);
+    add("scl_rt_accu_set", (void *)&scl_rt_accu_set);
     add("scl_rt_stw_get", (void *)&scl_rt_stw_get);
     add("scl_rt_stw_set", (void *)&scl_rt_stw_set);
     add("scl_rt_stw_reset", (void *)&scl_rt_stw_reset);

@@ -196,6 +196,8 @@ typedef struct SclRtVTable {
      OS=4 OV=5 A0/CC0=6 A1/CC1=7 BIE/BR=8 (awlsim statusword). */
   uint32_t (*stw_get)(void);
   void (*stw_set)(uint32_t word);
+  uint32_t (*accu_get)(uint8_t index);   // ACCU index 1..4
+  void (*accu_set)(uint8_t index, uint32_t value);
   void (*stw_reset)(void);
   void (*stw_set_bit)(uint8_t bit, uint8_t value);
   void (*stw_cmp_i)(uint8_t pred, int64_t lhs, int64_t rhs);
@@ -282,6 +284,8 @@ void scl_rt_fr_ptr(uint64_t ptr, uint8_t in);
 /// Status word (STW) access, awlsim statusword bit numbering. Sim-only.
 uint32_t scl_rt_stw_get(void);
 void scl_rt_stw_set(uint32_t word);
+uint32_t scl_rt_accu_get(uint8_t index); // ACCU index 1..4
+void scl_rt_accu_set(uint8_t index, uint32_t value);
 void scl_rt_stw_reset(void);
 void scl_rt_stw_set_bit(uint8_t bit, uint8_t value);
 /// Record a comparison into A0/A1 (and set VKE). pred: 0 eq, 1 ne, 2 lt,
