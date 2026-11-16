@@ -71,9 +71,38 @@ def sniff(text):
     return '-x=awl'
 
 
+# awlsim project symbol table (.awlpro "Symbol table" CDATA):
+#   126,Data                    DB 42       DB 42 ...
+# -> --db-sym Data=42 so P#"Data".VAR resolves without the project file.
+AWLSYM_RE = re.compile(r'^\s*\d+,([A-Za-z_][\w]*)\s+(?:DB|DI)\s+(\d+)\s', re.M)
+
+
+def awlpro_db_syms(path):
+    import base64
+    pro = path[:-4] + '.awlpro' if path.endswith('.awl') else None
+    if not pro or not os.path.isfile(pro):
+        return ()
+    text = read_text(pro)
+    chunks = [text]
+    # legacy fileformat-v0: INI with base64-encoded symbol tables
+    # (sym_tab_0=<base64 of "126,Data   DB 42 ...">)
+    for m in re.finditer(r'^sym_tab_\d+=(.*)$', text, re.M):
+        try:
+            chunks.append(base64.b64decode(m.group(1).strip()).decode(
+                'utf-8', 'replace'))
+        except Exception:
+            pass
+    syms = []
+    for chunk in chunks:
+        for m in AWLSYM_RE.finditer(chunk):
+            syms.append('--db-sym=%s=%s' % (m.group(1), m.group(2)))
+    return tuple(syms)
+
+
 # Returns (exit_code, stderr_lines). 0 = success, 2 = executed but __ASSERT
 # oracles failed (oracle tier), anything else = compile/lower/run failure.
 def run_one(sclang, path, xflag, emit='mlir', extra=()):
+    extra = tuple(extra) + awlpro_db_syms(path)
     try:
         p = subprocess.run([sclang, xflag, '--emit=' + emit, *extra, path],
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,

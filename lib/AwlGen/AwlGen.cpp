@@ -32,6 +32,16 @@ using namespace mlir;
 using namespace mlir::awl;
 
 namespace sclang {
+
+// Named DBs from the command line / external symbol tables (awlsim
+// .awlpro "Symbol table"), consulted before the source-declared namedDbs.
+static std::map<std::string, int32_t> gCliNamedDbs;
+
+void awlRegisterNamedDb(llvm::StringRef name, int32_t db) {
+  std::string n = name.upper();
+  gCliNamedDbs[n] = db;
+}
+
 namespace {
 
 // MARK: Lexer
@@ -83,6 +93,7 @@ public:
   bool curBcdLit() const { return cur_.bcdLit; }
   bool curPtrLocal() const { return cur_.ptrLocal; }
   llvm::StringRef curPtrSym() const { return cur_.ptrSym; }
+  bool curPtrLit() const { return cur_.ptrLit; }
   int curPtrTypeCode() const { return cur_.ptrTypeCode; }
   int curPtrCount() const { return cur_.ptrCount; }
 
@@ -117,6 +128,7 @@ private:
     bool bcdLit = false; // C#... counter literal (raw BCD pattern)
     bool ptrLocal = false; // P##name: pointer to a block-local variable
     llvm::StringRef ptrSym;  // P#DB1.SYM...: symbolic member part (raw text)
+    bool ptrLit = false;     // token came from a P#x.y pointer literal
     int ptrTypeCode = -1;    // P#M 10.0 BYTE 7: ANY type code of the literal
     int ptrCount = 0;        // ...and repetition count
     int litWidth = 0;    // B#/W#/L# typed literal: 8/16/32
@@ -566,6 +578,7 @@ private:
         }
         t.intVal = (area << 24) | (db << 16) | (byte * 8 + bit);
         t.tok = Tok::integer;
+        t.ptrLit = true;
         return t;
       }
       // local-data immediate L#<value> (awlsim), e.g. L L#-1
@@ -1173,8 +1186,13 @@ static void parseStructBody(Lexer &lx, Layout &layout,
         // (6 bytes, 10 for ANY) — reserve it so following members shift
         // (FC params live in the caller's L frame; in FBs only IN_OUT
         // compound params are pointer-overridden in the instance DB)
-        if ((fcBlock || section == 2) && isByRefType(t) && !isb)
-          sz = std::max(sz, t == "ANY" ? 10 : 6);
+        if (isByRefType(t) && !isb) {
+          int32_t hdr = t == "ANY" ? 10 : 6;
+          if (fcBlock)
+            sz = std::max(sz, hdr); // FC: header slot, declared size if larger
+          else if (section == 2)
+            sz = hdr; // FB IN_OUT: the field is OVERRIDDEN by a DB-pointer
+        }
         m.widthBits = wb;
         m.isBit = isb;
         if (isb) {
@@ -1474,9 +1492,11 @@ public:
               // declared size.
               bool hdrSlot = kind == "FC" ? isByRefParam(&m)
                                           : (m.section == 2 && isByRefParam(&m));
-              if (hdrSlot)
-                totalBits = std::max(totalBits,
-                                     m.type == "ANY" ? 80 : 48);
+              if (hdrSlot) {
+                int32_t hdrBits = m.type == "ANY" ? 80 : 48;
+                totalBits = kind == "FC" ? std::max(totalBits, hdrBits)
+                                         : hdrBits; // FB IN_OUT: override
+              }
               int32_t endBit = absBit + totalBits;
               if (endBit > L.bitCursor)
                 L.bitCursor = endBit;
@@ -1681,6 +1701,8 @@ private:
   std::string lastOperandType;
   // width (bits) of the most recent indirect [ARn, P#x.y] operand
   int32_t lastIndirectWidth = 0;
+  int32_t ptrParamSlot = -1; // >= 0: parseOperand returned a POINTER-param
+                              // VL slot direct at this byte (header store)
   // DB number of the DATA_BLOCK currently being parsed (-1 = none): bare
   // DBX/DBB/DBW/DBD operands in its init section address this DB
   int32_t dbOverride = -1;
@@ -3763,6 +3785,7 @@ private:
   }
 
   mlir::Value parseOperand(bool bitContext = false) {
+    ptrParamSlot = -1;
     // operand starting with '[': fully indirect U [AR1, P#0.0]
     if (lexer.getCurToken() == Tok::lbracket)
       return parseIndirectBracket(bitContext ? 1 : 16);
@@ -3883,6 +3906,8 @@ private:
           }
         }
         lastOperandType = type;
+        if (isParamMember && !curBlockFb && mi->type == "POINTER")
+          ptrParamSlot = byte; // store/load writes/reads the 6-byte header
         if (isParamMember && !curBlockFb && isByRefType(mi->type)) {
           // FC by-ref compound param (STRING/ANY/DATE_AND_TIME): the VL
           // slot holds a 6-byte pointer header; dereference it — load the
@@ -4282,11 +4307,23 @@ private:
       neg = true;
     }
     if (lexer.getCurToken() == Tok::integer) {
-      int64_t v = lexer.getInteger();
+      bool pl = lexer.curPtrLit();
       int lw = lexer.getLitWidth();
-      lexer.next();
+      // P#... literals: resolve symbolic members (P#DB42.DTVAR1) to their
+      // byte/bit offset via consumePtrLiteral
+      int64_t v = pl ? consumePtrLiteral() : lexer.getInteger();
+      if (!pl)
+        lexer.next();
       if (neg)
         v = -v;
+      if (pl) {
+        // a P#DBn.../P#DIn... literal loaded as a 32-bit value carries the
+        // DB number only in the 48-bit DBPointer, not in the pointer dword
+        // (awlsim: setDWord(AREA_DB<<24 | offset), dbNr separate)
+        uint64_t a = ((uint64_t)v >> 24) & 0xFF;
+        if (a == 0x84 || a == 0x85)
+          v = (int64_t)((uint64_t)v & 0xFF00FFFFll);
+      }
       mlir::Type ty;
       int64_t val;
       if (lw == 8) { // B#.. : unsigned byte, zero-extended into ACCU
@@ -4438,7 +4475,35 @@ private:
       // T STW: write the status word
       builder.create<awl::StwSetOp>(loc(), castTo(v, builder.getI32Type()));
     } else if (mlir::isa<mlir::scl::DirectType>(addr.getType())) {
-      builder.create<awl::StoreOp>(loc(), v, addr);
+      if (ptrParamSlot >= 0) {
+        // T #ptrParam: write the 6-byte DB-pointer header into the VL slot
+        // { db-nr word @+0, ptr dword @+2 with db field 0 }
+        int64_t raw = 0;
+        bool isConst = false;
+        if (auto c = mlir::dyn_cast_or_null<awl::ConstOp>(v.getDefiningOp())) {
+          raw = c.getValue().cast<mlir::IntegerAttr>().getValue().getSExtValue();
+          isConst = true;
+        }
+        if (!isConst) {
+          // non-constant pointer value: plain store fallback (rare)
+          builder.create<awl::StoreOp>(loc(), v, addr);
+          rloActive = false;
+          return true;
+        }
+        auto slot = mlir::cast<mlir::scl::DirectType>(addr.getType());
+        uint32_t areaS7 = (uint32_t)((raw >> 24) & 0xFF);
+        uint32_t dbw = (areaS7 == 0x84 || areaS7 == 0x85)
+                           ? (uint32_t)((raw >> 16) & 0xFF) : 0;
+        uint32_t ptr = (uint32_t)(raw & 0xFF00FFFFll);
+        builder.create<awl::StoreOp>(
+            loc(), constInt(builder.getI32Type(), (int32_t)dbw),
+            mkDirect(slot.getArea(), 0, ptrParamSlot, 0, 16));
+        builder.create<awl::StoreOp>(
+            loc(), constInt(builder.getI32Type(), (int32_t)ptr),
+            mkDirect(slot.getArea(), 0, ptrParamSlot + 2, 0, 32));
+      } else {
+        builder.create<awl::StoreOp>(loc(), v, addr);
+      }
     } else {
       popAcc(); // store to a pseudo operand: value dropped
     }
@@ -5083,6 +5148,25 @@ private:
       return v;
     int64_t area = (v >> 24) & 0xFF;
     int64_t db = (v >> 16) & 0xFF;
+    // P#"Data".VAR: quoted DB name — resolve to its number (area DB)
+    if (sym.size() >= 2 && sym.front() == '"') {
+      size_t close = sym.find('"', 1);
+      if (close != llvm::StringRef::npos) {
+        std::string name = sym.substr(1, close - 1).str();
+        for (auto &c : name)
+          c = (char)toupper((unsigned char)c);
+        auto cli = gCliNamedDbs.find(name);
+        auto nit = cli != gCliNamedDbs.end() ? cli : namedDbs.find(name);
+        bool found = cli != gCliNamedDbs.end() || nit != namedDbs.end();
+        if (found) {
+          area = 0x84;
+          db = nit->second;
+          sym = sym.substr(close + 1); // ".DTVAR1"
+          v = (int64_t)(((uint64_t)area << 24) | ((uint64_t)db << 16) |
+                        ((uint64_t)v & 0xFFFF));
+        }
+      }
+    }
     if (area != 0x84 && area != 0x85)
       return v; // only DB-area pointers have symbolic members
     // ".DBX"/".DBB"/... are access-width keywords, not symbolic members:
@@ -5378,8 +5462,11 @@ private:
   // current lexer position. `#anyvar` copies the variable's own header; any
   // other operand is wrapped in a synthesized ANY header (awlsim converts
   // operand parameters to ANY pointers the same way).
+  // toVl: staging for a CALL param (the header lands in the caller's L
+  // frame, so L-area r-values are seen as VL/0x87 by the callee); false for
+  // runtime-staged SFC/IEC calls (read in the CURRENT frame, L stays 0x86)
   bool emitAnyParamHeader(mlir::scl::DirectArea area, int32_t db,
-                          int32_t byte) {
+                          int32_t byte, bool toVl = true) {
     // P#M 10.0 BYTE 7 ... literal: build the 10-byte ANY header directly
     // from the pointer value + type code + count (awlsim ANYPointerConst)
     if (lexer.getCurToken() == Tok::integer &&
@@ -5469,7 +5556,8 @@ private:
         dt.getArea() == mlir::scl::DirectArea::Input    ? 0x81
         : dt.getArea() == mlir::scl::DirectArea::Output ? 0x82
         : dt.getArea() == mlir::scl::DirectArea::Marker ? 0x83
-        : isLocal                                       ? 0x87
+        : (isLocal && toVl)                             ? 0x87
+        : isLocal                                       ? 0x86
                                                         : 0x84;
     int32_t pdb = dt.getArea() == mlir::scl::DirectArea::DataBlock
                       ? dt.getDb()
@@ -5480,7 +5568,7 @@ private:
     // the S7 pointer dword uses P#DBX style for DB areas: db field 0 (the
     // DB number lives in the ANY header word @+4, awlsim ANYPointer);
     // VL (0x87) has no db field, so its byte offset uses bits 3..23
-    uint32_t byteMask = areaS7 == 0x87 ? 0x1FFFFF : 0x1FFF;
+    uint32_t byteMask = (areaS7 == 0x87 && toVl) ? 0x1FFFFF : 0x1FFF;
     uint32_t ptr = ((uint32_t)areaS7 << 24) |
                    ((uint32_t)(areaS7 == 0x84 ? 0 : (pdb & 0xFF)) << 16) |
                    ((uint32_t)(dt.getByte() & byteMask) << 3) |
@@ -5653,7 +5741,7 @@ private:
           if (p->any) {
             // ANY param: stage the full 10-byte ANY header at kLocalBase
             if (!emitAnyParamHeader(mlir::scl::DirectArea::Marker, 0,
-                                    kLocalBase + p->byte))
+                                    kLocalBase + p->byte, false))
               return false;
           } else {
             mlir::Value v = parseCallParamValue(nullptr);
@@ -6195,18 +6283,28 @@ private:
         int32_t byte = isDbParam ? paramBase + m->byte : kLocalBase + m->byte;
         int32_t width = m->widthBits ? m->widthBits : 16;
         bool isArray = m->type == "ARRAY" && m->count > 1;
-        if (!isOutput && byRef && !isDbParam &&
-            lexer.getCurToken() == Tok::ident && lexer.curQuoted() &&
-            lexer.curQuoteChar() == '\'' && m->type.rfind("STRING", 0) == 0) {
-          // string literal for a by-ref STRING param: copy the string into
-          // the CALLER's L frame past the callee's parameter area and stage
-          // a {0, VL-pointer} header at the param slot (awlsim
+        bool strLit = lexer.getCurToken() == Tok::ident && lexer.curQuoted() &&
+                      lexer.curQuoteChar() == '\'' &&
+                      m->type.rfind("STRING", 0) == 0;
+        bool dtLit = m->type == "DATE_AND_TIME" &&
+                     lexer.getCurToken() == Tok::integer;
+        if (!isOutput && byRef && !isDbParam && (strLit || dtLit)) {
+          // literal (string / DT#) for a by-ref compound FC param: copy the
+          // value into the CALLER's L frame past the callee's parameter area
+          // and stage a {0, VL-pointer} header at the param slot (awlsim
           // _FC_trans_copyToVLWithDBPtr: L -> VL when forwarded)
-          std::string raw = lexer.getIdent().str();
-          lexer.next();
-          int32_t maxlen =
-              m->type.size() > 6 ? atoi(m->type.c_str() + 6) : 254;
-          int32_t litBytes = maxlen + 2;
+          std::string raw;
+          int64_t dtVal = 0;
+          int32_t maxlen = 254;
+          if (strLit) {
+            raw = lexer.getIdent().str();
+            lexer.next();
+            maxlen = m->type.size() > 6 ? atoi(m->type.c_str() + 6) : 254;
+          } else {
+            dtVal = lexer.getInteger(); // DT#...: 8 BCD bytes, byte0=year
+            lexer.next();
+          }
+          int32_t litBytes = strLit ? maxlen + 2 : 8;
           if (litBytes & 1)
             ++litBytes;
           // past the callee's whole parameter area within this frame
@@ -6220,12 +6318,18 @@ private:
                 loc(), constInt(builder.getI32Type(), v),
                 mkDirect(mlir::scl::DirectArea::Local, 0, base + off, 0, 8));
           };
-          putB(0, maxlen);
-          putB(1, (int32_t)raw.size());
-          for (size_t i = 0; i < raw.size(); ++i)
-            putB(2 + (int32_t)i, (unsigned char)raw[i]);
-          for (int32_t i = (int32_t)raw.size(); i < maxlen; ++i)
-            putB(2 + i, 0);
+          if (strLit) {
+            putB(0, maxlen);
+            putB(1, (int32_t)raw.size());
+            for (size_t i = 0; i < raw.size(); ++i)
+              putB(2 + (int32_t)i, (unsigned char)raw[i]);
+            for (int32_t i = (int32_t)raw.size(); i < maxlen; ++i)
+              putB(2 + i, 0);
+          } else {
+            // DT# packs byte 0 (year) in the HIGH byte of the integer
+            for (int32_t k = 0; k < 8; ++k)
+              putB(k, (int32_t)((dtVal >> (8 * (7 - k))) & 0xFF));
+          }
           // stage the 6-byte header { db-nr 0, VL pointer } in the marker
           // staging area; param_in copies it to the caller frame's VL area
           builder.create<awl::StoreOp>(
@@ -6244,6 +6348,33 @@ private:
           bool ok = m->type == "ANY"
               ? emitAnyParamHeader(area, isDbParam ? paramDb : 0, byte)
               : emitPtrParamHeader(area, isDbParam ? paramDb : 0, byte);
+          if (!ok)
+            return false;
+          continue;
+        }
+        if (!isOutput && m->type == "POINTER" &&
+            lexer.getCurToken() == Tok::integer && lexer.curPtrLit()) {
+          // POINTER param, P#... literal RHS: stage the 6-byte DB-pointer
+          // { db-nr word @+0, S7 ptr dword @+2 with db field 0 } in the
+          // slot (awlsim DBPointer memory layout)
+          int64_t v = consumePtrLiteral(); // resolves symbolic members
+          uint32_t areaS7 = (uint32_t)((v >> 24) & 0xFF);
+          uint32_t dbw = (areaS7 == 0x84 || areaS7 == 0x85)
+                             ? (uint32_t)((v >> 16) & 0xFF)
+                             : 0;
+          uint32_t ptr = (uint32_t)(v & 0xFF00FFFFll); // db field 0
+          builder.create<awl::StoreOp>(
+              loc(), constInt(builder.getI32Type(), (int32_t)dbw),
+              mkDirect(area, isDbParam ? paramDb : 0, byte, 0, 16));
+          builder.create<awl::StoreOp>(
+              loc(), constInt(builder.getI32Type(), (int32_t)ptr),
+              mkDirect(area, isDbParam ? paramDb : 0, byte + 2, 0, 32));
+          continue;
+        }
+        if (!isOutput && m->type == "POINTER" && callRhsAddressable()) {
+          // POINTER param, addressable operand RHS (DB50.DBX 10.1, M 99.7,
+          // #var): stage the pointer header like a by-ref param
+          bool ok = emitPtrParamHeader(area, isDbParam ? paramDb : 0, byte);
           if (!ok)
             return false;
           continue;
@@ -6307,9 +6438,10 @@ private:
             outParams.push_back(
                 {m, target, isArray && mlir::isa<mlir::scl::DirectType>(
                                           target.getType())});
-        } else if (byRef && callRhsAddressable()) {
-          // by-reference OUT param: the callee writes through the staged
-          // pointer; nothing to read back
+        } else if ((byRef || m->type == "POINTER") && callRhsAddressable()) {
+          // by-reference / POINTER OUT param: stage the pointer header
+          // before the call so the callee can write through it; nothing to
+          // read back as a value
           bool ok = m->type == "ANY"
               ? emitAnyParamHeader(area, isDbParam ? paramDb : 0, byte)
               : emitPtrParamHeader(area, isDbParam ? paramDb : 0, byte);

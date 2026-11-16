@@ -137,6 +137,12 @@ static cl::opt<std::string> runtimeLib(
 /// After a JIT run with the sim runtime, dump all non-zero memory-area bytes
 /// and the virtual clock to stdout (makes %I/%Q/%M/%DB writes observable in
 /// tests, e.g. for SCL-vs-AWL cross-checks).
+static cl::list<std::string> dbSyms(
+    "db-sym",
+    cl::desc("Register a named DB from an external symbol table: NAME=DBNUM "
+             "(awlsim .awlpro symbol table), e.g. --db-sym Data=42"),
+    cl::value_desc("NAME=DBNUM"), cl::CommaSeparated);
+
 static cl::opt<bool> dumpAreas(
     "dump-areas", cl::init(false),
     cl::desc("After --emit=jit, dump the sim runtime's memory areas and "
@@ -178,6 +184,13 @@ int loadMLIR(mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &modu
       if (std::error_code EC = fileOrErr.getError()) {
         llvm::errs() << "Could not open input file: " << EC.message() << "\n";
         return 6;
+      }
+      for (auto &ds : dbSyms) {
+        auto eq = ds.find('=');
+        if (eq == std::string::npos)
+          continue;
+        sclang::awlRegisterNamedDb(ds.substr(0, eq),
+                                   (int32_t)atoi(ds.substr(eq + 1).c_str()));
       }
       module = sclang::awlGen(context, fileOrErr.get()->getBuffer(),
                               std::string(inputFilename));

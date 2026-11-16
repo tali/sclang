@@ -71,11 +71,12 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 - SCL per project: **16/17 pass (94%)**
 - JIT smoke (files with OB 1, full pipeline + execution): **74/77 pass (96%)**
 - Oracle (`__ASSERT` files with OB 1, value-level, exit code must be 0):
-  **42/53 pass (79%)** — see "Oracle tier" below (STW/status-bit asserts
-  are evaluated; remaining failures are real value gaps, see the list).
-  (Was 46/53 before the VL/pointer-header work; string.awl, factorial.awl
-  and the FC-param family now pass, the remaining failures moved to
-  anypointer/array/dbpointer/pointer/sfc21/fc12/fc21_len details.)
+  **48/53 pass (91%)** — see "Oracle tier" below. Remaining: startup_multiple
+  (nrAccus, permanent), any-to-instance-db:89, anypointer:166, array:264
+  (ARRAY params still value-copied, not pointer-forwarded), pointer:45
+  (TARn LD-operand stores the packed AR, not the raw 32-bit pointer),
+  infinite-recursion (no stack guard), and the pre-existing Formelparser
+  SCL project gap.
 
 ## Remaining failures = documented gaps
 

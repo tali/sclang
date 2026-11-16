@@ -21,6 +21,11 @@ mlir::OwningOpRef<mlir::ModuleOp> awlGen(mlir::MLIRContext &context,
                                          llvm::StringRef source,
                                          llvm::StringRef filename);
 
+/// Register a named DB from an external symbol table (e.g. an awlsim
+/// .awlpro "Symbol table": `126,Data DB 42`), so that P#"Data".VAR and
+/// DATA_BLOCK "Data" resolve to that DB number. Call before awlGen().
+void awlRegisterNamedDb(llvm::StringRef name, int32_t db);
+
 } // namespace sclang
 
 #endif // SCLANG_AWLGEN_AWLGEN_H_

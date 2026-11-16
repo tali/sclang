@@ -283,6 +283,13 @@ has no `\b` — use python3 for regex edits.
     VL (0x87) pointers decode in `rawToPacked` with a 21-bit byte field
     (bits 3..23 — the DB field is unused for VL), because the FC param area
     starts at kLocalBase = 8192 > 8191 (13-bit S7 byte field max).
+  - By-ref literal staging: a string or DT# literal for an FC by-ref
+    compound param is copied into the caller's L frame past the callee's
+    param area and a {0, 0x87|off} header staged (DT# packs byte0=year in
+    the HIGH byte of the i64). ANY headers staged for CALL params map
+    L-area r-values to VL (0x87); the same header staged for a runtime
+    SFC/IEC call (emitRtCall) keeps L (0x86) — the runtime resolves it in
+    the CURRENT frame (`toVl` flag on emitAnyParamHeader).
   - By-ref compound params (STRING[n]/DATE_AND_TIME/ANY — `isByRefType`)
     carry a pointer header in their slot: 6 bytes {db-nr word @+0, S7 ptr
     dword @+2}, 10 bytes for ANY. The header size is RESERVED in the layout
@@ -299,6 +306,21 @@ has no `\b` — use python3 for regex edits.
     1-based char at byte 2+(i-1), width 8). FB IN/OUT compound params are
     copied BY VALUE into the instance DB slot (byte-wise `copyBlockParam`,
     or the literal directly).
+  - POINTER-typed params are passed by VALUE as a 6-byte DB-pointer header
+    in the slot: P# literal RHS stages {db word, ptr dword db-field-0}
+    directly; an addressable operand RHS (DB50.DBX 10.1, M 99.7) goes
+    through `emitPtrParamHeader` like a by-ref param; OUT POINTER params
+    (and POINTER RET_VAL) get the header staged before the call so the
+    callee can write through it. `T #ptrParam` (ptrParamSlot flag from
+    parseOperand) writes the header {db word, ptr dword} into the VL slot.
+  - P# literal rules (awlsim): a P#DBn.../P#DIn... literal loaded as a
+    32-bit value has db field 0 in the dword (the DB number lives only in
+    the 48-bit DBPointer) — masked in `parseConst` for ptrLit tokens, which
+    also resolve symbolic members via `consumePtrLiteral` (P#DB42.DTVAR1).
+    `consumePtrLiteral` also resolves quoted DB names P#"Data".VAR via
+    `namedDbs` or the CLI-registered `gCliNamedDbs` (--db-sym Name=DB,
+    fed by the conformance harness from sibling .awlpro symbol tables,
+    both XML-CDATA and legacy base64 INI formats).
   - `P#DBn.SYM[.SUB][[i]]` symbolic pointer literals: the lexer captures the
     member part in `Token.ptrSym` (+ `ptrTypeCode`/`ptrCount` for ANY
     suffixes like `P#M 10.0 BYTE 7`); `consumePtrLiteral()` resolves the
