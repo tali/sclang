@@ -141,7 +141,7 @@ has no `\b` — use python3 for regex edits.
   line). sclang driver exits 2 when scl_rt_assert_failures() > 0 after the
   cycle loop.
   Current: AWL 116/116 (100%), SCL single 15/15, SCL per-project 16/17,
-  JIT smoke 74/77 (96%), oracle (__ASSERT value-level) 37/53 (70%).
+  JIT smoke 74/77 (96%), oracle (__ASSERT value-level) 41/53 (77%).
   lit is 114/114. OB-temp presets (OB1 header) are written at OB entry
   (scl_rt_ob_start); the JIT driver runs the startup OB (OB 102 on a
   4-accu CPU, else OB 100) before the OB 1 cycles; __FEATURE t [, v] is
@@ -163,6 +163,18 @@ has no `\b` — use python3 for regex edits.
   direct), packed big-endian with awlsim's float-msec + weekday rules.
 - `[ARn, P#x.y]` addressing is a TEMPORARY offset: `scl_rt_ar_add` must NOT
   write back into the AR register (except explicit `+ARn` which does).
+- AR/pointer semantics (awlsim-exact): `LARn`/`TARn` P#x.y store the full S7
+  32-bit pointer (area<<24|db<<16|byte<<3|bit); `+ARn off` adds only the low
+  24 bits (byte*8+bit) — a bare `+ARn` adds ACCU1's low 24 bits (new
+  `awl.ar_add` op takes a runtime i64 offset); bare `TAR` swaps AR1/AR2;
+  `POP`/`LEAVE` = ACCU1 := ACCU2 (ACCU2 unchanged); `TAK` swaps ACCU1/2.
+  `CALL FB n, DB m` sets AR2 = 0x84-packed (AREA_DB_S | base offset, db
+  field 0 = current DI), NOT 0x85. The P# lexer must not treat whitespace
+  before the byte number as a symbolic member (ptrSym) — skipWs before
+  symBegin; and Token.quoteChar must be captured BEFORE lexer.next().
+  Single-quoted literals 'AB' pack chars big-endian ('ABCD' = 0x41424344);
+  double-quoted are names/symbols. DATA_BLOCK "Name" gets a stable DB number
+  (namedDbs, from 100) so "Name".member resolves symbolically.
   DI-area S7 pointers (area 0x85) decode to
   db=0xFFFF which resolves to the DI register; FB calls emit
   `scl_rt_set_current_di(db)` so `DIW…`/`P##var` work inside FBs.

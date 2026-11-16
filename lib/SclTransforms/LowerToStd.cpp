@@ -2612,8 +2612,10 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
                                         ValueRange{arC2, offC})
                   .getResult(0);
       } else {
+        // awlsim sets AR2 = AREA_DB_S | base offset (P#DBX 0.0 style, db
+        // field 0 = current DI register at use time), not the DI area code
         auto areaC = rewriter.create<arith::ConstantOp>(
-            op.getLoc(), i32, rewriter.getI32IntegerAttr(0x85));
+            op.getLoc(), i32, rewriter.getI32IntegerAttr(0x84));
         auto zero32 = rewriter.create<arith::ConstantOp>(
             op.getLoc(), i32, rewriter.getI32IntegerAttr(0));
         ptr = rewriter
@@ -3490,6 +3492,27 @@ struct AwlIndirectOpLowering : public OpConversionPattern<awl::IndirectOp> {
   }
 };
 
+// +ARn off -> @scl_rt_ar_add(ar: i8, offBits: i32) -> i64
+struct AwlArAddOpLowering : public OpConversionPattern<awl::ArAddOp> {
+  using OpConversionPattern<awl::ArAddOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(awl::ArAddOp op, awl::ArAddOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    auto i8 = rewriter.getI8Type();
+    auto i32 = rewriter.getI32Type();
+    Value arC = rewriter.create<arith::ConstantOp>(
+        loc, i8, rewriter.getI8IntegerAttr(op.getAr()));
+    Value offC = rewriter.create<arith::TruncIOp>(loc, i32, adaptor.getOff());
+    auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_ar_add",
+                                rewriter.getFunctionType({i8, i32}, {rewriter.getI64Type()}));
+    rewriter.replaceOpWithNewOp<func::CallOp>(
+        op, fn, TypeRange{rewriter.getI64Type()}, ValueRange{arC, offC});
+    return success();
+  }
+};
+
 // L [AR1, ...] -> @scl_rt_read_indirect(ptr: i64, widthBytes: i8) -> i64
 struct AwlLoadIndirectOpLowering
     : public OpConversionPattern<awl::LoadIndirectOp> {
@@ -3872,7 +3895,7 @@ void SclToStdLoweringPass::runOnOperation() {
       AwlNopOpLowering, AwlNotOpLowering, AwlOrLowering, AwlPackAreaOpLowering,
       AwlPackPtrOpLowering,
       AwlArGetOpLowering, AwlArSetOpLowering, AwlDbInfoOpLowering,
-      AwlIndirectOpLowering,
+      AwlArAddOpLowering, AwlIndirectOpLowering,
       AwlLoadBitIndirectOpLowering,
       AwlLoadIndirectOpLowering, AwlRealMathOpLowering, AwlSetDbOpLowering,
       AwlSetDbvOpLowering, AwlSetDbSizeOpLowering, AwlSetDbRefOpLowering,

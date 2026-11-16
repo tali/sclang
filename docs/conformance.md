@@ -71,7 +71,7 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 - SCL per project: **16/17 pass (94%)**
 - JIT smoke (files with OB 1, full pipeline + execution): **74/77 pass (96%)**
 - Oracle (`__ASSERT` files with OB 1, value-level, exit code must be 0):
-  **37/53 pass (70%)** — see "Oracle tier" below (STW/status-bit asserts
+  **41/53 pass (77%)** — see "Oracle tier" below (STW/status-bit asserts
   are evaluated; remaining failures are real value gaps, see the list)
 
 ## Remaining failures = documented gaps
@@ -163,13 +163,17 @@ actual/expected):
   words; `insn_MISC`: BCD/INV edge cases; `latin1`: char literal encoding;
 - IEC library FCs (`fc4_delete`, `fc9_eq_dt`, `fc12_ge_dt`, `fc21_len`):
   still host stubs;
-- remaining oracle failures: the pointer packing family (`__AR` raw
-  pointers, ANY/DB pointer staging: dbpointer/anypointer/array expect
-  0x87000000 VL pointers, insn_CALL/insn_MISC expect 0x84-packed DBX),
-  immediates:27 (DB init readback via AR1), symbols:60 (symbolic DB read),
-  insn_SI:109 (acc-stack edge), GE_DT BCD-fail RET_VAL-untouched
+- remaining oracle failures: the pointer packing family (dbpointer/
+  anypointer/array expect 0x87 VL-area P## pointers for FC params with the
+  implicit DB-pointer calling convention; pointer.awl aborts on a DB
+  out-of-bounds after the same change — needs the VL frame model),
+  insn_CALL:411 (OV after call), any-to-instance-db:60 (SFC 21 RET_VAL),
+  insn_SI:109 (LC T current timer value), GE_DT BCD-fail RET_VAL-untouched
   (fc12:616/634), startup_multiple nrAccus=2 (we default 4 — accepted),
-  string.awl JIT timeout.
+  string.awl JIT timeout, infinite-recursion (stack overflow guard).
+  Fixed since the last count: symbols:60 (quoted DATA_BLOCK names),
+  immediates:27 (P#DBX byte offset), insn_MISC (TAR swap, POP, +ARn,
+  char literals), insn_CALL_multiinstance + clockmem (AR2 = 0x84 packing).
 
 The floor in `run_conformance.py` (`FLOOR_ORACLE = 0.15`) guards against
 regressions.

@@ -79,6 +79,7 @@ public:
   // line of the current token (lineNo itself is ahead due to lookahead)
   int curLine() const { return cur_.line; }
   bool curQuoted() const { return cur_.quoted; }
+  char curQuoteChar() const { return cur_.quoteChar; }
   bool curBcdLit() const { return cur_.bcdLit; }
   bool curPtrLocal() const { return cur_.ptrLocal; }
   llvm::StringRef curPtrSym() const { return cur_.ptrSym; }
@@ -112,6 +113,7 @@ private:
     int64_t intVal = 0;
     double realVal = 0;
     bool quoted = false; // came from a "..." or '...' literal
+    char quoteChar = '\''; // which quote: '...' literal vs "..." name
     bool bcdLit = false; // C#... counter literal (raw BCD pattern)
     bool ptrLocal = false; // P##name: pointer to a block-local variable
     llvm::StringRef ptrSym;  // P#DB1.SYM...: symbolic member part (raw text)
@@ -486,6 +488,7 @@ private:
               cur = cur.drop_front();
         }
         // symbolic member parts: P#DB42.DTVAR1, P#"DB".VAR, [i]
+        skipWs();
         const char *symBegin = cur.begin();
         while (true) {
           skipWs();
@@ -741,6 +744,7 @@ private:
         cur = cur.drop_front();
       t.tok = Tok::ident;
       t.quoted = true;
+      t.quoteChar = '\'';
       return t;
     }
     case '"': { // quoted name ("OB1"): scan as ident
@@ -752,6 +756,7 @@ private:
         cur = cur.drop_front();
       t.tok = Tok::ident;
       t.quoted = true;
+      t.quoteChar = '"';
       return t;
     }
     case ':': t.tok = Tok::colon; return t;
@@ -1209,6 +1214,8 @@ public:
   std::vector<std::string> typeDeclSpans; // TYPE decl text, for fixpoint
   std::map<std::string, Layout> tempLayouts; // VAR_TEMP of OB/FC/FB (L-stack)
   std::map<std::string, Layout> namedLayouts; // FUNCTION(_BLOCK) quoted names
+  std::map<std::string, int32_t> namedDbs;  // DATA_BLOCK "Name" -> DB number
+  int32_t nextNamedDb = 100;                 // numbers assigned to quoted DBs
   // quoted block name -> {kind, num}, for CALL #var through a quoted-typed
   // multi-instance variable (MULTI : "Function Block 2")
   std::map<std::string, std::pair<std::string, int32_t>> namedBlockNums;
@@ -1472,17 +1479,7 @@ public:
       }
       if (w == "DATA_BLOCK") {
         lx.next();
-        int32_t db = 0;
-        if (lx.getCurToken() == Tok::ident && upperStr(lx.getIdent()) == "DB") {
-          lx.next();
-          if (lx.getCurToken() == Tok::integer) {
-            db = (int32_t)lx.getInteger();
-            lx.next();
-          }
-        } else if (lx.getCurToken() == Tok::integer) {
-          db = (int32_t)lx.getInteger();
-          lx.next();
-        }
+        int32_t db = parseDbHeader(lx);
         while (lx.getCurToken() != Tok::eof) {
           if (lx.getCurToken() == Tok::ident) {
             std::string s = upperStr(lx.getIdent());
@@ -1782,19 +1779,33 @@ private:
   /// BEGIN section holds initial values (`DBn.DBW 2 := 16#00FF`), which are
   /// emitted as stores into an awl.block "__scl_db_init" that the JIT driver
   /// runs once before the first scan.
+  // Parse the DATA_BLOCK header token after the DATA_BLOCK keyword: DB n,
+  // a bare number, or a quoted name (registered in namedDbs).
+  int32_t parseDbHeader(Lexer &lx) {
+    int32_t db = 0;
+    if (lx.getCurToken() == Tok::ident && upperStr(lx.getIdent()) == "DB") {
+      lx.next();
+      if (lx.getCurToken() == Tok::integer) {
+        db = (int32_t)lx.getInteger();
+        lx.next();
+      }
+    } else if (lx.getCurToken() == Tok::integer) {
+      db = (int32_t)lx.getInteger();
+      lx.next();
+    } else if (lx.getCurToken() == Tok::ident && lx.curQuoted()) {
+      std::string name = upperStr(lx.getIdent());
+      auto it = namedDbs.find(name);
+      if (it == namedDbs.end())
+        it = namedDbs.emplace(name, nextNamedDb++).first;
+      db = it->second;
+      lx.next();
+    }
+    return db;
+  }
+
   bool parseDataBlock() {
     lexer.next(); // DATA_BLOCK
-    int32_t db = 0;
-    if (lexer.getCurToken() == Tok::ident && upperIdent() == "DB") {
-      lexer.next();
-      if (lexer.getCurToken() == Tok::integer) {
-        db = (int32_t)lexer.getInteger();
-        lexer.next();
-      }
-    } else if (lexer.getCurToken() == Tok::integer) {
-      db = (int32_t)lexer.getInteger();
-      lexer.next();
-    }
+    int32_t db = parseDbHeader(lexer);
     while (lexer.getCurToken() != Tok::eof) {
       if (lexer.getCurToken() == Tok::ident &&
           upperIdent() == "END_DATA_BLOCK") {
@@ -2540,14 +2551,19 @@ private:
       if (w.rfind("AR", 0) == 0 && w.size() == 3 && isdigit(w[2])) {
         // + AR1 P#x.y: address register arithmetic — ARn += offset (bits)
         int ar = w[2] - '0';
-        int64_t off = 0;
+        mlir::Value off;
         if (lexer.getCurToken() == Tok::integer ||
             lexer.getCurToken() == Tok::real) {
-          off = consumePtrLiteral();
+          off = constInt(builder.getI64Type(),
+                         consumePtrLiteral() & 0xFFFFFF); // byte*8+bit part
+        } else {
+          // bare + ARn: add ACCU1's low 24 bits
+          off = builder.create<awl::AndOp>(
+              loc(), builder.getI64Type(), zextTo64(popAcc()),
+              constInt(builder.getI64Type(), 0xFFFFFF));
         }
-        auto np = builder.create<awl::IndirectOp>(
-            loc(), builder.getI64Type(), builder.getI32IntegerAttr(ar),
-            builder.getI32IntegerAttr((int32_t)off));
+        auto np = builder.create<awl::ArAddOp>(
+            loc(), builder.getI64Type(), builder.getI32IntegerAttr(ar), off);
         builder.create<awl::ArSetOp>(loc(), builder.getI32IntegerAttr(ar), np);
         rloActive = false;
         return true;
@@ -2728,9 +2744,9 @@ private:
         ptr = parsePtrLocal(); // LAR1 P##name
       } else if (lexer.getCurToken() == Tok::integer ||
           lexer.getCurToken() == Tok::real) {
-        int64_t off = consumePtrLiteral(); // P#x.y (byte*8+bit, sym resolved)
+        int64_t off = consumePtrLiteral(); // P#x.y (sym resolved)
         ptr = constInt(builder.getI64Type(), off);
-        offVal = off;
+        offVal = off & 0xFFFFFF; // +ARn adds only the byte*8+bit part
       } else if (lexer.getCurToken() == Tok::ident && !lexer.curQuoted()) {
         std::string w = upperIdent();
         if (w == "AR1" || w == "AR2") { // LARn ARm: copy the other AR
@@ -2765,11 +2781,16 @@ private:
       }
       if (!ptr)
         ptr = zextTo64(popAcc()); // bare LARn = TARn
-      if (m.rfind("+AR", 0) == 0 && offVal >= 0) {
-        // +ARn P#x.y: ARn += offset (in bit units) — ar_add + store back
-        auto np = builder.create<awl::IndirectOp>(
-            loc(), builder.getI64Type(), builder.getI32IntegerAttr(ar),
-            builder.getI32IntegerAttr((int32_t)offVal));
+      if (m.rfind("+AR", 0) == 0) {
+        // +ARn: ARn += offset in bits. A bare +ARn adds ACCU1's low 24 bits
+        // (the byte*8+bit part of the pointer in ACCU1).
+        mlir::Value off =
+            offVal >= 0 ? constInt(builder.getI64Type(), offVal)
+                        : builder.create<awl::AndOp>(
+                              loc(), builder.getI64Type(), ptr,
+                              constInt(builder.getI64Type(), 0xFFFFFF));
+        auto np = builder.create<awl::ArAddOp>(
+            loc(), builder.getI64Type(), builder.getI32IntegerAttr(ar), off);
         builder.create<awl::ArSetOp>(loc(), builder.getI32IntegerAttr(ar), np);
       } else {
         builder.create<awl::ArSetOp>(loc(), builder.getI32IntegerAttr(ar), ptr);
@@ -2779,6 +2800,16 @@ private:
     if (m.rfind("TAR", 0) == 0) {
       // TAR1/TAR2 [operand]: AR := pointer operand, or ACCU1 if none
       int ar = (m.size() >= 4 && isdigit(m[3])) ? m[3] - '0' : 1;
+      if (m == "TAR") {
+        // bare TAR: swap AR1 and AR2
+        auto a1 = builder.create<awl::ArGetOp>(loc(), builder.getI64Type(),
+                                               builder.getI32IntegerAttr(1));
+        auto a2 = builder.create<awl::ArGetOp>(loc(), builder.getI64Type(),
+                                               builder.getI32IntegerAttr(2));
+        builder.create<awl::ArSetOp>(loc(), builder.getI32IntegerAttr(1), a2);
+        builder.create<awl::ArSetOp>(loc(), builder.getI32IntegerAttr(2), a1);
+        return true;
+      }
       mlir::Value ptr;
       if (lexer.getCurToken() == Tok::localvar && lexer.curPtrLocal()) {
         ptr = parsePtrLocal(); // TAR1 P##name
@@ -3034,9 +3065,12 @@ private:
       acc.push_back(acc.empty() ? constInt(builder.getI32Type(), 0) : acc.back());
       return true;
     }
-    if (m == "POP" || m == "LEAVE") { // drop ACCU1
-      if (!acc.empty())
-        popAcc();
+    if (m == "POP" || m == "LEAVE") {
+      // POP: ACCU1 := ACCU2; ACCU2 and below are unchanged (awlsim insn_POP)
+      if (acc.empty())
+        acc.push_back(constInt(builder.getI32Type(), 0));
+      acc.back() = acc.size() >= 2 ? acc[acc.size() - 2]
+                                   : constInt(builder.getI32Type(), 0);
       return true;
     }
     if (m == "INC" || m == "DEC") { // ACCU1 +/-= n (default 1)
@@ -3363,6 +3397,7 @@ private:
     acc.pop_back();
     return v;
   }
+
 
   // MARK: operands
 
@@ -3696,10 +3731,28 @@ private:
     std::string raw = lexer.getIdent().str();
     std::string w = upperIdent();
     bool quoted = lexer.curQuoted();
+    char quoteChar = lexer.curQuoteChar();
     lexer.next();
     if (quoted) {
-      if (raw.size() == 1) // char literal 'A' / latin-1 byte: raw byte value
-        return constInt(builder.getI32Type(), (unsigned char)raw[0]);
+      if (quoteChar == '\'' && raw.size() <= 4) {
+        // char literal: 'A' -> 0x41, 'AB' -> 0x4142, 'ABCD' -> 0x41424344
+        // (first char in the most significant byte, latin-1)
+        uint32_t v = 0;
+        for (char c : raw)
+          v = (v << 8) | (unsigned char)c;
+        return constInt(builder.getI32Type(), v);
+      }
+      // quoted DATA_BLOCK name with a member: "Data_1".VAR0 [i] .sub
+      auto dbIt = namedDbs.find(w);
+      if (dbIt != namedDbs.end() && lexer.getCurToken() == Tok::dot) {
+        lexer.next(); // dot
+        if (lexer.getCurToken() == Tok::ident ||
+            lexer.getCurToken() == Tok::localvar) {
+          std::string member = upperStr(lexer.getIdent());
+          lexer.next();
+          return parseDbMemberSymbolic(dbIt->second, member, bitContext);
+        }
+      }
       return symbolicOperand(w); // "symbol" / 'literal' in operand position
     }
     // pseudo operands DBLG/DBNO/DILG/DINO (DB length/number): runtime info;

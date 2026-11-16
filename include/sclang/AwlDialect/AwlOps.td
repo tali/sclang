@@ -477,6 +477,15 @@ def ArGetOp : AwlOp<"ar_get", [Pure]> {
   let assemblyFormat = "attr-dict $ar `->` type($result)";
 }
 
+// +ARn <off>: AR<ar> + off (bit offset, runtime i64 value), e.g. a bare +ARn
+// adds ACCU1's low 24 bits. Returned as i64 (also stored back into the AR).
+def ArAddOp : AwlOp<"ar_add", [Pure]> {
+  let summary = "+ARn: address register plus a runtime bit offset";
+  let arguments = (ins I32Attr:$ar, I64:$off);
+  let results = (outs I64:$result);
+  let assemblyFormat = "attr-dict $ar `,` $off `->` type($result)";
+}
+
 // B/W/D [AR1, P#x.y] etc.: packed pointer = AR<ar> + offBits (bit offset),
 // returned as i64 (also stored back into the AR).
 def IndirectOp : AwlOp<"indirect", [Pure]> {
