@@ -205,6 +205,8 @@ typedef struct SclRtVTable {
   /* v9: arithmetic STW recording + real->int conversion (awlsim semantics) */
   void (*stw_sign_i)(int64_t value, int64_t lhs, int64_t rhs, uint8_t op, int32_t range); // sign from value; OV/OS if untruncated lhs-op-rhs out of +-range
   void (*stw_sign_f)(double value);    // setForFloatingPointDWord classification
+  double (*arith_f)(uint8_t op, double a, double b); // awlsim pl_r/mi_r/mu_r/di_r
+  double (*realmath_f)(uint8_t op, double a); // awlsim sin/cos/tan/.../sqr
   void (*stw_div_i)(int64_t divisor, int64_t result, int32_t range); // div by 0: UO+OV+OS; OV/OS if quo out of +-range
   void (*stw_div_f)(double divisor, double result);
   int64_t (*f2i)(double value, int64_t orig, uint8_t mode); // TRUNC/RND/..: OV/OS + keep orig if out of range
@@ -295,6 +297,8 @@ void scl_rt_stw_cmp_f(uint8_t pred, double lhs, double rhs);
 /// Arithmetic STW recording (awlsim statusword). Sim-only.
 void scl_rt_stw_sign_i(int64_t value, int64_t lhs, int64_t rhs, uint8_t op, int32_t range);
 void scl_rt_stw_sign_f(double value);
+double scl_rt_arith_f(uint8_t op, double a, double b);
+double scl_rt_realmath_f(uint8_t op, double a);
 void scl_rt_stw_div_i(int64_t divisor, int64_t result, int32_t range);
 void scl_rt_stw_div_f(double divisor, double result);
 /// TRUNC/RND/RND+/RND- (mode 0..3): real -> int. Out of int32 range: keep

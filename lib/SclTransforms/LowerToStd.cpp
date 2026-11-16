@@ -2267,10 +2267,40 @@ struct AwlArithLowering : public OpConversionPattern<AwlOp> {
     Value r = convertScalarTo(rewriter, op.getLoc(), adaptor.getRhs(), resTy);
     if (!l || !r)
       return failure();
-    if (resTy.template isa<FloatType>())
+    if (resTy.template isa<FloatType>()) {
+      // awlsim computes real arith in double and rounds to f32 on store,
+      // with inf/zero-divisor special cases in *R and /R that also set the
+      // STW — route Add/Sub/Mul/Div on floats through the runtime helper.
+      if constexpr (std::is_same_v<LoweredFloatOp, arith::AddFOp> ||
+                    std::is_same_v<LoweredFloatOp, arith::SubFOp> ||
+                    std::is_same_v<LoweredFloatOp, arith::MulFOp> ||
+                    std::is_same_v<LoweredFloatOp, arith::DivFOp>) {
+        constexpr uint8_t opc =
+            std::is_same_v<LoweredFloatOp, arith::AddFOp> ? 0 :
+            std::is_same_v<LoweredFloatOp, arith::SubFOp> ? 1 :
+            std::is_same_v<LoweredFloatOp, arith::MulFOp> ? 2 : 3;
+        auto f64 = rewriter.getF64Type();
+        auto i8 = rewriter.getI8Type();
+        Value ld = convertScalarTo(rewriter, op.getLoc(), adaptor.getLhs(), f64);
+        Value rd = convertScalarTo(rewriter, op.getLoc(), adaptor.getRhs(), f64);
+        if (!ld || !rd)
+          return failure();
+        ModuleOp module = op->template getParentOfType<ModuleOp>();
+        auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_arith_f",
+                                    rewriter.getFunctionType({i8, f64, f64}, {f64}));
+        Value opcC = rewriter.create<arith::ConstantOp>(
+            op.getLoc(), i8, rewriter.getI8IntegerAttr(opc));
+        Value res = rewriter.create<func::CallOp>(op.getLoc(), fn,
+                                                  TypeRange{f64}, ValueRange{opcC, ld, rd})
+                        .getResult(0);
+        res = convertScalarTo(rewriter, op.getLoc(), res, resTy); // round to f32
+        rewriter.replaceOp(op, res);
+        return success();
+      }
       rewriter.replaceOpWithNewOp<LoweredFloatOp>(op, resTy, l, r);
-    else
+    } else {
       rewriter.replaceOpWithNewOp<LoweredIntOp>(op, resTy, l, r);
+    }
     return success();
   }
 };
@@ -2383,40 +2413,38 @@ struct AwlRealMathOpLowering : public OpConversionPattern<awl::RealMathOp> {
     std::string k = op.getKind().str();
     Value r;
     if (k == "abs") {
+      // awlsim insn_abs: pure bit op (dword & 0x7FFFFFFF), no STW change
       r = rewriter.create<math::AbsFOp>(loc, f32, v);
     } else if (k == "negr") {
+      // awlsim insn_negr: pure sign-bit XOR, no STW change
       r = rewriter.create<arith::NegFOp>(loc, f32, v);
-    } else if (k == "sqr") {
-      r = rewriter.create<arith::MulFOp>(loc, f32, v, v);
     } else {
-      // sin/cos/tan/asin/acos/atan/sqrt/exp/ln: call libm in double precision
-      // and round back to f32 — bit-identical to awlsim, which evaluates
-      // Python math (double) on the f32 operand value. (math.tan etc. have no
-      // direct JIT legalization in this MLIR version.)
-      const char *fn = nullptr;
-      if (k == "sin") fn = "sin";
-      else if (k == "cos") fn = "cos";
-      else if (k == "tan") fn = "tan";
-      else if (k == "asin") fn = "asin";
-      else if (k == "acos") fn = "acos";
-      else if (k == "atan") fn = "atan";
-      else if (k == "sqrt") fn = "sqrt";
-      else if (k == "exp") fn = "exp";
-      else if (k == "ln") fn = "log";
-      if (!fn)
-        return failure();
-      auto mod = op->getParentOfType<ModuleOp>();
+      // sin/cos/tan/asin/acos/atan/sqrt/exp/ln/sqr: route through the
+      // runtime, which replicates the awlsim instruction exactly (NaN/inf
+      // special cases, epsilon snapping, double math rounded to f32) and
+      // sets the STW (setForFloatingPoint).
+      uint8_t opc;
+      if (k == "sin") opc = 0;
+      else if (k == "cos") opc = 1;
+      else if (k == "tan") opc = 2;
+      else if (k == "asin") opc = 3;
+      else if (k == "acos") opc = 4;
+      else if (k == "atan") opc = 5;
+      else if (k == "sqrt") opc = 6;
+      else if (k == "exp") opc = 7;
+      else if (k == "ln") opc = 8;
+      else if (k == "sqr") opc = 9;
+      else return failure();
+      auto mod = op->template getParentOfType<ModuleOp>();
       auto f64 = rewriter.getF64Type();
-      auto ft = rewriter.getFunctionType(f64, f64);
-      auto callee = mod.lookupSymbol<func::FuncOp>(fn);
-      if (!callee) {
-        OpBuilder b(mod.getBody(), mod.getBody()->begin());
-        callee = b.create<func::FuncOp>(loc, fn, ft);
-        callee.setPrivate();
-      }
+      auto i8 = rewriter.getI8Type();
+      auto fn = getOrInsertRtFunc(rewriter, mod, "scl_rt_realmath_f",
+                                  rewriter.getFunctionType({i8, f64}, {f64}));
+      Value opcC = rewriter.create<arith::ConstantOp>(
+          loc, i8, rewriter.getI8IntegerAttr(opc));
       Value d = rewriter.create<arith::ExtFOp>(loc, f64, v);
-      Value rd = rewriter.create<func::CallOp>(loc, callee, ValueRange{d})
-                     .getResult(0);
+      Value rd = rewriter.create<func::CallOp>(loc, fn, TypeRange{f64},
+                                               ValueRange{opcC, d}).getResult(0);
       r = rewriter.create<arith::TruncFOp>(loc, f32, rd);
     }
     rewriter.replaceOp(op, r);

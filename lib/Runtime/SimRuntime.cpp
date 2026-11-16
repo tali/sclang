@@ -1658,6 +1658,14 @@ void scl_rt_stw_sign_f(double value) {
     s.vtable->stw_sign_f(value);
     return;
   }
+  // awlsim setForFloatingPoint first checks isDenormalPyFloat on the DOUBLE
+  // result (0 < |v| < 2^-126, i.e. denormal as float32): A0=A1=0, OV=OS=1
+  double av = std::fabs(value);
+  if (av > 0.0 && av < 1.17549435e-38) {
+    stw_set_a0a1(s, false, false);
+    s.stw |= (1u << 4) | (1u << 5);
+    return;
+  }
   // classify the float32 bit pattern (awlsim setForFloatingPointDWord)
   float f = (float)value;
   uint32_t dword;
@@ -1683,6 +1691,154 @@ void scl_rt_stw_sign_f(double value) {
     stw_set_a0a1(s, true, false);
     s.stw &= (uint16_t)~(1u << 5);
   }
+}
+// awlsim insn_pl_r/mi_r/mu_r/di_r: real arith is computed in double and
+// rounded to float32 on store (setPyFloat). *R special-cases inf operands
+// (inf * x = x with inf's sign XORed in; inf * 0 = NaN) and sets OV=OS=1;
+// /R maps inf divisor to 0.0 and zero divisor to +-inf by the dividend's
+// sign. The STW is set here (setForFloatingPoint + the *R OV/OS override).
+// op: 0=+R 1=-R 2=*R 3=/R; a = ACCU2, b = ACCU1 (top).
+double scl_rt_arith_f(uint8_t op, double a, double b) {
+  auto &s = state();
+  if (s.vtable && s.vtable->arith_f)
+    return s.vtable->arith_f(op, a, b);
+  float fa = (float)a, fb = (float)b;
+  uint32_t ab, bb;
+  std::memcpy(&ab, &fa, 4);
+  std::memcpy(&bb, &fb, 4);
+  auto isInf = [](uint32_t d) { return (d & 0x7FFFFFFFu) == 0x7F800000u; };
+  auto isZero = [](uint32_t d) { return (d & 0x7FFFFFFFu) == 0; };
+  double res;
+  bool mulInf = false;
+  // awlsim (Apple Silicon/ARM) propagates a negative all-ones NaN from real
+  // arith: every NaN result observed in the awlsim testsuite is 0xFFFFFFFF
+  auto negNan = []() {
+    uint64_t bits = 0xFFFFFFFFFFFFFFFFULL;
+    double d;
+    std::memcpy(&d, &bits, 8);
+    return d;
+  };
+  switch (op) {
+  case 0: res = a + b; break; // +R
+  case 1: res = a - b; break; // -R
+  case 2: // *R
+    if (isInf(ab) || isInf(bb)) {
+      mulInf = true;
+      if (isZero(ab) || isZero(bb)) {
+        res = negNan(); // inf * 0 = NaN (awlsim nNaNDWord = 0xFFFFFFFF)
+      } else {
+        uint32_t r = ab ^ (bb & 0x80000000u); // accu2 bits ^ sign(accu1)
+        float f;
+        std::memcpy(&f, &r, 4);
+        res = f;
+      }
+    } else {
+      res = a * b;
+    }
+    break;
+  case 3: // /R
+    if (isInf(bb))
+      res = 0.0; // inf divisor
+    else if (b != 0.0)
+      res = a / b;
+    else // zero divisor: +-inf by the dividend's sign
+      res = a >= 0.0 ? __builtin_huge_val() : -__builtin_huge_val();
+    break;
+  default: res = 0.0; break;
+  }
+  if (std::isnan(res))
+    res = negNan();
+  scl_rt_stw_sign_f(res); // classifies the f32-rounded result
+  if (mulInf)
+    s.stw |= (1u << 4) | (1u << 5); // *R with an inf operand: OV=OS=1
+  return res;
+}
+// awlsim unary real math (insn_sin/cos/tan/asin/acos/atan/sqrt/exp/ln/sqr):
+// computed in double, rounded to f32 on store, STW classified from the
+// result. NaN input -> ACCU := pNaNDWord (0x7FFFFFFF); inf input -> unchanged;
+// domain errors -> pNaNDWord; sin/cos/tan snap results ~= -1/0/1 exactly;
+// tan(+-pi/2) -> +-inf; exp(x>88) -> +inf. op: 0=sin 1=cos 2=tan 3=asin
+// 4=acos 5=atan 6=sqrt 7=exp 8=ln 9=sqr
+double scl_rt_realmath_f(uint8_t op, double a) {
+  auto &s = state();
+  if (s.vtable && s.vtable->realmath_f)
+    return s.vtable->realmath_f(op, a);
+  float fa = (float)a;
+  uint32_t d;
+  std::memcpy(&d, &fa, 4);
+  bool isNan = (d & 0x7FFFFFFFu) > 0x7F800000u;
+  bool isInf = (d & 0x7FFFFFFFu) == 0x7F800000u;
+  constexpr double kEps = 0.0000001; // awlsim floatConst.epsilonFloat
+  auto eq = [&](double x, double y) { return std::fabs(x - y) < kEps; };
+  auto pNaN = []() {
+    uint32_t b = 0x7FFFFFFFu; // awlsim pNaNDWord
+    float f;
+    std::memcpy(&f, &b, 4);
+    return (double)f;
+  };
+  auto snap = [&](double x) {
+    if (eq(x, -1.0)) return -1.0;
+    if (eq(x, 0.0)) return 0.0;
+    if (eq(x, 1.0)) return 1.0;
+    return x;
+  };
+  double res = a;
+  switch (op) {
+  case 0: // sin (negZero passes through unchanged, awlsim insn_sin)
+    if (isNan) res = pNaN();
+    else if (isInf || d == 0x80000000u) res = a;
+    else res = snap(std::sin(a));
+    break;
+  case 1: // cos (negZero is NOT special-cased, awlsim insn_cos)
+    if (isNan) res = pNaN();
+    else if (isInf) res = a;
+    else res = snap(std::cos(a));
+    break;
+  case 2: // tan
+    if (isNan) res = pNaN();
+    else if (isInf || d == 0x80000000u) res = a;
+    else if (eq(a, 3.14159265358979 / 2)) res = __builtin_huge_val();
+    else if (eq(a, -3.14159265358979 / 2)) res = -__builtin_huge_val();
+    else res = snap(std::tan(a));
+    break;
+  case 3: // asin
+  case 4: // acos
+    if (isInf) res = a;
+    else if (isNan || a > 1.0 || a < -1.0) res = pNaN();
+    else res = op == 3 ? std::asin(a) : std::acos(a);
+    break;
+  case 5: // atan
+    if (isNan) res = pNaN();
+    else if (isInf) res = a;
+    else res = std::atan(a);
+    break;
+  case 6: // sqrt
+    if (isNan) res = pNaN();
+    else if (isInf) res = a;
+    else if (a < 0.0) res = pNaN();
+    else res = std::sqrt(a);
+    break;
+  case 7: // exp
+    if (isNan) res = pNaN();
+    else if (isInf) res = a;
+    else if ((d & 0x80000000u) == 0 && d > 0x42B00000u) res = __builtin_huge_val();
+    else res = std::exp(a);
+    break;
+  case 8: // ln
+    if (isNan) res = pNaN();
+    else if (isInf) res = a;
+    else if (a <= 0.0) res = pNaN();
+    else res = std::log(a);
+    break;
+  case 9: // sqr
+    if (isNan) res = pNaN();
+    else if (isInf) res = a;
+    else res = a * a;
+    break;
+  default: res = a; break;
+  }
+  scl_rt_stw_sign_f(res); // setForFloatingPoint on the (unrounded) result
+  return res;
 }
 void scl_rt_stw_div_i(int64_t divisor, int64_t result, int32_t range) {
   auto &s = state();
@@ -1718,7 +1874,7 @@ int64_t scl_rt_f2i(double value, int64_t orig, uint8_t mode) {
     return orig;
   }
   switch (mode) {
-  case 1: return (int64_t)std::llround(value); // RND
+  case 1: return (int64_t)std::nearbyint(value); // RND: Python round() = half-to-even
   case 2: return (int64_t)std::ceil(value);    // RND+
   case 3: return (int64_t)std::floor(value);   // RND-
   default: return (int64_t)value;              // TRUNC

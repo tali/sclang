@@ -243,16 +243,28 @@ private:
       t.ident = llvm::StringRef(begin, cur.begin() - begin);
       // awlsim named constants: __CNST_PI etc. (operands, not directives)
       if (t.ident.starts_with("__CNST")) {
-        if (t.ident.contains("PI")) {
+        // awlsim named constants (exact names — PINF/NINF must not match PI)
+        if (t.ident == "__CNST_PI")
           t.realVal = 3.14159265358979;
-          t.tok = Tok::real;
-        } else if (t.ident.contains("NAN")) {
-          t.realVal = __builtin_nan("");
-          t.tok = Tok::real;
-        } else {
+        else if (t.ident == "__CNST_E")
+          t.realVal = 2.71828182845905;
+        else if (t.ident == "__CNST_PINF")
+          t.realVal = __builtin_huge_val();
+        else if (t.ident == "__CNST_NINF")
+          t.realVal = -__builtin_huge_val();
+        else if (t.ident == "__CNST_PNAN" || t.ident == "__CNST_NNAN") {
+          // awlsim floatConst: pNaNDWord = 0x7FFFFFFF, nNaNDWord = 0xFFFFFFFF
+          uint32_t bits = t.ident == "__CNST_PNAN" ? 0x7FFFFFFFu : 0xFFFFFFFFu;
+          float f;
+          std::memcpy(&f, &bits, 4);
+          t.realVal = f;
+        }
+        else {
           t.intVal = 0;
           t.tok = Tok::integer;
+          return t;
         }
+        t.tok = Tok::real;
         return t;
       }
       // awlsim test directives (__FEATURE, __STWRST, ...): skip the line.
@@ -3234,7 +3246,12 @@ private:
         }
       }
       mlir::Value a = acc.empty() ? constInt(builder.getF32Type(), 0) : popAcc();
-      mlir::Value orig = castTo(a, builder.getI64Type());
+      // out-of-range leaves ACCU1 unchanged (awlsim: the raw dword), so the
+      // fallback value is the BIT pattern, not a float->int value cast
+      mlir::Value orig = mlir::isa<mlir::FloatType>(a.getType())
+                             ? castTo(bitcastTo(a, builder.getI32Type()),
+                                      builder.getI64Type())
+                             : castTo(a, builder.getI64Type());
       mlir::Value f = mlir::isa<mlir::IntegerType>(a.getType())
                           ? bitcastTo(castTo(a, builder.getI32Type()),
                                       builder.getF32Type())
@@ -5545,12 +5562,20 @@ private:
     return true;
   }
 
+  // ACCU value -> f32 for real ops: an integer accumulator is reinterpreted
+  // as raw bits (awlsim getPyFloat reads the dword), not value-converted
+  mlir::Value accToReal(mlir::Value v) {
+    if (mlir::isa<mlir::FloatType>(v.getType()))
+      return castTo(v, builder.getF32Type());
+    return bitcastTo(castTo(v, builder.getI32Type()), builder.getF32Type());
+  }
+
   // ABS/NEGR/SIN/COS/TAN/ASIN/ACOS/ATAN/SQRT/EXP/LN: unary real math on ACCU1
   bool parseRealMath(const std::string &m) {
     mlir::Value a = popAcc();
     if (!a)
       return false;
-    a = castTo(a, builder.getF32Type());
+    a = accToReal(a);
     std::string kind = m;
     for (auto &c : kind)
       c = (char)tolower((unsigned char)c);
@@ -5625,8 +5650,8 @@ private:
     if (!a || !b)
       return false;
     if (w == 'R') {
-      a = castTo(a, ty);
-      b = castTo(b, ty);
+      a = accToReal(a);
+      b = accToReal(b);
       mlir::Value r;
       switch (k) {
       case ArithKind::Add: r = builder.create<awl::AddOp>(loc(), ty, a, b); break;
@@ -5635,14 +5660,8 @@ private:
       case ArithKind::Div: r = builder.create<awl::DivOp>(loc(), ty, a, b); break;
       }
       pushAcc(r);
-      if (k == ArithKind::Div)
-        builder.create<awl::StwDivOp>(loc(), b, r);
-      else
-        builder.create<awl::StwSignOp>(loc(), r, a, b,
-                                        builder.getI32IntegerAttr(
-                                            k == ArithKind::Add ? 0
-                                            : k == ArithKind::Sub ? 1 : 2),
-                                        builder.getI32IntegerAttr(0));
+      // the float arith lowering routes through scl_rt_arith_f, which sets
+      // the STW itself (awlsim setForFloatingPoint + *R OV/OS override)
       rloActive = false;
       return true;
     }
@@ -6118,14 +6137,26 @@ private:
     }
     auto idAttr = builder.getI32IntegerAttr((int32_t)id);
     auto opAttr = builder.getI8IntegerAttr((int8_t)op);
-    // awlsim compares as real when the R suffix is given or either side
-    // is a real literal (e.g. __ASSERT== __ACCU 1, 0.0)
-    bool real = isReal || mlir::isa<mlir::FloatType>(actual.getType()) ||
-                mlir::isa<mlir::FloatType>(expected.getType());
-    if (real) {
+    // awlsim __ASSERT==R compares as real. Plain __ASSERT== compares the
+    // raw 32-bit patterns (AwlMemoryObject_asScalar of a real operand is
+    // its float bit pattern), so a real accumulator against DW#16#40000000
+    // must compare 0x40000000, not 2.0f vs 1073741824.0.
+    bool actualF = mlir::isa<mlir::FloatType>(actual.getType());
+    bool expectedF = mlir::isa<mlir::FloatType>(expected.getType());
+    if (isReal) {
       actual = castTo(actual, builder.getF64Type());
       expected = castTo(expected, builder.getF64Type());
       builder.create<awl::AssertROp>(loc(), idAttr, opAttr, actual, expected);
+    } else if (actualF || expectedF) {
+      if (actualF)
+        actual = bitcastTo(castTo(actual, builder.getF32Type()),
+                           builder.getI32Type());
+      if (expectedF)
+        expected = bitcastTo(castTo(expected, builder.getF32Type()),
+                             builder.getI32Type());
+      actual = castTo(actual, builder.getI64Type());
+      expected = castTo(expected, builder.getI64Type());
+      builder.create<awl::AssertOp>(loc(), idAttr, opAttr, actual, expected);
     } else {
       actual = castTo(actual, builder.getI64Type());
       expected = castTo(expected, builder.getI64Type());

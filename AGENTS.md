@@ -142,10 +142,10 @@ has no `\b` — use python3 for regex edits.
   cycle loop.
   Current: AWL 116/116 (100%), SCL single 15/15, SCL per-project 17/17,
   JIT smoke 102/105 (97%), oracle (__ASSERT value-level, OB1 + bare
-  instruction files) 54/71 (76%). Known-open oracle failures:
-  startup_multiple (2-accu CPU, permanent), insn_ARITH_R (real-math
-  STW edge cases), insn_SE/insn_SS (timer oracles need real elapsed
-  time), insn_CALL, sfb0-5, tc200 array/pointer/udt, shutdown.
+  instruction files) 55/71 (77%). Known-open oracle failures:
+  startup_multiple (2-accu CPU, permanent),
+  insn_SE/insn_SS (timer oracles need real elapsed time),
+  insn_CALL, sfb0-5, tc200 array/pointer/udt, shutdown.
   Fixed since last writing: runtime ACCU1..4 registers
   (awl.accu_get/accu_set, values now persist across labels and calls),
   which unblocked insn_4ACCU, the insn_JUMP SPZ/LOOP sections and
@@ -155,7 +155,13 @@ has no `\b` — use python3 for regex edits.
   ACCU1<->ACCU2 copies (awlsim insn_push/insn_pop); RLDA/RRDA rotate
   through the A1 status bit (awlsim insn_rlda/insn_rrda); the AWL
   printer emits SPBN for jump-if-RLO==0 (SPN means A1^A0 in awlsim).
-  JIT-tier failures: the two Quine AWL files
+  Real arith is awlsim-exact too: scl_rt_arith_f (double math rounded to
+  f32, *R inf special case, /R inf/zero-divisor cases, NaN = 0xFFFFFFFF)
+  and scl_rt_realmath_f (sin/cos/tan/.../sqr with NaN->pNaN, epsilon
+  snapping, STW classification incl. denormal-as-f32); __ASSERT==
+  compares raw 32-bit patterns (awlsim asScalar); TRUNC/RND fallback
+  keeps the original dword bits, RND is half-to-even. insn_ARITH_R now
+  passes fully. JIT-tier failures: the two Quine AWL files
   (intra-block jump loop timeout) and one SCL project invocation.
   When these numbers change, refresh them here AND in docs/conformance.md
   ("Current results") AND in the run_conformance.py header comment.
