@@ -21,7 +21,11 @@ BEGIN
 	// CHECK: awl.load %{{.*}} : !scl.direct<DB, 0, 0, 0, 16> -> i16
 	T MW 10
 	LAR1 DB1.DBW 4
-	// CHECK: awl.ar_set 1, %{{.*}} : !scl.direct<DB, 1, 4, 0, 16>
+	// LARn <mem> loads the operand's 32-bit CONTENT as the pointer value
+	// (awlsim insn_larN: ar.set(fetch(op0, 32bit)))
+	// CHECK: awl.direct DB, 1, 4, 0, 32
+	// CHECK: awl.load %{{.*}} : !scl.direct<DB, 1, 4, 0, 32> -> i32
+	// CHECK: awl.ar_set 1, %{{.*}} : i64
 	L W [AR1, P#0.0]
 	// CHECK: awl.indirect 1, 0 -> i64
 	// CHECK: awl.load_indirect %{{.*}}, 16 -> i64
