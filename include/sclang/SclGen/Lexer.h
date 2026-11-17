@@ -25,6 +25,8 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 
+#include "sclang/SclGen/LangMode.h"
+
 #include <memory>
 #include <string>
 
@@ -197,11 +199,19 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &s, Token token);
 class Lexer {
 public:
   /// Create a lexer for the given filename. The filename is kept only for
-  /// debugging purpose (attaching a location to a Token).
-  Lexer(std::string filename)
-      : lastLocation(
+  /// debugging purpose (attaching a location to a Token). The language mode
+  /// (ADR 004: S7 SCL vs IEC ST surface) is carried here so the Parser can
+  /// read it via getMode().
+  Lexer(std::string filename, LangMode mode = LangMode::S7)
+      : mode(mode),
+        lastLocation(
             {std::make_shared<std::string>(std::move(filename)), 0, 0}) {}
   virtual ~Lexer() = default;
+
+  /// The source-language mode (ADR 004).
+  LangMode getMode() const { return mode; }
+  bool iecMode() const { return mode == LangMode::IEC; }
+  bool s7Mode() const { return mode == LangMode::S7; }
 
   /// Look at the current token in the stream.
   Token getCurToken() { return curTok; }
@@ -1148,13 +1158,17 @@ private:
 
   /// Buffer supplied by the derived class on calls to `readNextLine()`
   llvm::StringRef curLineBuffer = "\n";
+
+  /// Source-language mode (ADR 004), see getMode().
+  LangMode mode;
 };
 
 /// A lexer implementation operating on a buffer in memory.
 class LexerBuffer final : public Lexer {
 public:
-  LexerBuffer(const char *begin, const char *end, std::string filename)
-      : Lexer(std::move(filename)), current(begin), end(end) {
+  LexerBuffer(const char *begin, const char *end, std::string filename,
+              LangMode mode = LangMode::S7)
+      : Lexer(std::move(filename), mode), current(begin), end(end) {
     // skip a UTF-8 BOM (TIA Portal exports start with one)
     if (end - begin >= 3 && (unsigned char)begin[0] == 0xEF &&
         (unsigned char)begin[1] == 0xBB && (unsigned char)begin[2] == 0xBF)

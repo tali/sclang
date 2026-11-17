@@ -1321,13 +1321,17 @@ public:
 /// This class represents a list of functions to be processed together
 class ModuleAST {
   std::vector<std::unique_ptr<UnitAST>> units;
+  LangMode mode = LangMode::S7; ///< source-language mode (ADR 004)
 
 public:
-  ModuleAST(std::vector<std::unique_ptr<UnitAST>> units)
-      : units(std::move(units)) {}
+  ModuleAST(std::vector<std::unique_ptr<UnitAST>> units,
+            LangMode mode = LangMode::S7)
+      : units(std::move(units)), mode(mode) {}
 
   auto begin() const -> decltype(units.begin()) { return units.begin(); }
   auto end() const -> decltype(units.end()) { return units.end(); }
+  LangMode getMode() const { return mode; }
+  bool iecMode() const { return mode == LangMode::IEC; }
 };
 
 void dump(const ModuleAST &);

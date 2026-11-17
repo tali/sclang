@@ -41,6 +41,13 @@ one-line pointer here.
 ```
 
 - `sclang-gen --emit=mlir` prints unlowered scl-dialect IR; `--emit=mlir-std` runs LowerToStd.
+- Source-language mode (ADR 004): `--std=s7` (default) / `--std=iec` on both
+  `sclang` and `sclang-gen`, or `-x=st` (= `-x=scl --std=iec`). The mode is a
+  `LangMode` (include/sclang/SclGen/LangMode.h) carried by the Lexer into the
+  Parser and the ModuleAST, read by MLIRGen; the scl dialect stays
+  mode-agnostic. IEC mode so far: bare `STRING` = `STRING[254]` (more
+  IEC-only constructs land with their features; S7-only constructs are
+  diagnosed in IEC mode).
 - `sclang --emit=jit` runs the full pipeline and JIT-executes. The JIT entry point is
   the `_mlir_ciface_OB1` wrapper (`engine->invoke("OB1")` resolves
   `_mlir_ciface_OB1`), which calls `function OB1` (see test/sclang/jit.scl) —

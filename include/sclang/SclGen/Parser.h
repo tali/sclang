@@ -69,11 +69,17 @@ public:
       }
     }
 
-    return std::make_unique<ModuleAST>(std::move(units));
+    return std::make_unique<ModuleAST>(std::move(units), lexer.getMode());
   }
 
 private:
   Lexer &lexer;
+
+  /// Source-language mode helpers (ADR 004): IEC mode enables the
+  /// IEC 61131-3 ST surface (CONFIGURATION/LREAL/bare STRING/VAR_GLOBAL...),
+  /// S7 mode the Siemens dialect (% directs, TIMER/COUNTER, EN/ENO).
+  bool iecMode() const { return lexer.iecMode(); }
+  bool s7Mode() const { return lexer.s7Mode(); }
 
   /// Extra units produced while parsing one program unit (e.g. the 2nd..nth
   /// type of a multi-declaration TYPE block), drained by ParseModule.

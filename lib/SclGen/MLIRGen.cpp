@@ -92,7 +92,12 @@ public:
 /// analysis and transformation based on these high level semantics.
 class MLIRGenImpl {
 public:
-  MLIRGenImpl(mlir::MLIRContext &context) : builder(&context) {}
+  MLIRGenImpl(mlir::MLIRContext &context, LangMode mode = LangMode::S7)
+      : builder(&context), mode(mode) {}
+
+  /// Source-language mode (ADR 004), from the ModuleAST.
+  LangMode mode;
+  bool iecMode() const { return mode == LangMode::IEC; }
 
   /// Set when any error diagnostic was emitted. Lets mlirGen fail cleanly
   /// (return nullptr) instead of crashing on null types/values when
@@ -5731,7 +5736,7 @@ namespace sclang {
 // The public API for codegen.
 mlir::OwningOpRef<mlir::ModuleOp> mlirGen(mlir::MLIRContext &context,
                               ModuleAST &moduleAST) {
-  return MLIRGenImpl(context).mlirGen(&moduleAST);
+  return MLIRGenImpl(context, moduleAST.getMode()).mlirGen(&moduleAST);
 }
 
 } // namespace sclang

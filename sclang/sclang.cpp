@@ -79,14 +79,33 @@ static cl::opt<std::string> inputFilename(cl::Positional,
                                           cl::value_desc("filename"));
 
 namespace {
-enum InputType { Scl, MLIR, Awl };
+enum InputType { Scl, MLIR, Awl, St };
 }
 static cl::opt<enum InputType> inputType(
     "x", cl::init(Scl), cl::desc("Select input file"),
     cl::values(clEnumValN(Scl, "scl", "load the input file as an SCL source")),
     cl::values(clEnumValN(Awl, "awl", "load the input file as an AWL (STL) source")),
+    cl::values(clEnumValN(St, "st",
+                          "load the input file as IEC 61131-3 ST "
+                          "(alias for -x=scl --std=iec)")),
     cl::values(clEnumValN(MLIR, "mlir",
                           "load the input file as an MLIR file")));
+
+// Source-language mode of the SCL/ST frontend (ADR 004): S7 = Siemens SCL
+// dialect (default), IEC = IEC 61131-3 ST surface. `-x=st` forces IEC.
+static cl::opt<sclang::LangMode> stdMode(
+    "std", cl::init(sclang::LangMode::S7),
+    cl::desc("Source-language mode of the SCL frontend (ADR 004)"),
+    cl::values(clEnumValN(sclang::LangMode::S7, "s7",
+                          "Siemens SCL dialect (default): % directs, "
+                          "TIMER/COUNTER, EN/ENO, STRING[n]")),
+    cl::values(clEnumValN(sclang::LangMode::IEC, "iec",
+                          "IEC 61131-3 ST: CONFIGURATION/VAR_GLOBAL/"
+                          "VAR_EXTERNAL, LREAL, bare STRING")));
+
+static sclang::LangMode langMode() {
+  return inputType == InputType::St ? sclang::LangMode::IEC : stdMode;
+}
 
 namespace {
 enum Action {
@@ -264,7 +283,8 @@ std::unique_ptr<sclang::ModuleAST> parseInputFile(llvm::StringRef filename) {
     return nullptr;
   }
   auto buffer = FileOrErr.get()->getBuffer();
-  LexerBuffer lexer(buffer.begin(), buffer.end(), std::string(filename));
+  LexerBuffer lexer(buffer.begin(), buffer.end(), std::string(filename),
+                    langMode());
   Parser parser(lexer);
   return parser.ParseModule();
 }
