@@ -77,7 +77,9 @@ def CallFcOp : SclOp<"call.fc", [
 
   let arguments = (ins
     FlatSymbolRefAttr:$callee,
-    Variadic<Scl_Type>:$arguments,
+    // AnyType (not just Scl_Type): by-reference parameters (VAR_IN_OUT /
+    // VAR_OUTPUT of a function) are passed as !scl.address values.
+    Variadic<AnyType>:$arguments,
     StrArrayAttr:$argNames
   );
 

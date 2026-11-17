@@ -152,7 +152,15 @@ has no `\b` — use python3 for regex edits.
   compares per-scan outputs (PROGRAM rewritten to FB + instance DB + OB1
   wrapper; driver flags --scan-io/--scan-inputs feed M-area slots per scan,
   see test/sclang/jit_scan_io.scl; --cross diffs SCL->JIT vs SCL->AWL->JIT).
-  Current: 54/75 pass, 17 unsupported (CONFIGURATION/LREAL/STRING/...).
+  Current: 62/75 pass (83%), 17 unsupported (CONFIGURATION/LREAL/STRING/...).
+  FC calling convention (committed): VAR_IN_OUT/VAR_OUTPUT of FCs are
+  by-address args; call sites reorder args into declared order, fill omitted
+  inputs from declared defaults (zero if none), stage by-ref params through
+  temp cells with copy-in/copy-out write-backs (write-back targets may be
+  arbitrary lvalue paths, e.g. `DONE => "DB".x.y`); FunctionCallAST results
+  are cached so argument expressions are never evaluated twice.
+  sclang-gen now registers a diagnostic handler (MLIRGen errors were
+  previously swallowed, giving a silent rc=1).
   Builtin standard FBs (TON/TOF/TP/CTU/CTD/CTUD/R_TRIG/F_TRIG/SR/RS) are
   real now: forced instance layouts in the lowering's FbLayoutCache match
   scl_rt_timer_fb/counter_fb/edge_fb (runtime ABI v11); member access on a

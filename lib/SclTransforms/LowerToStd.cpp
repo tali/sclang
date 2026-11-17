@@ -549,8 +549,36 @@ struct CallFcOpLowering : public OpConversionPattern<scl::CallFcOp> {
   matchAndRewrite(scl::CallFcOp op, scl::CallFcOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type returnType = getTypeConverter()->convertType(op.getType());
-    rewriter.replaceOpWithNewOp<CallOp>(op, op.getCallee(), returnType,
-                                        adaptor.getArguments());
+    // By-reference parameters (VAR_IN_OUT / VAR_OUTPUT of a function) arrive
+    // as byte views (address<char> of an IDB member) but the callee's
+    // parameter converts to a 0-d view of the element type: adapt with a
+    // single reinterpret_cast from the base buffer, preserving the offset.
+    SmallVector<Value, 4> args = adaptor.getArguments();
+    auto module = op->template getParentOfType<ModuleOp>();
+    if (auto callee = llvm::dyn_cast_or_null<func::FuncOp>(
+            module.lookupSymbol(op.getCallee()))) {
+      auto fnTy = callee.getFunctionType();
+      for (auto [i, arg] : llvm::enumerate(args)) {
+        if (i >= fnTy.getNumInputs())
+          break;
+        auto target = fnTy.getInput(i);
+        auto argMem = arg.getType().dyn_cast<MemRefType>();
+        auto tgtMem = target.dyn_cast<MemRefType>();
+        if (!argMem || !tgtMem || arg.getType() == target)
+          continue;
+        auto loc = op.getLoc();
+        auto meta = rewriter.create<memref::ExtractStridedMetadataOp>(loc, arg);
+        SmallVector<OpFoldResult, 1> sizes, strides;
+        for (int64_t d : tgtMem.getShape()) {
+          sizes.push_back(rewriter.getIndexAttr(d));
+          strides.push_back(rewriter.getIndexAttr(1));
+        }
+        args[i] = rewriter.create<memref::ReinterpretCastOp>(
+            loc, tgtMem, meta.getBaseBuffer(), meta.getOffset(), sizes,
+            strides);
+      }
+    }
+    rewriter.replaceOpWithNewOp<CallOp>(op, op.getCallee(), returnType, args);
     return success();
   }
 };

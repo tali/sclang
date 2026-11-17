@@ -208,6 +208,14 @@ int main(int argc, char **argv) {
   // If we aren't dumping the AST, then we are compiling with/to MLIR.
 
   mlir::MLIRContext context;
+  // MLIR only prints errors to stderr by default; register a handler so
+  // warnings and frontend errors are shown too (otherwise mlirGen failures
+  // exit silently with rc=1).
+  context.getDiagEngine().registerHandler([](mlir::Diagnostic &diag) {
+    diag.print(llvm::errs());
+    llvm::errs() << "\n";
+    return mlir::success();
+  });
   // Load our Dialect in this MLIR Context.
   context.getOrLoadDialect<mlir::scl::SclDialect>();
   context.getOrLoadDialect<mlir::awl::AwlDialect>();

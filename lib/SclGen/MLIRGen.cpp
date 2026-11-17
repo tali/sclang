@@ -134,16 +134,28 @@ public:
         functionResultTypes[fn->getIdentifier()] = getType(fn->getType());
         collectVarTypes(fn->getDeclarations(),
                         callableVarTypes[fn->getIdentifier()],
-                        &callableVarNames[fn->getIdentifier()]);
+                        &callableVarNames[fn->getIdentifier()],
+                        &callableVarDefaults[fn->getIdentifier()],
+                        &callableAllOrder[fn->getIdentifier()],
+                        &callableInOut[fn->getIdentifier()],
+                        &callableOutputs[fn->getIdentifier()]);
       } else if (auto *ob = llvm::dyn_cast<OrganizationBlockAST>(unit.get())) {
         functionResultTypes[ob->getIdentifier()] = builder.getNoneType();
         collectVarTypes(ob->getDeclarations(),
                         callableVarTypes[ob->getIdentifier()],
-                        &callableVarNames[ob->getIdentifier()]);
+                        &callableVarNames[ob->getIdentifier()],
+                        &callableVarDefaults[ob->getIdentifier()],
+                        &callableAllOrder[ob->getIdentifier()],
+                        &callableInOut[ob->getIdentifier()],
+                        &callableOutputs[ob->getIdentifier()]);
       } else if (auto *fb = llvm::dyn_cast<FunctionBlockAST>(unit.get())) {
         collectVarTypes(fb->getDeclarations(),
                         callableVarTypes[fb->getIdentifier()],
-                        &callableVarNames[fb->getIdentifier()]);
+                        &callableVarNames[fb->getIdentifier()],
+                        &callableVarDefaults[fb->getIdentifier()],
+                        &callableAllOrder[fb->getIdentifier()],
+                        &callableInOut[fb->getIdentifier()],
+                        &callableOutputs[fb->getIdentifier()]);
       }
     }
     if (errorOccurred)
@@ -214,6 +226,15 @@ private:
   /// positional call arguments: the i-th positional argument gets the i-th
   /// parameter's name, so the canonicalizer can reorder/fill defaults).
   llvm::StringMap<llvm::SmallVector<std::string, 8>> callableVarNames;
+  /// Declared constant initializers (defaults) per callable parameter, used
+  /// to pad omitted formal-call arguments (IEC ed.3 6.6.1.7.1).
+  llvm::StringMap<llvm::StringMap<std::pair<bool, int64_t>>> callableVarDefaults;
+  /// All declared parameters per callable in declaration order (inputs,
+  /// in/outs, outputs) — the full argument list of an FC call.
+  llvm::StringMap<llvm::SmallVector<std::string, 8>> callableAllOrder;
+  /// VAR_IN_OUT / VAR_OUTPUT parameter names per callable (passed by address
+  /// for FCs; written back after the call for FBs).
+  llvm::StringMap<std::set<std::string>> callableInOut, callableOutputs;
 
   /// Collect the declared types of all variables of a declaration section
   /// into `map`, keyed by variable name.
@@ -223,7 +244,12 @@ private:
   }
   void collectVarTypes(const DeclarationSectionAST *declarations,
                        llvm::StringMap<mlir::Type> &map,
-                       llvm::SmallVector<std::string, 8> *order) {
+                       llvm::SmallVector<std::string, 8> *order,
+                       llvm::StringMap<std::pair<bool, int64_t>> *defaults =
+                           nullptr,
+                       llvm::SmallVector<std::string, 8> *allOrder = nullptr,
+                       std::set<std::string> *inoutNames = nullptr,
+                       std::set<std::string> *outputNames = nullptr) {
     if (!declarations)
       return;
     for (const auto &decl : declarations->getDecls()) {
@@ -232,14 +258,35 @@ private:
         continue;
       const auto &vardecls =
           llvm::cast<VariableDeclarationSubsectionAST>(*decl);
+      // Only inputs and in/outs are call arguments (outputs are written
+      // back via `=>`, not passed as values), so the declared-order list
+      // used for argument padding covers just those.
+      bool isCallArg = vardecls.getKind() ==
+                           VariableDeclarationSubsectionAST::VarInput ||
+                       vardecls.getKind() ==
+                           VariableDeclarationSubsectionAST::VarInOut;
       for (const auto &value : vardecls.getValues()) {
         auto type = getType(value->getDataType());
         if (!type)
           continue;
         for (const auto &var : value->getVars()) {
           map[var->getIdentifier()] = type;
-          if (order)
+          if (order && isCallArg)
             order->push_back(std::string(var->getIdentifier()));
+          if (allOrder && (isCallArg || vardecls.getKind() ==
+                               VariableDeclarationSubsectionAST::VarOutput))
+            allOrder->push_back(std::string(var->getIdentifier()));
+          if (inoutNames && vardecls.getKind() ==
+                               VariableDeclarationSubsectionAST::VarInOut)
+            inoutNames->insert(std::string(var->getIdentifier()));
+          if (outputNames && vardecls.getKind() ==
+                                VariableDeclarationSubsectionAST::VarOutput)
+            outputNames->insert(std::string(var->getIdentifier()));
+          if (defaults && value->getInitializer().has_value()) {
+            int64_t v = 0;
+            if (mlir::succeeded(foldConstIntAST(value->getInitializer().value(), v)))
+              (*defaults)[var->getIdentifier()] = {true, v};
+          }
         }
       }
     }
@@ -347,6 +394,24 @@ private:
   }
 
   /// Append all the types and names of a variable declaration to an array
+  /// Like addVariables, but for by-reference parameters (VAR_IN_OUT /
+  /// VAR_OUTPUT of a function): the argument is the address of the caller's
+  /// variable, and the callee reads/writes through it directly.
+  void addAddrVariables(const VariableDeclarationSubsectionAST &decls,
+                        std::vector<mlir::Type> &types,
+                        std::vector<llvm::StringRef> &names,
+                        std::vector<bool> &isAddr) {
+    const auto &values = decls.getValues();
+    for (const auto &decl : values) {
+      auto type = getType(decl->getDataType());
+      for (const auto &var : decl->getVars()) {
+        types.push_back(AddressType::get(type));
+        names.push_back(var->getIdentifier());
+        isAddr.push_back(true);
+      }
+    }
+  }
+
   void addVariables(const VariableDeclarationSubsectionAST &decls,
                     std::vector<mlir::Type> &types,
                     std::vector<llvm::StringRef> &names) {
@@ -538,6 +603,7 @@ private:
 
     std::vector<mlir::Type> input_types;
     std::vector<llvm::StringRef> input_names;
+    std::vector<bool> input_is_addr;
     std::vector<mlir::Type> output_types;
     std::vector<llvm::StringRef> output_names;
     std::vector<const VariableDeclarationSubsectionAST *> tempvar;
@@ -559,19 +625,21 @@ private:
         const auto &vardecls =
             llvm::cast<VariableDeclarationSubsectionAST>(*decl);
         switch (vardecls.getKind()) {
-        case VariableDeclarationSubsectionAST::VarInput:
+        case VariableDeclarationSubsectionAST::VarInput: {
+          size_t before = input_types.size();
           addVariables(vardecls, input_types, input_names);
+          input_is_addr.resize(input_types.size(), false);
+          (void)before;
           break;
+        }
         case VariableDeclarationSubsectionAST::VarOutput:
-          // FC outputs are not propagated to the caller yet (no `=>`
-          // write-back): keep them as function-local statics so the block
-          // compiles. FB outputs are IDB members and unaffected.
-          tempvar.push_back(&vardecls);
-          break;
         case VariableDeclarationSubsectionAST::VarInOut:
-          // In/out passed as input; write-back to the caller is a
-          // documented gap (see AGENTS.md).
-          addVariables(vardecls, input_types, input_names);
+          // FC outputs and in/outs are passed by reference: the argument is
+          // the address of the caller's variable (`out => var` binds the
+          // output; `inout := var` binds both directions; an unbound output
+          // gets a fresh temp cell at the call site). FB outputs are IDB
+          // members and unaffected.
+          addAddrVariables(vardecls, input_types, input_names, input_is_addr);
           break;
         case VariableDeclarationSubsectionAST::Var:
         case VariableDeclarationSubsectionAST::VarTemp:
@@ -616,12 +684,19 @@ private:
       auto type = std::get<0>(name_value);
       auto name = std::get<1>(name_value);
       auto value = std::get<2>(name_value);
-      auto addressType = AddressType::get(type);
-      auto varStorage = builder.create<TempVariableOp>(
-          location, addressType, builder.getStringAttr(name));
-      if (failed(declare(location, name, addressType, varStorage)))
-        return nullptr;
-      builder.create<StoreOp>(location, varStorage, value);
+      bool isAddr = argIndex < (int)input_is_addr.size() && input_is_addr[argIndex];
+      auto addressType = isAddr ? type.cast<AddressType>() : AddressType::get(type);
+      if (isAddr) {
+        // by-reference parameter: use the caller's address directly
+        if (failed(declare(location, name, addressType, value)))
+          return nullptr;
+      } else {
+        auto varStorage = builder.create<TempVariableOp>(
+            location, addressType, builder.getStringAttr(name));
+        if (failed(declare(location, name, addressType, varStorage)))
+          return nullptr;
+        builder.create<StoreOp>(location, varStorage, value);
+      }
       auto nameAttr = builder.getStringAttr(name);
       function.setArgAttr(argIndex, nameId, nameAttr);
       argIndex++;
@@ -1348,7 +1423,22 @@ private:
     return address;
   }
 
+  /// Function calls can have side effects (VAR_IN_OUT write-back, counter
+  /// FBs, __ASSERT); cache their result per AST node so the several handlers
+  /// in mlirGenFcCall (string builtins, conversions, std functions) do not
+  /// re-evaluate the same call expression.
+  llvm::DenseMap<const ExpressionAST *, mlir::Value> callResultCache;
+
   mlir::Value mlirGen(const ExpressionAST *expr) {
+    if (auto *call = llvm::dyn_cast<FunctionCallAST>(expr)) {
+      auto it = callResultCache.find(call);
+      if (it != callResultCache.end())
+        return it->second;
+      mlir::Value v = mlirGen(call);
+      if (v)
+        callResultCache[call] = v;
+      return v;
+    }
     return TypeSwitch<const ExpressionAST *, mlir::Value>(expr)
         .Case<IntegerConstantAST>([&](auto expr) { return mlirGen(expr); })
         .Case<RealConstantAST>([&](auto expr) { return mlirGen(expr); })
@@ -1721,6 +1811,11 @@ private:
 
   mlir::Value mlirGenElement(mlir::Location location,
                              mlir::Value address, StringRef name) {
+    if (!address) {
+      emitError(location) << "internal: null base address for element access '"
+                          << name << "'";
+      return nullptr;
+    }
     mlir::Type baseType = address.getType().cast<AddressType>().getElementType();
     auto i8 = IntegerType::get(builder.getContext(), 8);
     mlir::Type resultType = AddressType::get(i8);
@@ -2236,7 +2331,9 @@ private:
       std::function<void (mlir::Value)> fNN,
       const llvm::StringMap<mlir::Type> *paramTypes = nullptr,
       std::function<mlir::LogicalResult (StringRef, const StringConstantAST *)>
-          fStr = nullptr) {
+          fStr = nullptr,
+      std::function<mlir::LogicalResult (StringRef, const BinaryExpressionAST *)>
+          fOut = nullptr) {
     // IEC 61131-3 ST allows all-positional argument lists (e.g. MAX(a, b),
     // LIMIT(MN, IN, MX)); mixing positional and named arguments is not
     // allowed.
@@ -2259,6 +2356,11 @@ private:
         if (!name) {
           emitWarning(loc(lhs->loc()))
               << "invalid parameter name, argument skipped";
+          continue;
+        }
+        if (binary->getOp() == tok_assign_output && fOut) {
+          if (failed(fOut(name->getName(), binary)))
+            return mlir::failure();
           continue;
         }
         if (auto *str = dyn_cast<StringConstantAST>(binary->getRhs())) {
@@ -3522,6 +3624,10 @@ private:
     // get arguments
     SmallVector<mlir::Value, 4> arguments;
     SmallVector<mlir::Attribute, 4> argNames;
+    // by-ref params of this call: (cell, target address, type) copied back
+    // after the call (VAR_IN_OUT / VAR_OUTPUT passed by copy-in/copy-out)
+    SmallVector<std::tuple<mlir::Value, mlir::Value, mlir::Type>, 4>
+        fcWriteBacks;
     const llvm::StringMap<mlir::Type> *paramTypes = nullptr;
     auto ptIt = callableVarTypes.find(callee);
     if (ptIt == callableVarTypes.end()) {
@@ -3549,6 +3655,160 @@ private:
       ++posIdx;
     }, paramTypes)))
       return nullptr;
+
+    // Rebuild the argument list in the callee's declared parameter order
+    // (IEC ed.3 6.6.1.7.1): omitted inputs take their declared default;
+    // VAR_IN_OUT / VAR_OUTPUT parameters are passed by address (the `=>`
+    // binding for outputs, `:= var` for in/outs; unbound by-ref params get a
+    // fresh temp cell) so the callee reads/writes the caller's variable.
+    auto allIt = callableAllOrder.find(callee);
+    if (allIt == callableAllOrder.end())
+      for (auto &kv : callableAllOrder)
+        if (kv.getKey().equals_insensitive(callee)) {
+          allIt = callableAllOrder.find(kv.getKey());
+          break;
+        }
+    if (allIt != callableAllOrder.end()) {
+      auto inoutSet = callableInOut.find(callee);
+      if (inoutSet == callableInOut.end())
+        for (auto &kv : callableInOut)
+          if (kv.getKey().equals_insensitive(callee)) {
+            inoutSet = callableInOut.find(kv.getKey());
+            break;
+          }
+      auto outSet = callableOutputs.find(callee);
+      if (outSet == callableOutputs.end())
+        for (auto &kv : callableOutputs)
+          if (kv.getKey().equals_insensitive(callee)) {
+            outSet = callableOutputs.find(kv.getKey());
+            break;
+          }
+      auto defIt = callableVarDefaults.find(callee);
+      if (defIt == callableVarDefaults.end())
+        for (auto &kv : callableVarDefaults)
+          if (kv.getKey().equals_insensitive(callee)) {
+            defIt = callableVarDefaults.find(kv.getKey());
+            break;
+          }
+      auto containsCI = [](const std::set<std::string> *st,
+                           StringRef n) -> bool {
+        if (!st)
+          return false;
+        for (auto &e : *st)
+          if (llvm::StringRef(e).equals_insensitive(n))
+            return true;
+        return false;
+      };
+      // collect the call's bindings: named (name -> rhs, isOutput, origIdx)
+      // + positional (rhs, origIdx); origIdx indexes the already-evaluated
+      // `arguments` from the first mlirGenCallParameters pass, so argument
+      // expressions are not evaluated twice
+      auto origArgs = arguments;
+      auto origNames = argNames;
+      llvm::StringMap<std::tuple<const ExpressionAST *, bool, size_t>> named;
+      SmallVector<std::pair<const ExpressionAST *, size_t>, 4> positional;
+      size_t origIdx = 0;
+      for (auto &arg : expr->getParameters()) {
+        auto binary = dyn_cast<BinaryExpressionAST>(arg.get());
+        bool isNamed = binary && (binary->getOp() == tok_assignment ||
+                                  binary->getOp() == tok_assign_output);
+        if (isNamed) {
+          auto lhs = dyn_cast<SimpleVariableAST>(binary->getLhs());
+          if (lhs)
+            named[llvm::StringRef(lhs->getName()).upper()] = {
+                binary->getRhs(), binary->getOp() == tok_assign_output,
+                origIdx};
+        } else {
+          positional.push_back({arg.get(), origIdx});
+        }
+        ++origIdx;
+      }
+      SmallVector<mlir::Value, 8> fullArgs;
+      SmallVector<mlir::Attribute, 8> fullNames;
+      size_t posIdx = 0;
+      for (auto &pname : allIt->second) {
+        std::string pUp = llvm::StringRef(pname).upper();
+        const ExpressionAST *rhs = nullptr;
+        mlir::Value v0; // already-evaluated argument value from the first pass
+        size_t v0Idx = origArgs.size();
+        auto nit = named.find(pUp);
+        if (nit != named.end()) {
+          rhs = std::get<0>(nit->second);
+          v0Idx = std::get<2>(nit->second);
+        } else if (posIdx < positional.size()) {
+          rhs = positional[posIdx].first;
+          v0Idx = positional[posIdx].second;
+          ++posIdx;
+        }
+        if (v0Idx < origArgs.size())
+          v0 = origArgs[v0Idx];
+        bool isInOut = containsCI(inoutSet != callableInOut.end() ? &inoutSet->second : nullptr, pname);
+        bool isOutput = containsCI(outSet != callableOutputs.end() ? &outSet->second : nullptr, pname);
+        mlir::Value v;
+        if (!isInOut && !isOutput) {
+          if (!rhs) {
+            // omitted input: declared default (IEC ed.3 6.6.1.7.1)
+            mlir::Type ty = getType(tok_int);
+            int64_t dv = 0;
+            bool hasDef = false;
+            if (defIt != callableVarDefaults.end())
+              for (auto &kv : defIt->second)
+                if (kv.getKey().equals_insensitive(pname) && kv.second.first) {
+                  dv = kv.second.second;
+                  hasDef = true;
+                }
+            if (paramTypes)
+              for (auto &kv : *paramTypes)
+                if (kv.getKey().equals_insensitive(pname))
+                  ty = kv.second;
+            if (!hasDef)
+              dv = 0; // omitted input without a declared default: zero
+            unsigned w = 16;
+            if (auto it = ty.dyn_cast<IntegerType>())
+              w = it.getWidth();
+            else if (auto lt = ty.dyn_cast<LogicalType>())
+              w = lt.getWidth();
+            v = builder.create<ConstantOp>(
+                location, ty,
+                builder.getIntegerAttr(mlir::IntegerType::get(context, w), dv));
+          } else if (auto *str = dyn_cast<StringConstantAST>(rhs)) {
+            v = mlirGenStringLiteralValue(loc(rhs->loc()), paramTypes, pname, str);
+            if (!v)
+              return nullptr;
+          } else {
+            v = v0 ? v0 : mlirGenRValue(rhs);
+            if (!v)
+              return nullptr;
+          }
+        } else {
+          // By-reference parameter: stage through a temp cell of the declared
+          // type — copy the bound variable's value in before the call, copy it
+          // back after (the callee sees a 0-d typed view of the cell).
+          mlir::Type pty = getType(tok_int);
+          if (paramTypes)
+            for (auto &kv : *paramTypes)
+              if (kv.getKey().equals_insensitive(pname))
+                pty = kv.second;
+          auto addrTy = AddressType::get(pty);
+          v = builder.create<TempVariableOp>(location, addrTy,
+                                             builder.getStringAttr(pname));
+          if (rhs) {
+            mlir::Value val = v0 ? v0 : mlirGenRValue(rhs);
+            if (!val)
+              return nullptr;
+            builder.create<StoreOp>(location, v, val);
+            mlir::Value target = mlirGen(rhs);
+            if (!target)
+              return nullptr;
+            fcWriteBacks.push_back({v, target, pty});
+          }
+        }
+        fullArgs.push_back(v);
+        fullNames.push_back(mlir::StringAttr::get(context, pname));
+      }
+      arguments = std::move(fullArgs);
+      argNames = std::move(fullNames);
+    }
 
     auto rtIt = functionResultTypes.find(callee);
     if (rtIt == functionResultTypes.end()) {
@@ -3597,7 +3857,13 @@ private:
     }
 
     auto argNamesAttr = mlir::ArrayAttr::get(context, argNames);
-    return builder.create<CallFcOp>(location, resultType, callee, arguments, argNamesAttr);
+    mlir::Value callRes =
+        builder.create<CallFcOp>(location, resultType, callee, arguments, argNamesAttr);
+    for (auto &wb : fcWriteBacks) {
+      auto val = builder.create<LoadOp>(location, std::get<2>(wb), std::get<0>(wb));
+      builder.create<StoreOp>(location, std::get<1>(wb), val);
+    }
+    return callRes;
   }
 
   /// Case-insensitive VariableOp lookup in a function block: IEC 61131-3
@@ -3673,6 +3939,50 @@ private:
     auto ptIt = callableVarTypes.find(fb);
     if (ptIt != callableVarTypes.end())
       paramTypes = &ptIt->second;
+    // `out => var` bindings: written back from the instance member after the
+    // call (IEC ed.3 6.6.2.3 formal call output assignment). VAR_IN_OUT
+    // parameters bound with `:= var` are written back the same way (an
+    // approximation of by-reference semantics: the value is stored into the
+    // instance member before the call and copied back after it).
+    // (instance member address, caller target address, member type) triples
+    // written back after the call: `out => var` (formal output assignment,
+    // IEC ed.3 6.6.2.3) and VAR_IN_OUT `inout := var` (approximated as
+    // copy-in before / copy-out after the call).
+    SmallVector<std::tuple<mlir::Value, mlir::Value, mlir::Type>, 4>
+        outBindings;
+    {
+      auto ioIt = callableInOut.find(fb);
+      if (ioIt == callableInOut.end())
+        for (auto &kv : callableInOut)
+          if (kv.getKey().equals_insensitive(fb)) {
+            ioIt = callableInOut.find(kv.getKey());
+            break;
+          }
+      if (ioIt != callableInOut.end())
+        for (auto &arg : expr->getParameters()) {
+          auto binary = dyn_cast<BinaryExpressionAST>(arg.get());
+          if (!binary || binary->getOp() != tok_assignment)
+            continue;
+          auto lhs = dyn_cast<SimpleVariableAST>(binary->getLhs());
+          if (!lhs)
+            continue;
+          bool isInOut = false;
+          for (auto &e : ioIt->second)
+            if (llvm::StringRef(e).equals_insensitive(lhs->getName()))
+              isInOut = true;
+          if (!isInOut)
+            continue;
+          mlir::Value elem = mlirGenElement(location, idbRef, lhs->getName());
+          mlir::Value target = mlirGen(binary->getRhs());
+          if (!elem || !target)
+            continue;
+          auto it = byteViewTypes.find(elem);
+          mlir::Type ty = it != byteViewTypes.end()
+                               ? it->second
+                               : target.getType().cast<AddressType>().getElementType();
+          outBindings.push_back({elem, target, ty});
+        }
+    }
     if (failed(mlirGenCallParameters(expr, [&] (StringRef name, mlir::Value value) {
       auto elem = mlirGenElement(location, idbRef, name);
       if (!elem)
@@ -3691,6 +4001,19 @@ private:
         return mlirGenStoreStringBytes(location, elem,
                                        it->second.cast<ArrayType>(),
                                        str->getValue());
+      },
+      [&] (StringRef name, const BinaryExpressionAST *binary)
+          -> mlir::LogicalResult {
+        mlir::Value elem = mlirGenElement(location, idbRef, name);
+        mlir::Value target = mlirGen(binary->getRhs());
+        if (!elem || !target)
+          return mlir::failure();
+        auto it = byteViewTypes.find(elem);
+        mlir::Type ty = it != byteViewTypes.end()
+                             ? it->second
+                             : target.getType().cast<AddressType>().getElementType();
+        outBindings.push_back({elem, target, ty});
+        return mlir::success();
       })))
         return mlir::failure();
 
@@ -3712,6 +4035,12 @@ private:
                             << "' called as an empty stub";
     }
     builder.create<CallFbOp>(location, unquote(fb), idbRef);
+    // Write back the `out => var` bindings: load the instance member, store
+    // it into the caller's variable.
+    for (auto &ob : outBindings) {
+      auto val = builder.create<LoadOp>(location, std::get<2>(ob), std::get<0>(ob));
+      builder.create<StoreOp>(location, std::get<1>(ob), val);
+    }
     return mlir::success();
   }
 
