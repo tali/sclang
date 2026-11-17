@@ -1710,14 +1710,17 @@ private:
               bitVal = cast.getResult();
             }
             auto scaleC = builder.create<ConstantOp>(
-                location, i8, builder.getIntegerAttr(i8, (int64_t)(1 << bit)));
+                location, i8,
+                builder.getIntegerAttr(builder.getIntegerType(8),
+                                       (int64_t)(1 << bit)));
             auto set = builder.create<MulOp>(location, bitVal, scaleC.getResult());
             auto byteVal = builder.create<LoadOp>(location, byteTy, lhs).getResult();
             auto byteI8 = builder.create<IntegerCastOp>(location, i8, byteVal);
             byteI8.setZextAttr(builder.getUnitAttr());
             auto maskC = builder.create<ConstantOp>(
                 location, i8,
-                builder.getIntegerAttr(i8, (int64_t)(uint8_t)~(1 << bit)));
+                builder.getIntegerAttr(builder.getIntegerType(8),
+                                       (int64_t)(uint8_t)~(1 << bit)));
             auto cleared = builder.create<AndOp>(location, byteI8.getResult(), maskC.getResult());
             auto newByte = builder.create<OrOp>(location, cleared.getResult(), set.getResult());
             builder.create<StoreOp>(location, lhs, newByte.getResult());
@@ -1869,14 +1872,15 @@ private:
           // (byte / 2^n) % 2 as a byte-typed 0/1 value
           if (std::string(dir->getArea()) == "X") {
             auto byteTy = LogicalType::get(builder.getContext(), 8);
-            auto i8 = IntegerType::get(builder.getContext(), 8);
             auto byteVal = builder.create<LoadOp>(location, byteTy, addr).getResult();
             auto divC = builder.create<ConstantOp>(
                 location, byteTy,
-                builder.getIntegerAttr(i8, (int64_t)(1 << dir->getBit())));
+                builder.getIntegerAttr(builder.getIntegerType(8),
+                                       (int64_t)(1 << dir->getBit())));
             auto shifted = builder.create<DivOp>(location, byteVal, divC.getResult());
             auto modC = builder.create<ConstantOp>(
-                location, byteTy, builder.getIntegerAttr(i8, (int64_t)2));
+                location, byteTy,
+                builder.getIntegerAttr(builder.getIntegerType(8), (int64_t)2));
             return builder.create<ModOp>(location, shifted.getResult(), modC.getResult()).getResult();
           }
           // base.%Bn/.%Wn/.%Dn: load with the recorded access width
@@ -1980,7 +1984,8 @@ private:
       auto i8 = IntegerType::get(builder.getContext(), 8);
       return builder.create<ConstantOp>(
           loc(expr->loc()), i8,
-          builder.getIntegerAttr(i8, (uint8_t)expr->getValue()[0]));
+          builder.getIntegerAttr(builder.getIntegerType(8),
+                                 (uint8_t)expr->getValue()[0]));
     }
     // Multi-char literal in a plain value position (e.g. via a constant
     // symbol): materialize a temp String[254] and return the array value.
@@ -2524,6 +2529,57 @@ private:
     if (!rhs)
       return nullptr;
 
+    // IEC 61131-3 ed.3 table 30 date/time arithmetic (DATE - DATE, DT +/- TIME,
+    // DT - DT) is expanded into integer arithmetic on the decoded values.
+    if (expr->getOp() == tok_plus || expr->getOp() == tok_minus) {
+      if (mlir::Value r = mlirGenDateTimeArith(location, expr->getOp(), lhs, rhs))
+        return r;
+    }
+
+    // Ordering comparisons on DATE / DATE_AND_TIME: their storage is unsigned
+    // (day count / BCD calendar), so flip the sign bit before the signed
+    // comparison to get the correct unsigned (chronological for BCD) order.
+    switch (expr->getOp()) {
+    case tok_cmp_eq:
+    case tok_cmp_ne:
+    case tok_cmp_lt:
+    case tok_cmp_le:
+    case tok_cmp_gt:
+    case tok_cmp_ge:
+      if (lhs.getType().isa<DateType>() && rhs.getType().isa<DateType>()) {
+        auto flip = [&](mlir::Value v) {
+          return builder.create<XOrOp>(
+              location, v,
+              builder
+                  .create<ConstantOp>(location, v.getType(),
+                                       builder.getIntegerAttr(
+                                           builder.getIntegerType(16), 0x8000))
+                  .getResult());
+        };
+        lhs = flip(lhs);
+        rhs = flip(rhs);
+      } else if (lhs.getType().isa<DateAndTimeType>() &&
+                 rhs.getType().isa<DateAndTimeType>()) {
+        auto i64 = IntegerType::get(builder.getContext(), 64);
+        auto flip = [&](mlir::Value v) {
+          mlir::Value c = builder.create<IntegerCastOp>(location, i64, v).getResult();
+          return builder.create<XOrOp>(
+              location, c,
+              builder
+                  .create<ConstantOp>(location, i64,
+                                       builder.getIntegerAttr(
+                                           builder.getIntegerType(64),
+                                           (int64_t)0x8000000000000000LL))
+                  .getResult());
+        };
+        lhs = flip(lhs);
+        rhs = flip(rhs);
+      }
+      break;
+    default:
+      break;
+    }
+
     // Implicit integer widening for mixed-width operands (e.g. char + int,
     // byte + word): normalize both operands to an IntegerType of the wider
     // width, like SCL. LogicalType (byte/word/dword/bool) values are
@@ -2894,6 +2950,315 @@ private:
     return mlirGenCallParameters(fc, f, nullptr, paramTypes);
   }
 
+  // MARK: date/time arithmetic (IEC 61131-3 ed.3 table 30)
+  //
+  // SPEC[SCL] IEC 61131-3 ed.3 table 30 date/time arithmetic (DATE - DATE -> TIME, DT +/- TIME -> DT, DT - DT -> TIME), DT_TO_DATE / DT_TO_TOD conversions and DT_YEAR..DT_WEEKDAY field extractors -> mlirGenDateTimeArith / bcdDtToMs / msToBcdDt / mlirGenDtField (DATE = days since 1990-01-01 u16; DT = 8 big-endian BCD bytes in an i64, ADR-001; civil-calendar math via Hinnant's algorithms; BCD byte extraction is floor-div based because the DT sign bit is set for years 1990-1999)
+  //
+  // DATE is stored as days since 1990-01-01 (u16) and DATE_AND_TIME as 8
+  // big-endian BCD bytes in an i64 (ADR-001), so the table-30 operations
+  // (DATE - DATE, DT +/- TIME, DT - DT) are expanded here into plain integer
+  // arithmetic on the decoded values. All helpers work on i64 values.
+
+  mlir::Value dtConst(mlir::Location loc, int64_t v) {
+    // NB: the attr must be typed with an mlir::IntegerType (IntegerAttr
+    // requires it); the op result keeps the scl !scl.dint type.
+    auto i64 = IntegerType::get(builder.getContext(), 64);
+    return builder
+        .create<ConstantOp>(loc, i64,
+                            builder.getIntegerAttr(builder.getIntegerType(64),
+                                                   v))
+        .getResult();
+  }
+  mlir::Value dtAdd(mlir::Location loc, mlir::Value a, mlir::Value b) {
+    return builder.create<AddOp>(loc, a, b).getResult();
+  }
+  mlir::Value dtSub(mlir::Location loc, mlir::Value a, mlir::Value b) {
+    return builder.create<SubOp>(loc, a, b).getResult();
+  }
+  mlir::Value dtMul(mlir::Location loc, mlir::Value a, mlir::Value b) {
+    return builder.create<MulOp>(loc, a, b).getResult();
+  }
+  mlir::Value dtDiv(mlir::Location loc, mlir::Value a, mlir::Value b) {
+    return builder.create<DivOp>(loc, a, b).getResult();
+  }
+  mlir::Value dtMod(mlir::Location loc, mlir::Value a, mlir::Value b) {
+    return builder.create<ModOp>(loc, a, b).getResult();
+  }
+  /// Zero-extend a BOOL comparison result to i64 (0/1).
+  mlir::Value dtZextBool(mlir::Location loc, mlir::Value b) {
+    auto i64 = IntegerType::get(builder.getContext(), 64);
+    auto c = builder.create<IntegerCastOp>(loc, i64, b);
+    c.setZextAttr(builder.getUnitAttr());
+    return c.getResult();
+  }
+  /// Floor division (scl div truncates toward zero, which breaks modular
+  /// identities for negative operands).
+  mlir::Value dtFloorDiv(mlir::Location loc, mlir::Value a, int64_t p) {
+    mlir::Value q = dtDiv(loc, a, dtConst(loc, p));
+    mlir::Value r = dtMod(loc, a, dtConst(loc, p));
+    mlir::Value neg = dtZextBool(
+        loc, builder.create<LessThanOp>(loc, r, dtConst(loc, 0)).getResult());
+    return dtSub(loc, q, neg);
+  }
+  /// Unsigned field extraction from a possibly negative i64 (the BCD DT
+  /// value has its sign bit set for years 1990-1999): floor-div by p, then
+  /// fix the remainder of the mod up into [0, m).
+  mlir::Value dtUField(mlir::Location loc, mlir::Value arg, int64_t p,
+                       int64_t m) {
+    mlir::Value q = dtFloorDiv(loc, arg, p);
+    mlir::Value r = dtMod(loc, q, dtConst(loc, m));
+    return dtMod(loc, dtAdd(loc, r, dtConst(loc, m)), dtConst(loc, m));
+  }
+  /// Byte k (0 = most significant) of the big-endian i64 `arg` (unsigned).
+  mlir::Value dtByte(mlir::Location loc, mlir::Value arg, int k) {
+    int64_t p = 1;
+    for (int i = 0; i < 7 - k; ++i)
+      p *= 256;
+    return dtUField(loc, arg, p, 256);
+  }
+  /// Decode a 2-digit BCD byte: (b % 16) + 10 * (b / 16).
+  mlir::Value dtBcd2(mlir::Location loc, mlir::Value b) {
+    return dtAdd(loc, dtMod(loc, b, dtConst(loc, 16)),
+                 dtMul(loc, dtDiv(loc, b, dtConst(loc, 16)), dtConst(loc, 10)));
+  }
+
+  /// Days since 1970-01-01 from a civil date (Howard Hinnant's
+  /// days_from_civil; valid for dates >= 1970, which covers the DT range
+  /// starting at 1990). All operands i64.
+  mlir::Value daysFromCivil(mlir::Location loc, mlir::Value y, mlir::Value m,
+                            mlir::Value d) {
+    // y -= (m <= 2)
+    y = dtSub(loc, y,
+              dtZextBool(loc, builder.create<LessEqualOp>(loc, m, dtConst(loc, 2))
+                                 .getResult()));
+    mlir::Value era = dtDiv(loc, y, dtConst(loc, 400));
+    mlir::Value yoe = dtSub(loc, y, dtMul(loc, era, dtConst(loc, 400)));
+    // mAdj = m > 2 ? m - 3 : m + 9
+    mlir::Value mAdj = dtAdd(
+        loc, m,
+        dtSub(loc, dtConst(loc, 9),
+              dtMul(loc, dtConst(loc, 12),
+                    dtZextBool(loc, builder.create<GreaterThanOp>(loc, m, dtConst(loc, 2))
+                                       .getResult()))));
+    mlir::Value doy =
+        dtAdd(loc,
+              dtDiv(loc, dtAdd(loc, dtMul(loc, dtConst(loc, 153), mAdj),
+                               dtConst(loc, 2)),
+                    dtConst(loc, 5)),
+              dtSub(loc, d, dtConst(loc, 1)));
+    mlir::Value doe = dtAdd(
+        loc,
+        dtSub(loc, dtAdd(loc, dtMul(loc, yoe, dtConst(loc, 365)),
+                         dtDiv(loc, yoe, dtConst(loc, 4))),
+              dtDiv(loc, yoe, dtConst(loc, 100))),
+        doy);
+    return dtSub(loc, dtAdd(loc, dtMul(loc, era, dtConst(loc, 146097)), doe),
+                 dtConst(loc, 719468));
+  }
+
+  /// Inverse of daysFromCivil; returns {year, month, day} for a day count
+  /// since 1970-01-01 (valid for z >= 0).
+  llvm::SmallVector<mlir::Value, 3> civilFromDays(mlir::Location loc,
+                                                  mlir::Value z) {
+    z = dtAdd(loc, z, dtConst(loc, 719468));
+    mlir::Value era = dtDiv(loc, z, dtConst(loc, 146097));
+    mlir::Value doe = dtMod(loc, z, dtConst(loc, 146097));
+    mlir::Value yoe = dtDiv(
+        loc,
+        dtSub(loc,
+              dtSub(loc, dtAdd(loc, doe, dtDiv(loc, doe, dtConst(loc, 36524))),
+                    dtDiv(loc, doe, dtConst(loc, 1460))),
+              dtDiv(loc, doe, dtConst(loc, 146096))),
+        dtConst(loc, 365));
+    mlir::Value y = dtAdd(loc, yoe, dtMul(loc, era, dtConst(loc, 400)));
+    mlir::Value doy = dtSub(
+        loc, doe,
+        dtSub(loc, dtAdd(loc, dtMul(loc, yoe, dtConst(loc, 365)),
+                         dtDiv(loc, yoe, dtConst(loc, 4))),
+              dtDiv(loc, yoe, dtConst(loc, 100))));
+    mlir::Value mp =
+        dtDiv(loc, dtAdd(loc, dtMul(loc, dtConst(loc, 5), doy), dtConst(loc, 2)),
+              dtConst(loc, 153));
+    mlir::Value d = dtAdd(
+        loc,
+        dtSub(loc, doy,
+              dtDiv(loc, dtAdd(loc, dtMul(loc, dtConst(loc, 153), mp),
+                               dtConst(loc, 2)),
+                    dtConst(loc, 5))),
+        dtConst(loc, 1));
+    // m = mp >= 10 ? mp - 9 : mp + 3
+    mlir::Value m = dtAdd(
+        loc, mp,
+        dtSub(loc, dtConst(loc, 3),
+              dtMul(loc, dtConst(loc, 12),
+                    dtZextBool(loc,
+                               builder.create<GreaterEqualOp>(loc, mp, dtConst(loc, 10))
+                                   .getResult()))));
+    // y += (m <= 2)
+    y = dtAdd(loc, y,
+              dtZextBool(loc, builder.create<LessEqualOp>(loc, m, dtConst(loc, 2))
+                                 .getResult()));
+    return {y, m, d};
+  }
+
+  /// Full year from the 2-digit BCD year byte: the S7 DATE_AND_TIME range is
+  /// 1990-2089, so 90..99 mean 19xx and 00..89 mean 20xx.
+  mlir::Value dtFullYear(mlir::Location loc, mlir::Value yy) {
+    // y = yy >= 90 ? 1900 + yy : 2000 + yy
+    mlir::Value ge90 = dtZextBool(loc, builder.create<GreaterEqualOp>(
+                                            loc, yy, dtConst(loc, 90))
+                                         .getResult());
+    return dtAdd(loc, yy,
+                 dtSub(loc, dtConst(loc, 2000),
+                       dtMul(loc, ge90, dtConst(loc, 100))));
+  }
+
+  /// Decode a BCD DATE_AND_TIME value to ms since 1990-01-01 00:00:00 (i64).
+  mlir::Value bcdDtToMs(mlir::Location loc, mlir::Value dt) {
+    auto i64 = IntegerType::get(builder.getContext(), 64);
+    if (dt.getType() != i64)
+      dt = builder.create<IntegerCastOp>(loc, i64, dt).getResult();
+    mlir::Value y = dtFullYear(loc, dtBcd2(loc, dtByte(loc, dt, 0)));
+    mlir::Value mo = dtBcd2(loc, dtByte(loc, dt, 1));
+    mlir::Value d = dtBcd2(loc, dtByte(loc, dt, 2));
+    mlir::Value h = dtBcd2(loc, dtByte(loc, dt, 3));
+    mlir::Value mi = dtBcd2(loc, dtByte(loc, dt, 4));
+    mlir::Value s = dtBcd2(loc, dtByte(loc, dt, 5));
+    // msec: 3 BCD nibbles at bits 4..15
+    mlir::Value nib = dtUField(loc, dt, 16, 4096);
+    mlir::Value msec = dtAdd(
+        loc, dtMul(loc, dtDiv(loc, nib, dtConst(loc, 256)), dtConst(loc, 100)),
+        dtAdd(loc,
+              dtMul(loc, dtDiv(loc, dtMod(loc, nib, dtConst(loc, 256)),
+                               dtConst(loc, 16)),
+                    dtConst(loc, 10)),
+              dtMod(loc, nib, dtConst(loc, 16))));
+    // 1970-01-01 .. 1990-01-01 = 7305 days
+    mlir::Value days =
+        dtSub(loc, daysFromCivil(loc, y, mo, d), dtConst(loc, 7305));
+    // ms = ((days*24 + h)*3600 + mi*60 + s)*1000 + msec
+    return dtAdd(
+        loc,
+        dtMul(loc,
+              dtAdd(loc,
+                    dtMul(loc, dtAdd(loc, dtMul(loc, days, dtConst(loc, 24)), h),
+                          dtConst(loc, 3600)),
+                    dtAdd(loc, dtMul(loc, mi, dtConst(loc, 60)), s)),
+              dtConst(loc, 1000)),
+        msec);
+  }
+
+  /// Encode ms since 1990-01-01 00:00:00 (i64, may be negative) as a BCD
+  /// DATE_AND_TIME value (i64), including the S7 weekday nibble.
+  mlir::Value msToBcdDt(mlir::Location loc, mlir::Value ms) {
+    auto i64 = IntegerType::get(builder.getContext(), 64);
+    if (ms.getType() != i64)
+      ms = builder.create<IntegerCastOp>(loc, i64, ms).getResult();
+    // floor div/mod by 86400000 (ms may be negative)
+    // ms is relative to 1990-01-01 (as produced by bcdDtToMs), so q is a
+    // day count since 1990; civilFromDays wants days since 1970-01-01.
+    mlir::Value q = dtDiv(loc, ms, dtConst(loc, 86400000));
+    mlir::Value r = dtMod(loc, ms, dtConst(loc, 86400000));
+    mlir::Value neg = dtZextBool(
+        loc, builder.create<LessThanOp>(loc, r, dtConst(loc, 0)).getResult());
+    q = dtSub(loc, q, neg);
+    r = dtAdd(loc, r, dtMul(loc, neg, dtConst(loc, 86400000)));
+    mlir::Value days1990 = q;
+    auto ymd = civilFromDays(loc, dtAdd(loc, q, dtConst(loc, 7305)));
+    mlir::Value h = dtDiv(loc, r, dtConst(loc, 3600000));
+    r = dtMod(loc, r, dtConst(loc, 3600000));
+    mlir::Value mi = dtDiv(loc, r, dtConst(loc, 60000));
+    r = dtMod(loc, r, dtConst(loc, 60000));
+    mlir::Value s = dtDiv(loc, r, dtConst(loc, 1000));
+    mlir::Value msec = dtMod(loc, r, dtConst(loc, 1000));
+    // S7 weekday: 1=Sunday..7=Saturday; 1990-01-01 was a Monday (2)
+    mlir::Value wd = dtAdd(
+        loc, dtMod(loc, dtAdd(loc, dtMod(loc, days1990, dtConst(loc, 7)),
+                              dtConst(loc, 1)),
+                      dtConst(loc, 7)),
+        dtConst(loc, 1));
+    auto bcd2e = [&](mlir::Value v) {
+      return dtAdd(loc, dtMul(loc, dtDiv(loc, v, dtConst(loc, 10)),
+                              dtConst(loc, 16)),
+                   dtMod(loc, v, dtConst(loc, 10)));
+    };
+    auto bcd3e = [&](mlir::Value v) {
+      return dtAdd(loc, dtMul(loc, dtDiv(loc, v, dtConst(loc, 100)),
+                              dtConst(loc, 256)),
+                   dtAdd(loc,
+                         dtMul(loc, dtDiv(loc, dtMod(loc, v, dtConst(loc, 100)),
+                                          dtConst(loc, 10)),
+                               dtConst(loc, 16)),
+                         dtMod(loc, v, dtConst(loc, 10))));
+    };
+    auto scale = [&](mlir::Value v, int shift) {
+      int64_t p = 1;
+      for (int i = 0; i < shift; ++i)
+        p *= 256;
+      return dtMul(loc, v, dtConst(loc, p));
+    };
+    mlir::Value val = dtAdd(
+        loc, scale(bcd2e(dtMod(loc, ymd[0], dtConst(loc, 100))), 7),
+        dtAdd(loc, scale(bcd2e(ymd[1]), 6),
+              dtAdd(loc, scale(bcd2e(ymd[2]), 5),
+                    dtAdd(loc, scale(bcd2e(h), 4),
+                          dtAdd(loc, scale(bcd2e(mi), 3),
+                                dtAdd(loc, scale(bcd2e(s), 2),
+                                      dtAdd(loc, dtMul(loc, bcd3e(msec),
+                                                       dtConst(loc, 16)),
+                                            wd)))))));
+    return val;
+  }
+
+  /// IEC 61131-3 ed.3 table 30 arithmetic on DATE / TIME_OF_DAY /
+  /// DATE_AND_TIME operands. Returns nullptr if the combination is not a
+  /// date/time operation (the caller falls back to generic arithmetic).
+  mlir::Value mlirGenDateTimeArith(mlir::Location location, Token op,
+                                   mlir::Value lhs, mlir::Value rhs) {
+    auto *ctx = builder.getContext();
+    auto i64 = IntegerType::get(ctx, 64);
+    auto i32 = IntegerType::get(ctx, 32);
+    auto timeTy = TimeType::get(ctx);
+    bool minus = op == tok_minus;
+    auto toI64 = [&](mlir::Value v, bool zext) {
+      if (v.getType() == i64)
+        return v;
+      auto c = builder.create<IntegerCastOp>(location, i64, v);
+      if (zext)
+        c.setZextAttr(builder.getUnitAttr());
+      return c.getResult();
+    };
+
+    // DATE - DATE -> TIME (day difference in ms)
+    if (minus && lhs.getType().isa<DateType>() && rhs.getType().isa<DateType>()) {
+      mlir::Value d = dtSub(location, toI64(lhs, true), toI64(rhs, true));
+      mlir::Value ms = dtMul(location, d, dtConst(location, 86400000));
+      mlir::Value t = builder.create<IntegerCastOp>(location, i32, ms).getResult();
+      return builder.create<DialectCastOp>(location, timeTy, t).getResult();
+    }
+    // DT - DT -> TIME (ms difference of the decoded calendar values)
+    if (minus && lhs.getType().isa<DateAndTimeType>() &&
+        rhs.getType().isa<DateAndTimeType>()) {
+      mlir::Value ms = dtSub(location, bcdDtToMs(location, lhs),
+                             bcdDtToMs(location, rhs));
+      mlir::Value t = builder.create<IntegerCastOp>(location, i32, ms).getResult();
+      return builder.create<DialectCastOp>(location, timeTy, t).getResult();
+    }
+    // DT +/- TIME -> DT (TIME + DT allowed for ADD)
+    if ((lhs.getType().isa<DateAndTimeType>() && rhs.getType().isa<TimeType>()) ||
+        (!minus && lhs.getType().isa<TimeType>() && rhs.getType().isa<DateAndTimeType>())) {
+      mlir::Value dt = lhs.getType().isa<DateAndTimeType>() ? lhs : rhs;
+      mlir::Value tm = lhs.getType().isa<DateAndTimeType>() ? rhs : lhs;
+      mlir::Value ms = bcdDtToMs(location, dt);
+      mlir::Value t = toI64(tm, false); // TIME is a signed i32
+      mlir::Value r = minus ? dtSub(location, ms, t) : dtAdd(location, ms, t);
+      mlir::Value bcd = msToBcdDt(location, r);
+      return builder.create<DialectCastOp>(location, DateAndTimeType::get(ctx), bcd)
+          .getResult();
+    }
+    return nullptr;
+  }
+
   /// IEC 61131-3 conversion builtin `SRC_TO_DST` (single argument): cast
   /// the argument to the destination type via scl.int.cast (zext for the
   /// unsigned byte/word/dword targets). Returns nullptr if not a builtin.
@@ -2919,7 +3284,10 @@ private:
     else if (field == "MSEC") byteIdx = 6;      // high nibble pair of byte 6
     else if (field == "WEEKDAY") { byteIdx = 6; bcd = false; } // low nibble
     else if (field == "NANOSECOND") byteIdx = 7;
-    else if (field == "TOD") byteIdx = -2; // special: time-of-day in ms
+    else if (field == "TOD" || field == "TO_TOD")
+      byteIdx = -2; // special: time-of-day in ms (DT_TO_TOD)
+    else if (field == "TO_DATE")
+      byteIdx = -3; // special: DATE as days since 1990 (DT_TO_DATE)
     else return nullptr;
 
     mlir::Value arg;
@@ -2939,35 +3307,33 @@ private:
       arg = cast.getResult();
     }
     auto i64Const = [&](int64_t v) {
-      return builder.create<ConstantOp>(location, i64,
-                                        builder.getIntegerAttr(i64, v)).getResult();
+      // NB: the attr must be typed with an mlir::IntegerType (IntegerAttr
+      // requires it); the op result keeps the scl !scl.dint type.
+      return builder
+          .create<ConstantOp>(location, i64,
+                              builder.getIntegerAttr(builder.getIntegerType(64),
+                                                     v))
+          .getResult();
     };
     if (byteIdx == -2) {
-      // DT_TOD: ms since midnight from the BCD hour/min/sec/msec bytes
-      auto bcdByte = [&](int idx) -> mlir::Value {
-        int64_t p = 1;
-        for (int i = 0; i < 7 - idx; ++i)
-          p *= 256;
-        auto b = builder.create<ModOp>(
-            location,
-            builder.create<DivOp>(location, arg, i64Const(p)).getResult(),
-            i64Const(256)).getResult();
-        auto lo = builder.create<ModOp>(location, b, i64Const(16)).getResult();
-        auto hi = builder.create<DivOp>(location, b, i64Const(16)).getResult();
-        return builder.create<AddOp>(
-            location, lo,
-            builder.create<MulOp>(location, hi, i64Const(10)).getResult()).getResult();
-      };
-      mlir::Value ms = builder.create<MulOp>(location, bcdByte(6), i64Const(1)).getResult();
-      ms = builder.create<AddOp>(
-          location, ms,
-          builder.create<MulOp>(location, bcdByte(5), i64Const(1000)).getResult()).getResult();
-      ms = builder.create<AddOp>(
-          location, ms,
-          builder.create<MulOp>(location, bcdByte(4), i64Const(60000)).getResult()).getResult();
-      ms = builder.create<AddOp>(
-          location, ms,
-          builder.create<MulOp>(location, bcdByte(3), i64Const(3600000)).getResult()).getResult();
+      // DT_TO_TOD: ms since midnight from the BCD hour/min/sec/msec fields
+      mlir::Value h = dtBcd2(location, dtByte(location, arg, 3));
+      mlir::Value mi = dtBcd2(location, dtByte(location, arg, 4));
+      mlir::Value s = dtBcd2(location, dtByte(location, arg, 5));
+      // msec: 3 BCD nibbles at bits 4..15
+      mlir::Value nib = dtUField(location, arg, 16, 4096);
+      mlir::Value msec = dtAdd(
+          location, dtMul(location, dtDiv(location, nib, i64Const(256)),
+                          i64Const(100)),
+          dtAdd(location,
+                dtMul(location, dtDiv(location, dtMod(location, nib, i64Const(256)),
+                                      i64Const(16)),
+                      i64Const(10)),
+                dtMod(location, nib, i64Const(16))));
+      mlir::Value ms = dtAdd(
+          location, dtMul(location, h, i64Const(3600000)),
+          dtAdd(location, dtMul(location, mi, i64Const(60000)),
+                dtAdd(location, dtMul(location, s, i64Const(1000)), msec)));
       auto todTy = getType(tok_time_of_day);
       auto i32 = IntegerType::get(ctx, 32);
       if (ms.getType() != i32)
@@ -2976,13 +3342,26 @@ private:
         ms = builder.create<DialectCastOp>(location, todTy, ms).getResult();
       return ms;
     }
-    // byte = (v / 256^(7-byteIdx)) % 256   (unsigned shifts via div/mod)
+    if (byteIdx == -3) {
+      // DT_TO_DATE: days since 1990-01-01 from the BCD year/month/day bytes
+      mlir::Value y = dtFullYear(location,
+                                 dtBcd2(location, dtByte(location, arg, 0)));
+      mlir::Value mo = dtBcd2(location, dtByte(location, arg, 1));
+      mlir::Value d = dtBcd2(location, dtByte(location, arg, 2));
+      mlir::Value days = dtSub(location, daysFromCivil(location, y, mo, d),
+                               i64Const(7305));
+      auto i16 = IntegerType::get(ctx, 16);
+      auto dv = builder.create<IntegerCastOp>(location, i16, days);
+      dv.setZextAttr(builder.getUnitAttr()); // day count is non-negative
+      return builder
+          .create<DialectCastOp>(location, DateType::get(ctx), dv.getResult())
+          .getResult();
+    }
+    // byte = (v / 256^(7-byteIdx)) % 256, unsigned-safe (see dtUField)
     int64_t pow = 1;
     for (int i = 0; i < 7 - byteIdx; ++i)
       pow *= 256;
-    auto byteVal = builder.create<ModOp>(
-        location, builder.create<DivOp>(location, arg, i64Const(pow)).getResult(),
-        i64Const(256)).getResult();
+    auto byteVal = dtUField(location, arg, pow, 256);
     mlir::Value fieldVal = byteVal;
     if (bcd) {
       // BCD decode: (b % 16) + 10 * (b / 16)
@@ -2990,6 +3369,9 @@ private:
       auto hi = builder.create<DivOp>(location, byteVal, i64Const(16)).getResult();
       fieldVal = builder.create<AddOp>(
           location, lo, builder.create<MulOp>(location, hi, i64Const(10)).getResult()).getResult();
+      // DT_YEAR returns the full year (1990-2089 century rule)
+      if (field == "YEAR")
+        fieldVal = dtFullYear(location, fieldVal);
     } else {
       fieldVal = builder.create<ModOp>(location, byteVal, i64Const(16)).getResult();
     }
@@ -4313,15 +4695,16 @@ private:
 
     auto rtIt = functionResultTypes.find(callee);
     if (rtIt == functionResultTypes.end()) {
+      // TIA DATE_AND_TIME field extractor / DT_TO_DATE, DT_TO_TOD (these
+      // contain "_TO_" and must be claimed before the generic conversions)?
+      if (mlir::Value v = mlirGenDtField(location, expr, callee))
+        return v;
       // IEC conversion builtin (INT_TO_WORD, TIME_TO_DINT, ...)?
       if (mlir::Value v = mlirGenBuiltinConversion(location, expr, callee))
         return v;
       // IEC 61131-3 standard functions (ABS/MAX/MIN/SEL/MUX/LIMIT and the
       // real math functions)?
       if (mlir::Value v = mlirGenStdFunction(location, expr, callee))
-        return v;
-      // TIA DATE_AND_TIME field extractor (DT_DAY(...), ...)?
-      if (mlir::Value v = mlirGenDtField(location, expr, callee))
         return v;
       // TIA system functions reading the clock: return the sim epoch
       // (1990-01-01 00:00:00); the virtual clock advances via scl_rt_cycle.

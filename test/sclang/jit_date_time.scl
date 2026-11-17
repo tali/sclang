@@ -1,0 +1,64 @@
+// RUN: sclang --opt --emit=jit --area-size M=8192 --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// IEC 61131-3 ed.3 table 30 date/time arithmetic, observed via TIME outputs
+// written big-endian to the M area (checked bytes noted per line):
+//   d_sub   = D#2024-03-01 - D#2024-02-27 = 3 days = 259200000 ms (M[2]=20)
+//   tod_sub = TOD#12:30:00 - TOD#10:15:30.5 = 8069500 ms (M[7]=124)
+//   dt_sub  = DT#2024-03-01-12:30:00 - DT#2024-02-29-23:59:59 = 45001000 ms (M[11]=40)
+//   dt_add  = (DT#2024-02-28-23:00:00 + T#2h) - DT#2024-02-28-00:00:00
+//             = 90000000 ms (M[15]=128)
+// plus DT_TO_DATE / DT_TO_TOD round-trips and a DT comparison as BOOLs.
+// CHECK: M:
+// CHECK: M[2]=20
+// CHECK: M[7]=124
+// CHECK: M[11]=40
+// CHECK: M[15]=128
+// CHECK: M[17]=1
+// CHECK: M[18]=1
+// CHECK: M[19]=1
+// CHECK: clock=0ms
+function_block main
+var_output
+  d_sub   : TIME;
+  tod_sub : TIME;
+  dt_sub  : TIME;
+  dt_add  : TIME;
+  same_d  : BOOL;
+  same_t  : BOOL;
+  before  : BOOL;
+end_var
+var
+  d1  : DATE := D#2024-03-01;
+  d2  : DATE := D#2024-02-27;
+  t1  : TOD  := TOD#12:30:00;
+  t2  : TOD  := TOD#10:15:30.5;
+  dt1 : DT   := DT#2024-03-01-12:30:00;
+  dt2 : DT   := DT#2024-02-29-23:59:59;
+end_var
+begin
+  d_sub   := d1 - d2;
+  tod_sub := t1 - t2;
+  dt_sub  := dt1 - dt2;
+  dt_add  := (DT#2024-02-28-23:00:00 + T#2h) - DT#2024-02-28-00:00:00;
+  same_d  := DT_TO_DATE(dt1) = d1;
+  same_t  := DT_TO_TOD(dt1) = t1;
+  before  := dt2 < dt1;
+end_function_block
+data_block inst
+  main
+end_data_block
+function OB1 : int
+begin
+  main."inst"();
+  %MD0 := "inst".d_sub;
+  %MD4 := "inst".tod_sub;
+  %MD8 := "inst".dt_sub;
+  %MD12 := "inst".dt_add;
+  %MB17 := "inst".same_d;
+  %MB18 := "inst".same_t;
+  %MB19 := "inst".before;
+end_function
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

@@ -829,8 +829,18 @@ private:
     if (!getNumber(secVal))
       return tok_error_date;
     if (lastChar == Token('.')) {
+      // Fraction of a second, scaled to milliseconds (`.5` = 500 ms), same
+      // rule as the fractional seconds of a TIME literal.
       lastChar = Token(getNextChar());
-      getNumber(msecVal);
+      std::string f;
+      while (isdigit(lastChar)) {
+        f += (char)lastChar;
+        lastChar = Token(getNextChar());
+      }
+      if (f.empty())
+        return tok_error_date;
+      double frac = std::stod("0." + f);
+      msecVal = (int)(frac * 1000.0 + 0.5);
     }
 
     return tok_time_literal;

@@ -152,7 +152,7 @@ has no `\b` — use python3 for regex edits.
   compares per-scan outputs (PROGRAM rewritten to FB + instance DB + OB1
   wrapper; driver flags --scan-io/--scan-inputs feed M-area slots per scan,
   see test/sclang/jit_scan_io.scl; --cross diffs SCL->JIT vs SCL->AWL->JIT).
-  Current: 70/75 pass (93%), 17 unsupported (CONFIGURATION/LREAL/STRING/...).
+  Current: 71/75 pass (95%), 17 unsupported (CONFIGURATION/LREAL/STRING/...).
   Frontend additions (committed): enum types (`TYPE C : (RED, GREEN);` ->
   INT storage + named constants resolved in codegen incl. CASE labels),
   subrange types (`INT (5..10)` -> base type, unchecked), multi-declaration
@@ -173,6 +173,18 @@ has no `\b` — use python3 for regex edits.
   temp cells with copy-in/copy-out write-backs (write-back targets may be
   arbitrary lvalue paths, e.g. `DONE => "DB".x.y`); FunctionCallAST results
   are cached so argument expressions are never evaluated twice.
+  Date/time (committed): TOD fraction lexing fixed (`.5` = 500 ms); IEC ed.3
+  table 30 arithmetic expanded in MLIRGen into integer ops on the decoded
+  values (DATE = days since 1990-01-01 u16; DT = 8 big-endian BCD bytes in an
+  i64, S7 layout incl. weekday nibble; civil-calendar math via Hinnant's
+  algorithms): DATE-DATE -> TIME ms, DT+/-TIME -> DT, DT-DT -> TIME ms;
+  DT_TO_DATE/DT_TO_TOD/DT_YEAR..DT_WEEKDAY extractors; DATE/DT ordering
+  flips the sign bit first (unsigned order). BCD byte extraction uses
+  floor-div + mod fixup (signed div of the negative top byte corrupts).
+  NOTE: never build IntegerAttr with an scl type (scl::IntegerType is not
+  mlir::IntegerType) — use builder.getIntegerType(w) for the attr; the old
+  pattern crashed the attr uniquer non-deterministically (APInt memcmp on a
+  mismatched width) in DT code paths. lit: test/sclang/jit_date_time.scl.
   sclang-gen now registers a diagnostic handler (MLIRGen errors were
   previously swallowed, giving a silent rc=1).
   Builtin standard FBs (TON/TOF/TP/CTU/CTD/CTUD/R_TRIG/F_TRIG/SR/RS) are
