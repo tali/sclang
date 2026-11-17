@@ -4,7 +4,7 @@
 // (zero-padded) one at a time.
 // CHECK-LABEL: func.func @f
 // CHECK:         %[[S:[a-z_0-9]+]] = memref.alloca() : memref<4xi8>
-// CHECK:         memref.reinterpret_cast %[[S]] to offset: [%c0]
+// CHECK:         memref.reinterpret_cast %{{[a-z_0-9]+}} to offset: [%c0]
 // CHECK:         memref.store %c104_i8
 // CHECK:         memref.store %c105_i8
 // CHECK:         memref.store %c0_i8

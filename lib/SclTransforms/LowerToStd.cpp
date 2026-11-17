@@ -57,6 +57,8 @@ struct FbMemberLayout {
   Type type;
   /// Cold-start initial value (bit pattern) if the initializer is constant.
   std::optional<llvm::APInt> initBits;
+  /// Cold-start string initializer (chars, zero-padded) for STRING members.
+  std::optional<std::string> initStr;
 };
 struct FbLayout {
   int64_t size = 0;
@@ -165,11 +167,15 @@ static FbLayoutCache computeFbLayouts(ModuleOp module) {
             width = 32;
           if (auto bits = foldConstBits(init, width))
             member.initBits = *bits;
+          else if (auto sa = var->getAttrOfType<StringAttr>("scl.init_str"))
+            member.initStr = sa.getValue().str();
           else if (pass == 0)
             var.emitWarning()
                 << "non-constant initializer of FB member '"
                 << var.getSymName() << "' in FB '" << fb.getName()
                 << "' is ignored (member starts zeroed)";
+        } else if (auto sa = var->getAttrOfType<StringAttr>("scl.init_str")) {
+          member.initStr = sa.getValue().str();
         }
         layout.members.push_back(std::move(member));
         layout.size += size;
@@ -216,13 +222,21 @@ public:
       // (ADR 002) and never touch this value.
       if (elem.isa<scl::DirectType>())
         return (Type)IntegerType::get(type.getContext(), 64);
-      // An instance DB address is the instance buffer itself.
+      // An instance DB address is a rank-1 i8 view of the instance buffer
+      // with a dynamic offset (like any other byte view). Keeping the view
+      // type here means FB calls on local instances (FB-typed members, which
+      // are byte views into the parent IDB) pass the view directly — no cast,
+      // and no reinterpret_cast chaining (whose fold would drop the inner
+      // offset). Global instance DBs are get_global'ed as plain memrefs and
+      // memref.cast to this view type in GetGlobalOpLowering.
       if (auto idbTy = elem.dyn_cast<scl::InstanceDbType>()) {
         auto it = fbLayouts.find(idbTy.getFbSymbol());
         if (it == fbLayouts.end())
           return Type();
-        return (Type)MemRefType::get({it->second.size},
-                                     IntegerType::get(type.getContext(), 8));
+        return (Type)mlir::MemRefType::get(
+            {ShapedType::kDynamic}, IntegerType::get(type.getContext(), 8),
+            StridedLayoutAttr::get(type.getContext(), ShapedType::kDynamic,
+                                   {1}));
       }
       auto celem = convertType(elem);
       if (!celem)
@@ -540,8 +554,22 @@ struct ConstantOpLowering : public OpConversionPattern<scl::ConstantOp> {
   LogicalResult
   matchAndRewrite(scl::ConstantOp op, scl::ConstantOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<arith::ConstantOp>(op,
-        op.getValue().cast<TypedAttr>());
+    // The result type must be the converted type; retyping the attribute
+    // accordingly (a bare arith.constant with a !scl.*-typed attribute is not
+    // legalizable by the LLVM conversion, e.g. !scl.char char literals).
+    auto resTy = getTypeConverter()->convertType(op.getType());
+    if (!resTy)
+      return failure();
+    auto attr = op.getValue().cast<TypedAttr>();
+    if (attr.getType() != resTy) {
+      if (auto ia = attr.dyn_cast<IntegerAttr>())
+        attr = rewriter.getIntegerAttr(resTy, ia.getValue());
+      else if (auto fa = attr.dyn_cast<FloatAttr>())
+        attr = rewriter.getFloatAttr(resTy, fa.getValue());
+      else
+        return failure();
+    }
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, resTy, attr);
     return success();
   }
 };
@@ -1095,14 +1123,27 @@ struct DataBlockOpLowering : public OpConversionPattern<scl::DataBlockOp> {
         bytes.reserve(layout.size);
         std::vector<uint8_t> buf(layout.size, 0);
         for (auto &m : layout.members) {
-          if (!m.initBits)
-            continue;
-          int64_t msize = byteSize(m.type, layouts);
-          // big-endian (ADR 001): byte i of the member window holds bits
-          // 8*(msize-1-i).. of the value.
-          for (int64_t i = 0; i < msize; ++i)
-            buf[m.offset + i] = (uint8_t)(m.initBits->getZExtValue() >>
-                                          (8 * (msize - 1 - i)));
+          if (m.initBits) {
+            int64_t msize = byteSize(m.type, layouts);
+            // big-endian (ADR 001): byte i of the member window holds bits
+            // 8*(msize-1-i).. of the value.
+            for (int64_t i = 0; i < msize; ++i)
+              buf[m.offset + i] = (uint8_t)(m.initBits->getZExtValue() >>
+                                            (8 * (msize - 1 - i)));
+          } else if (m.initStr) {
+            // String member (flat char array): store the literal chars,
+            // zero-padded (the buffer starts zeroed).
+            if (auto arrTy = m.type.dyn_cast<scl::ArrayType>())
+              if (arrTy.getElementType().isa<scl::IntegerType>() &&
+                  arrTy.getElementType().cast<scl::IntegerType>().getWidth() == 8) {
+                int64_t count = 1;
+                for (auto &dim : arrTy.getDimensions())
+                  count *= dim.second - dim.first + 1;
+                for (int64_t i = 0;
+                     i < count && i < (int64_t)m.initStr->size(); ++i)
+                  buf[m.offset + i] = (uint8_t)(*m.initStr)[i];
+              }
+          }
         }
         // DB-level initial values (scl.db `init` attr) override the FB
         // members' cold-start values.
@@ -1160,8 +1201,22 @@ struct GetGlobalOpLowering : public OpConversionPattern<scl::GetGlobalOp> {
     Value result;
     if (auto memrefRes = resTy.dyn_cast<MemRefType>();
         memrefRes && memrefRes.getLayout()) {
-      auto plainTy = MemRefType::get(memrefRes.getShape(),
-                                     memrefRes.getElementType());
+      // An instance-DB address converts to a dynamic-size byte view; the
+      // global itself must use the FB layout's static size.
+      SmallVector<int64_t, 1> shape(memrefRes.getShape());
+      if (auto addrTy = op.getResult().getType()
+                            .dyn_cast<scl::AddressType>()) {
+        if (auto idbTy =
+                addrTy.getElementType().dyn_cast<scl::InstanceDbType>()) {
+          auto &layouts = static_cast<const SclTypeConverter *>(typeConverter)
+                              ->fbLayouts;
+          auto it = layouts.find(idbTy.getFbSymbol());
+          if (it == layouts.end())
+            return failure();
+          shape[0] = it->second.size;
+        }
+      }
+      auto plainTy = MemRefType::get(shape, memrefRes.getElementType());
       Value global = rewriter.create<memref::GetGlobalOp>(op.getLoc(), plainTy,
                                                           op.getNameAttr());
       result = rewriter.create<memref::CastOp>(op.getLoc(), resTy, global);
@@ -1233,6 +1288,27 @@ static Value makeByteView(OpBuilder &b, Location loc, Value root, Value off,
   return b.create<memref::ReinterpretCastOp>(loc, resTy, root, off,
                                              ValueRange{sizeV},
                                              ValueRange{one});
+}
+
+/// Create a rank-1 i8 byte view at byte offset `memberOff` within `src`,
+/// folding in the runtime offset of `src` itself (e.g. an FB instance-DB
+/// parameter that is a view with a nonzero offset). reinterpret_cast offsets
+/// are absolute w.r.t. the base buffer, so resolve the root of any cast chain,
+/// take the root's metadata (base buffer + its own offset), and emit a single
+/// cast from the base buffer with the total offset.
+static Value makeByteViewFromSource(OpBuilder &b, Location loc, Value src,
+                                    int64_t memberOff, int64_t size,
+                                    MLIRContext *ctx, bool staticSize = false) {
+  Value dynOff;
+  int64_t constOff;
+  Value root = resolveByteViewRoot(src, dynOff, constOff, b, loc);
+  if (!root || !root.getType().isa<MemRefType>())
+    return nullptr;
+  auto meta = b.create<memref::ExtractStridedMetadataOp>(loc, root);
+  Value off =
+      combineOffsets(b, loc, constOff + memberOff, dynOff, meta.getOffset());
+  return makeByteView(b, loc, meta.getBaseBuffer(), off, size, ctx,
+                      staticSize);
 }
 
 // MARK: GetIndexOpLowering
@@ -1309,17 +1385,11 @@ struct GetIndexOpLowering : public OpConversionPattern<scl::GetIndexOp> {
       int64_t elemBytes = byteSize(arrayTy.getElementType(), layouts);
       if (elemBytes <= 0)
         return failure();
-      Value dynOff;
-      int64_t constOff;
-      Value root = resolveByteViewRoot(base, dynOff, constOff, rewriter, loc);
-      if (!root)
-        return failure();
       Value byteFlat = flat;
       if (elemBytes != 1) {
         auto scale = rewriter.create<arith::ConstantIndexOp>(loc, elemBytes);
         byteFlat = rewriter.create<arith::MulIOp>(loc, flat, scale);
       }
-      Value off = combineOffsets(rewriter, loc, constOff, dynOff, byteFlat);
       bool compositeElem =
           arrayTy.getElementType().isa<scl::StructType, scl::ArrayType>();
       // A static-size window is only correct when the result is an
@@ -1327,8 +1397,18 @@ struct GetIndexOpLowering : public OpConversionPattern<scl::GetIndexOp> {
       // byte-view path (array member of a FB/struct) yields address<i8>,
       // which converts to a dynamic-size view.
       bool staticSize = compositeElem && !op.getArrayType().has_value();
-      Value view = makeByteView(rewriter, loc, root, off, elemBytes, ctx,
-                                staticSize);
+      // Fold in the byte index and the base view's own runtime offset.
+      Value dynOff;
+      int64_t constOff;
+      Value root = resolveByteViewRoot(base, dynOff, constOff, rewriter, loc);
+      if (!root || !root.getType().isa<MemRefType>())
+        return failure();
+      auto meta = rewriter.create<memref::ExtractStridedMetadataOp>(loc, root);
+      Value off = combineOffsets(rewriter, loc, constOff, dynOff, nullptr);
+      off = rewriter.create<arith::AddIOp>(loc, off, byteFlat);
+      off = rewriter.create<arith::AddIOp>(loc, off, meta.getOffset());
+      Value view = makeByteView(rewriter, loc, meta.getBaseBuffer(), off,
+                                elemBytes, ctx, staticSize);
       rewriter.replaceOp(op, view);
       return success();
     }
@@ -1875,19 +1955,15 @@ struct GetVariableOpLowering : public OpConversionPattern<scl::GetVariableOp> {
       return failure();
 
     auto ctx = op.getContext();
-    auto i8 = IntegerType::get(ctx, 8);
-    // Rank-1 byte view of the member window, created in a single cast from
-    // the instance buffer (chaining casts would lose the offset when
-    // ReinterpretCastOp::fold fires).
-    auto resTy = MemRefType::get(
-        {ShapedType::kDynamic}, i8,
-        StridedLayoutAttr::get(ctx, ShapedType::kDynamic, {1}));
-    auto off = rewriter.create<arith::ConstantIndexOp>(loc, member->offset);
-    auto size = rewriter.create<arith::ConstantIndexOp>(
-        loc, byteSize(member->type, layouts));
-    auto one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
-    rewriter.replaceOpWithNewOp<memref::ReinterpretCastOp>(
-        op, resTy, adaptor.getAddr(), off, ValueRange{size}, ValueRange{one});
+    // Rank-1 byte view of the member window. makeByteViewFromSource folds in
+    // the address's own runtime offset (an instance-DB parameter passed as a
+    // local-member view), which a direct reinterpret_cast would drop.
+    int64_t size = byteSize(member->type, layouts);
+    Value view = makeByteViewFromSource(rewriter, loc, adaptor.getAddr(),
+                                        member->offset, size, ctx);
+    if (!view)
+      return failure();
+    rewriter.replaceOp(op, view);
     return success();
   }
 };
@@ -1922,7 +1998,8 @@ struct GetElementOpLowering : public OpConversionPattern<scl::GetElementOp> {
     Type memberTy;
     for (auto [name, elem] :
          llvm::zip(structTy.getElementNames(), structTy.getElementTypes())) {
-      if (name.getValue() == op.getName())
+      // IEC 61131-3 identifiers are case-insensitive
+      if (name.getValue().equals_insensitive(op.getName()))
         memberTy = elem;
       if (memberTy)
         break;
@@ -1933,20 +2010,13 @@ struct GetElementOpLowering : public OpConversionPattern<scl::GetElementOp> {
     auto ctx = op.getContext();
     // The address of a struct is the struct buffer memref itself (or a byte
     // view into a composite buffer for nested members).
-    Value base = adaptor.getAddr();
-    // Rank-1 byte view of the member window in a single cast from the root
-    // buffer (chained casts lose the offset in ReinterpretCastOp::fold).
-    Value dynOff;
-    int64_t constOff;
-    Value root = resolveByteViewRoot(base, dynOff, constOff, rewriter, loc);
-    if (!root)
-      return failure();
-    Value off = combineOffsets(rewriter, loc, constOff + offset, dynOff,
-                               nullptr);
     int64_t size = byteSize(memberTy, layouts);
     if (size <= 0)
       return failure();
-    Value view = makeByteView(rewriter, loc, root, off, size, ctx);
+    Value view = makeByteViewFromSource(rewriter, loc, adaptor.getAddr(),
+                                        offset, size, ctx);
+    if (!view)
+      return failure();
     rewriter.replaceOp(op, view);
     return success();
   }
@@ -1986,28 +2056,10 @@ struct CallFbOpLowering : public OpConversionPattern<scl::CallFbOp> {
       return success();
     }
     Value idb = adaptor.getIdb();
-    // The callee's instance-DB parameter type is derived from the FB layout
-    // (stub FBs have a zero-sized buffer), while the caller may pass a
-    // dynamic byte view (temp cell for an opaque instance). Adapt the
-    // operand to the callee's parameter type; reinterpret_cast performs no
-    // runtime size check, which is what we want for stub calls.
-    ModuleOp module = op->template getParentOfType<ModuleOp>();
-    if (auto callee = module.lookupSymbol<func::FuncOp>(op.getFbAttr())) {
-      if (auto paramTy = callee.getFunctionType().getInput(0)
-                             .dyn_cast<MemRefType>();
-          paramTy && idb.getType() != paramTy) {
-        if (!paramTy.hasStaticShape())
-          return failure();
-        SmallVector<OpFoldResult, 4> sizes, strides;
-        for (int64_t d : paramTy.getShape()) {
-          sizes.push_back(rewriter.getIndexAttr(d));
-          strides.push_back(rewriter.getIndexAttr(1));
-        }
-        idb = rewriter.create<memref::ReinterpretCastOp>(
-            op.getLoc(), paramTy, idb, rewriter.getIndexAttr(0), sizes,
-            strides);
-      }
-    }
+    // The callee's instance-DB parameter and the caller's instance address
+    // both convert to the same strided byte-view type, so they match
+    // directly (global DBs arrive via memref.cast in GetGlobalOpLowering,
+    // local FB-typed members are already byte views).
     auto call = rewriter.create<func::CallOp>(op.getLoc(), op.getFb(),
                                               TypeRange{}, ValueRange{idb});
     rewriter.replaceOp(op, call.getResults());

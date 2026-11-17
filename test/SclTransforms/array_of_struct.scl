@@ -15,7 +15,7 @@ end_type
 // the member view is a single cast from the root buffer at the dynamic
 // element offset (flat*4) plus the member offset; the intermediate
 // 4-byte element window is folded away by reinterpret_cast folding
-// CHECK: memref.reinterpret_cast {{.*}} to offset: [%c4], sizes: [%c2], strides: [%c1] : memref<12xi8> to memref<?xi8, strided<[1], offset: ?>>
+// CHECK: memref.reinterpret_cast {{.*}} to offset: [%c4], sizes: [%c2], strides: [%c1] : memref<i8> to memref<?xi8, strided<[1], offset: ?>>
 function OB1 : int
 var_temp
   pts : array[0..2] of point_t;
