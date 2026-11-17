@@ -3958,15 +3958,19 @@ private:
                        builder.create<LessThanOp>(location, ic, pm1),
                        byteHead, byteTail);
           } else if (up == "INSERT" || up == "REPLACE") {
-            // INSERT(IN,IN2,P): IN2 goes in AFTER position P, i.e. at 0-based
-            // index P (clamped to lenA). REPLACE(IN,IN2,L,P): IN2 replaces the
-            // L chars of IN starting at 1-based position P (0-based P-1).
+            // INSERT(IN,IN2,P): IEC ed.3 inserts IN2 AFTER 1-based position P
+            // (0-based index P); Siemens SCL inserts AT position P (0-based
+            // P-1) — a real S7-vs-IEC difference, so it is mode-dependent.
+            // REPLACE(IN,IN2,L,P): IN2 replaces the L chars of IN starting at
+            // 1-based position P (0-based P-1) in both.
             mlir::Value skip = up == "REPLACE" ? L : sclConst(location, d, 0);
+            mlir::Value insPos =
+                iecMode() ? P : pm1; // INSERT insertion index (0-based)
             mlir::Value pos =
                 up == "INSERT"
                     ? mux(location,
-                          builder.create<GreaterThanOp>(location, P, lenA),
-                          lenA, P)
+                          builder.create<GreaterThanOp>(location, insPos, lenA),
+                          lenA, insPos)
                     : pm1;
             int64_t nBInt = b.maxLen();
             mlir::Value srcB = clampIdx(

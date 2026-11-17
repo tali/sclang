@@ -480,7 +480,9 @@ def run_one(args, st_path, trace, tmpdir, cross):
     nscans = len(trace['scans']) or 1
     io_args = [s.scan_io_arg('in') for s in in_slots]
     io_args += [s.scan_io_arg('out') for s in out_slots]
-    base = ['-x=scl', '--emit=jit', '--jit-cycles', str(nscans),
+    # IEC 61131-3 ST sources: parse in IEC mode (ADR 004) so IEC semantics
+    # apply where they differ from S7 (e.g. INSERT inserts after position P).
+    base = ['-x=st', '--emit=jit', '--jit-cycles', str(nscans),
             '--cycle-ms', str(trace['period_ms']), '--area-size', 'M=8192']
     base += io_args + ['--scan-inputs', infile, wpath]
     rc, out = run_sclang(args.sclang, base)
@@ -502,7 +504,7 @@ def run_one(args, st_path, trace, tmpdir, cross):
         with open(cwpath, 'w') as f:
             f.write(cross_src)
         rcg, outg = run_sclang(args.sclang_gen,
-                               ['-x=scl', '--emit=awl', cwpath])
+                               ['-x=st', '--emit=awl', cwpath])
         if rcg != 0:
             # constructs the AWL backend cannot represent (date/time, ...)
             # are skipped, not failed: the differential check only applies
