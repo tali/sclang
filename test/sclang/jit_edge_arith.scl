@@ -1,0 +1,63 @@
+// RUN: printf '0 a=-5 b=4 r=1065353216\n1 a=5 b=-4 r=0\n2 a=-7 b=3 r=3212836864\n' > %t.in && sclang -x=st --emit=jit --jit-cycles=3 --cycle-ms=100 --scan-io=in:a=M/0/2 --scan-io=in:b=M/2/2 --scan-io=in:r=M/4/4 --scan-io=out:m1=M/8/2 --scan-io=out:d1=M/10/2 --scan-io=out:rdiv=M/12/4 --scan-io=out:radd=M/16/4 --scan-io=out:r2i_p=M/20/2 --scan-io=out:r2i_n=M/22/2 --scan-io=out:r2i_p3=M/24/2 --scan-inputs=%t.in %s 2>&1 | FileCheck %s
+// Arithmetic edge values (value-level, pinned). REAL scan-io slots move raw
+// f32 bit patterns: r=1065353216 is 1.0, r=0 is 0.0, r=3212836864 is -1.0.
+// - INT / and MOD truncate toward zero (IEC 61131-3 ed.3 table 34):
+//   -5/4=-1, 5/-4=-1, -7/3=-2; MOD keeps the dividend's sign:
+//   -5 MOD 4=-1, 5 MOD -4=1, -7 MOD 3=-1.
+// - REAL r/0.0 (awlsim /R zero-divisor rule: +-inf by the dividend's sign;
+//   0/0 = NaN): 1.0/0.0=+inf (0x7F800000=2139095040),
+//   0.0/0.0=NaN (0x7FC00000=2143289344), -1.0/0.0=-inf (0xFF800000, printed
+//   signed by the 4-byte slot read: -8388608).
+// - 0.1+0.2 in f32 = 0x3E99999A = 1050253722 (not 0.3 exactly).
+// - REAL_TO_INT ties: round half away from zero (2.5->3, -2.5->-3, 3.5->4);
+//   ties are implementation-defined in IEC 61131-3 (table 22), pinned here.
+// CHECK: scan 0: m1=-1 d1=-1 rdiv=2139095040 radd=1050253722 r2i_p=3 r2i_n=-3 r2i_p3=4
+// CHECK: scan 1: m1=1 d1=-1 rdiv=2143289344 radd=1050253722 r2i_p=3 r2i_n=-3 r2i_p3=4
+// CHECK: scan 2: m1=-1 d1=-2 rdiv=-8388608 radd=1050253722 r2i_p=3 r2i_n=-3 r2i_p3=4
+PROGRAM main
+  VAR_INPUT
+    a : INT;
+    b : INT;
+    r : REAL;
+  END_VAR
+  VAR_OUTPUT
+    m1 : INT;
+    d1 : INT;
+    rdiv : REAL;
+    radd : REAL;
+    r2i_p : INT;
+    r2i_n : INT;
+    r2i_p3 : INT;
+  END_VAR
+  m1 := a MOD b;
+  d1 := a / b;
+  rdiv := r / 0.0;
+  radd := 0.1 + 0.2;
+  r2i_p := REAL_TO_INT(2.5);
+  r2i_n := REAL_TO_INT(-2.5);
+  r2i_p3 := REAL_TO_INT(3.5);
+END_PROGRAM
+
+DATA_BLOCK inst
+  main
+END_DATA_BLOCK
+
+FUNCTION OB1 : int
+BEGIN
+  "inst".a := %MW0;
+  "inst".b := %MW2;
+  "inst".r := __UNBITS(%MD4);
+  main."inst"();
+  %MW8 := "inst".m1;
+  %MW10 := "inst".d1;
+  %MD12 := __BITS("inst".rdiv);
+  %MD16 := __BITS("inst".radd);
+  %MW20 := "inst".r2i_p;
+  %MW22 := "inst".r2i_n;
+  %MW24 := "inst".r2i_p3;
+END_FUNCTION
+
+FUNCTION _mlir_ciface_OB1 : void
+BEGIN
+  OB1();
+END_FUNCTION

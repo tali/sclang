@@ -142,6 +142,10 @@ has no `\b` — use python3 for regex edits.
 
 ## Tests
 
+- Test methodology and the rationale for each tier (lit / corpora / JIT smoke
+  / awlsim oracle / ST traces / differential cross / fuzz, plus the
+  `jit_edge_*` scenario rationale) are in `docs/testing.md`. Current: 131
+  lit tests, 92/92 ST traces with cross.
 - lit tests live in `test/SclGen/Parse`, `test/SclGen/MLIR`, `test/SclTransforms`,
   `test/AwlGen`, `test/sclang`; BUILD files glob `*.scl` (sclang dir also `*.awl`),
   so new files are picked up automatically. `test/lit.cfg.py` suffixes include

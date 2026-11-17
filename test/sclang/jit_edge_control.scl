@@ -1,0 +1,57 @@
+// RUN: printf '0 n=2\n1 n=7\n2 n=5\n3 n=9\n' > %t.in && sclang -x=st --emit=jit --jit-cycles=4 --cycle-ms=100 --scan-io=in:n=M/0/2 --scan-io=out:sum=M/8/2 --scan-io=out:cnt=M/10/2 --scan-io=out:c1=M/12/2 --scan-inputs=%t.in %s 2>&1 | FileCheck %s
+// Control-flow edge values (pinned):
+// - Nested FOR with CONTINUE (j=3 skipped) and EXIT (j=6 leaves the inner
+//   loop): per outer i the inner runs j=1,2,4,5 -> sum += i*12, cnt += 4;
+//   over i=1..10: sum=660, cnt=40 (deterministic, recomputed each scan).
+// - CASE with a range plus a list (1..3, 7 -> 100; 5 -> 200; else 0).
+// CHECK: scan 0: sum=660 cnt=40 c1=100
+// CHECK: scan 1: sum=660 cnt=40 c1=100
+// CHECK: scan 2: sum=660 cnt=40 c1=200
+// CHECK: scan 3: sum=660 cnt=40 c1=0
+PROGRAM main
+  VAR_INPUT
+    n : INT;
+  END_VAR
+  VAR_OUTPUT
+    sum : INT;
+    cnt : INT;
+    c1 : INT;
+  END_VAR
+  VAR
+    i : INT;
+    j : INT;
+  END_VAR
+  sum := 0; cnt := 0;
+  FOR i := 1 TO 10 DO
+    FOR j := 1 TO 10 DO
+      IF j = 3 THEN CONTINUE; END_IF;
+      IF j = 6 THEN EXIT; END_IF;
+      sum := sum + i * j;
+      cnt := cnt + 1;
+    END_FOR;
+  END_FOR;
+  CASE n OF
+    1..3, 7: c1 := 100;
+    5: c1 := 200;
+  ELSE
+    c1 := 0;
+  END_CASE;
+END_PROGRAM
+
+DATA_BLOCK inst
+  main
+END_DATA_BLOCK
+
+FUNCTION OB1 : int
+BEGIN
+  "inst".n := %MW0;
+  main."inst"();
+  %MW8 := "inst".sum;
+  %MW10 := "inst".cnt;
+  %MW12 := "inst".c1;
+END_FUNCTION
+
+FUNCTION _mlir_ciface_OB1 : void
+BEGIN
+  OB1();
+END_FUNCTION

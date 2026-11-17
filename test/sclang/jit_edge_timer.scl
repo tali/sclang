@@ -1,0 +1,46 @@
+// RUN: printf '0 inp=1\n1 inp=1\n2 inp=1\n' > %t.in && sclang -x=st --emit=jit --jit-cycles=3 --cycle-ms=100 --scan-io=in:inp=M/0.0/1 --scan-io=out:ton_pt0=M/2.0/1 --scan-io=out:ton_q=M/2.1/1 --scan-inputs=%t.in %s 2>&1 | FileCheck %s
+// Timer edge values (pinned):
+// - TON with PT=100ms, 100ms scans, IN=1 throughout: the scan where IN rises
+//   starts the timer with ET=0 (Q=0); one period later ET=100ms >= PT ->
+//   Q=1 and stays 1 (matches the conformant timers/ton trace pattern).
+// - TON with PT=0: implementation-defined (IEC 61131-3; awlsim SFB4 treats
+//   PT=0 as a reset with Q=FALSE — see the timer_pt_zero trace deviation).
+//   Our engine resets on the first scan (Q=0) and reports Q=1 from the next
+//   scan while IN=1 — pinned here as our chosen behavior.
+// CHECK: scan 0: ton_pt0=0 ton_q=0
+// CHECK: scan 1: ton_pt0=1 ton_q=1
+// CHECK: scan 2: ton_pt0=1 ton_q=1
+PROGRAM main
+  VAR_INPUT
+    inp : BOOL;
+  END_VAR
+  VAR_OUTPUT
+    ton_pt0 : BOOL;
+    ton_q : BOOL;
+  END_VAR
+  VAR
+    t0 : TON;
+    t1 : TON;
+  END_VAR
+  t0(IN := inp, PT := TIME#0s);
+  t1(IN := inp, PT := TIME#100ms);
+  ton_pt0 := t0.Q;
+  ton_q := t1.Q;
+END_PROGRAM
+
+DATA_BLOCK inst
+  main
+END_DATA_BLOCK
+
+FUNCTION OB1 : int
+BEGIN
+  "inst".inp := %M0.0;
+  main."inst"();
+  %M2.0 := "inst".ton_pt0;
+  %M2.1 := "inst".ton_q;
+END_FUNCTION
+
+FUNCTION _mlir_ciface_OB1 : void
+BEGIN
+  OB1();
+END_FUNCTION

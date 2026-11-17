@@ -1,0 +1,44 @@
+// RUN: sclang -x=st --emit=jit --jit-cycles=1 --scan-io=out:s_empty=M/2/2 --scan-io=out:cat_len=M/4/2 --scan-io=out:esc_len=M/6/2 --scan-io=out:dollar_len=M/8/2 %s 2>&1 | FileCheck %s
+// String edge values (pinned):
+// - LEN('') = 0.
+// - CONCAT('abc', <255 a's>) = 258 chars, truncated to the 254-char max.
+// - '$27' is the escape for the apostrophe: LEN('$27') = 1 (a single char,
+//   not '$' + '2' + '7'); likewise '$$' is one literal dollar: LEN('$$') = 1.
+// CHECK: scan 0: s_empty=0 cat_len=254 esc_len=1 dollar_len=1
+PROGRAM main
+  VAR_OUTPUT
+    s_empty : INT;
+    cat_len : INT;
+    esc_len : INT;
+    dollar_len : INT;
+  END_VAR
+  VAR
+    big : STRING[254];
+    s : STRING[8];
+  END_VAR
+  big := 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  s_empty := LEN('');
+  cat_len := LEN(CONCAT('abc', big));
+  s := '$27';
+  esc_len := LEN(s);
+  s := '$$';
+  dollar_len := LEN(s);
+END_PROGRAM
+
+DATA_BLOCK inst
+  main
+END_DATA_BLOCK
+
+FUNCTION OB1 : int
+BEGIN
+  main."inst"();
+  %MW2 := "inst".s_empty;
+  %MW4 := "inst".cat_len;
+  %MW6 := "inst".esc_len;
+  %MW8 := "inst".dollar_len;
+END_FUNCTION
+
+FUNCTION _mlir_ciface_OB1 : void
+BEGIN
+  OB1();
+END_FUNCTION
