@@ -18,9 +18,10 @@
   test/sclang/jit_awl_direct.scl (--emit=jit-awl).
   Deviations/gaps: FB arrays/structs, strings and DB initializers are
   rejected/dropped with an error or warning; `scl.debug.print` is dropped;
-  cross-width assignments insert an awl.cast (with `zext` for unsigned
-  sources; signed i16->i32 widening emits SLD 16 + SSD 16 — SRD is a
-  *logical* shift in S7/awlsim);
+  cross-width assignments insert an awl.cast; signedness is a property of
+  the SCL type (IntegerType = signed, LogicalType = unsigned bit string), so
+  unsigned sources set the `zext` attr and signed i16->i32 widening emits
+  SLD 16 + SSD 16 (SRD is a *logical* shift in S7/awlsim);
   bool logic is emitted as rlo chains (U/UN/O/ON/=) with temp bits for
   computed operands; the CASE selector is re-loaded before each compare
   (AWL L shifts ACC1). Computed values are spilled to M-area temps right at

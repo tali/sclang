@@ -357,17 +357,18 @@ struct FuncConverter {
   }
 
   // awl values holding signed scl::IntegerType data (INT): L zero-extends
-  // words like awlsim, so widening a signed word to a dword needs an explicit
-  // sign extension (SLD 16; SRD 16)
-  DenseSet<Value> signedVals;
-
-  Value castTo(Value v, Type t, bool zext = false) {
+  // Signedness is a property of the SCL type, not of the SSA value:
+  // IntegerType (CHAR/SINT/INT/DINT/LINT) is signed; LogicalType
+  // (BOOL/BYTE/WORD/DWORD/USINT/UINT/UDINT/LWORD) is an unsigned bit string.
+  // AWL `L` loads zero-extend like awlsim, so widening a signed word to a
+  // dword needs an explicit sign extension (SLD 16; SSD 16 — SRD is a
+  // *logical* shift in S7/awlsim, only SSD fills with the sign bit).
+  Value castTo(Value v, Type t, Type srcTy, bool zextAttr = false) {
     if (!v || v.getType() == t)
       return v;
-    if (t.isInteger(32) && v.getType().isInteger(16) && !zext &&
-        signedVals.count(v)) {
-      // Sign-extend i16 -> i32 via SLD 16 then SSD 16 (SRD is a *logical*
-      // shift in S7/awlsim — only SSD fills with the sign bit).
+    bool zext = zextAttr || isa<scl::LogicalType>(srcTy);
+    if (!zext && isa<scl::IntegerType>(srcTy) && t.isInteger(32) &&
+        v.getType().isInteger(16)) {
       auto i32 = IntegerType::get(ctx, 32);
       Value w = b.create<awl::CastOp>(loc, i32, v);
       Value s1 = b.create<awl::ShiftOp>(loc, i32, strAttr("sld"), w,
@@ -444,7 +445,7 @@ struct FuncConverter {
           emitError(call.getLoc()) << "argument type not representable in AWL";
           return nullptr;
         }
-        Value v = castTo(materialize(argVal), vt);
+        Value v = castTo(materialize(argVal), vt, argVal.getType());
         if (!v)
           return nullptr;
         scl::DirectType dt =
@@ -463,12 +464,9 @@ struct FuncConverter {
       scl::DirectType dt = scl::DirectType::get(
           ctx, scl::DirectArea::Marker, 0, kResultByte, 0,
           rt.getIntOrFloatBitWidth());
-      Value r = b.create<awl::LoadOp>(loc, rt, directValue(dt));
-      // L loads zero-extend, so a widening cast to i32 must sign-extend via
-      // SLD/SRD for signed integer results (castTo consults signedVals).
-      if (isa<scl::IntegerType>(call.getResult().getType()))
-        signedVals.insert(r);
-      return r;
+      // L loads zero-extend; signedness of later widening casts comes from
+      // the scl result type (castTo), not from the loaded value.
+      return b.create<awl::LoadOp>(loc, rt, directValue(dt));
     }
     return nullptr;
   }
@@ -532,9 +530,7 @@ struct FuncConverter {
         return nullptr;
       Value loaded = b.create<awl::LoadOp>(loc, awlDirectValueType(ctx, dt),
                                            directValue(dt));
-      if (isa<scl::IntegerType>(l.getType()))
-        signedVals.insert(loaded);
-      return castTo(loaded, rt);
+      return castTo(loaded, rt, l.getType());
     }
     if (auto call = dyn_cast<scl::CallFcOp>(def)) {
       r = emitCallFc(call, true);
@@ -574,12 +570,12 @@ struct FuncConverter {
       // Word ops (/I, *I, -I) sign-handle their operands (cast through i16);
       // /I packs quotient+remainder into ACCU1, so the quotient is extracted
       // with T dQ (stores the low word).
-      Value a = castTo(materialize(m.getLhs()), rt);
+      Value a = castTo(materialize(m.getLhs()), rt, m.getLhs().getType());
       if (!a)
         return nullptr;
       scl::DirectType dA = allocDirect(rt);
       b.create<awl::StoreOp>(loc, a, directValue(dA));
-      Value b2 = castTo(materialize(m.getRhs()), rt);
+      Value b2 = castTo(materialize(m.getRhs()), rt, m.getRhs().getType());
       if (!b2)
         return nullptr;
       scl::DirectType dB = allocDirect(rt);
@@ -635,7 +631,7 @@ struct FuncConverter {
       // 0 - x: the zero must be loaded first (stack [0, x] so that -I
       // computes ACCU2 - ACCU1 = 0 - x)
       Value z = constI(APInt(rt.getIntOrFloatBitWidth(), 0), rt);
-      Value a = castTo(materialize(n.getRhs()), rt);
+      Value a = castTo(materialize(n.getRhs()), rt, n.getRhs().getType());
       if (!a)
         return nullptr;
       r = b.create<awl::SubOp>(loc, rt, z, a);
@@ -647,10 +643,10 @@ struct FuncConverter {
       // Widening casts sign-extend only for signed (IntegerType) sources and
       // only when the cast is not marked zext (BYTE/WORD/UINT are unsigned
       // bit strings).
-      bool zext = isa<scl::LogicalType>(def->getOperand(0).getType());
+      bool zextAttr = false;
       if (auto ic = dyn_cast<scl::IntegerCastOp>(def))
-        zext = zext || (bool)ic.getZextAttr();
-      r = castTo(a, rt, zext);
+        zextAttr = (bool)ic.getZextAttr();
+      r = castTo(a, rt, def->getOperand(0).getType(), zextAttr);
     } else {
       emitError(def->getLoc())
           << "operation not supported by the AWL backend: " << def->getName();
@@ -876,7 +872,7 @@ struct FuncConverter {
       if (!raw)
         return;
       // cross-width assignment: insert an explicit cast (awl.cast)
-      raw = castTo(raw, vt);
+      raw = castTo(raw, vt, val.getType());
       b.create<awl::StoreOp>(loc, raw, directValue(dt));
     }
   }
@@ -926,7 +922,7 @@ struct FuncConverter {
         return nullptr;
       return castTo(b.create<awl::LoadOp>(loc, awlDirectValueType(ctx, dt),
                                            directValue(dt)),
-                    rt);
+                    rt, l.getType());
     }
     if (auto c = dyn_cast<scl::ConstantOp>(def)) {
       if (isa<StringAttr>(c.getValue()))
@@ -1239,7 +1235,8 @@ struct FuncConverter {
       Value by0 = f.getBy() ? materialize(f.getBy()) : nullptr;
       if (!by0)
         by0 = constI(APInt(vt.getIntOrFloatBitWidth(), 1), vt);
-      b.create<awl::StoreOp>(loc, castTo(by0, vt), directValue(stepDt));
+      b.create<awl::StoreOp>(loc, castTo(by0, vt, declaredTypeOf(f.getVar())),
+                          directValue(stepDt));
     }
     auto byVal = [&]() -> Value {
       return b.create<awl::LoadOp>(loc, vt, directValue(stepDt));
@@ -1260,14 +1257,16 @@ struct FuncConverter {
     // step <= 0: continue while var >= to
     Value vN = b.create<awl::LoadOp>(loc, vt, directValue(dt));
     Value tN = b.create<awl::LoadOp>(loc, vt, directValue(toDt));
-    emitJumpIf(b.create<awl::CmpGeOp>(loc, i1, castTo(vN, vt), castTo(tN, vt)),
+    emitJumpIf(b.create<awl::CmpGeOp>(loc, i1, castTo(vN, vt, declaredTypeOf(f.getVar())),
+                                     castTo(tN, vt, declaredTypeOf(f.getVar()))),
                bodyL);
     emitJump(endL);
     emitLabel(posL);
     // step > 0: continue while var <= to
     Value vP = b.create<awl::LoadOp>(loc, vt, directValue(dt));
     Value tP = b.create<awl::LoadOp>(loc, vt, directValue(toDt));
-    emitJumpIf(b.create<awl::CmpLeOp>(loc, i1, castTo(vP, vt), castTo(tP, vt)),
+    emitJumpIf(b.create<awl::CmpLeOp>(loc, i1, castTo(vP, vt, declaredTypeOf(f.getVar())),
+                                     castTo(tP, vt, declaredTypeOf(f.getVar()))),
                bodyL);
     emitJump(endL);
     emitLabel(bodyL);
@@ -1288,7 +1287,7 @@ struct FuncConverter {
   LogicalResult emitCase(scl::CaseOp c,
                          DenseMap<Block *, std::string> &blockLabels) {
     Type st = awlValueType(ctx, c.getSelector().getType());
-    Value sel = castTo(materialize(c.getSelector()), st);
+    Value sel = castTo(materialize(c.getSelector()), st, c.getSelector().getType());
     if (!sel)
       return failure();
     // A computed selector cannot be re-loaded (only LoadOp defs can), and
@@ -1321,10 +1320,10 @@ struct FuncConverter {
       for (int32_t val : vals.asArrayRef()) {
         Value selV = selSpill
                          ? b.create<awl::LoadOp>(loc, st, directValue(selSpill))
-                         : castTo(materializeFresh(c.getSelector()), st);
+                         : castTo(materializeFresh(c.getSelector()), st, c.getSelector().getType());
         Value cv = constI(APInt(st.getIntOrFloatBitWidth(), val, true), st);
         Value cc = b.create<awl::CmpEqOp>(loc, IntegerType::get(ctx, 1), selV,
-                                          castTo(cv, st));
+                                          castTo(cv, st, c.getSelector().getType()));
         emitJumpIf(cc, caseLabels[i]);
       }
     }
