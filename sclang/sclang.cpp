@@ -27,7 +27,11 @@
 #include "sclang/AwlGen/AwlGen.h"
 #include "sclang/Runtime/Runtime.h"
 #include "sclang/SclTransforms/Passes.h"
+#include <fstream>
+#include <map>
 #include <memory>
+#include <sstream>
+#include <vector>
 
 #include "mlir/Dialect/Affine/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -157,6 +161,99 @@ static cl::opt<unsigned> jitCycles(
 static cl::opt<uint64_t> cycleMs(
     "cycle-ms", cl::init(100),
     cl::desc("Virtual milliseconds advanced between JIT scans (scl_rt_cycle)"));
+
+/// Per-scan I/O channel for trace-driven JIT tests (IEC 61131 conformance
+/// traces, docs/conformance.md): `--scan-io=role:name=AREA/byte[.bit]/width`
+/// declares a named slot in a sim memory area (repeat the flag per slot);
+/// role is `in` or `out`. With `--scan-inputs=file`, before OB1 scan N the
+/// driver writes the values from line N of the file (`N name=value ...`)
+/// into the `in` slots, and after each scan it prints
+/// `scan N: name=value ...` for the `out` slots.
+/// Example: --scan-io=in:x=M/0/2 --scan-io=out:q=M/2.0/1 --scan-inputs=f
+static cl::list<std::string> scanIo(
+    "scan-io",
+    cl::desc("Per-scan I/O slot for trace tests: "
+             "role:name=AREA/byte[.bit]/widthBytes (role=in|out, repeat per "
+             "slot, only with --runtime=sim)"));
+static cl::opt<std::string> scanInputs(
+    "scan-inputs",
+    cl::desc("File with per-scan input values for --scan-io: one line per "
+             "scan, `N name=value ...` (only with --runtime=sim)"));
+
+namespace {
+struct ScanIoSlot {
+  bool isInput;
+  std::string name;
+  uint8_t area;
+  uint32_t byteOff;
+  int bit; // -1 = byte/word access, else bit number
+  uint8_t width;
+};
+
+/// Parse one `--scan-io` entry: role:name=AREA/byte[.bit]/width.
+static bool parseScanIoEntry(const std::string &entry, ScanIoSlot &slot) {
+  auto eq = entry.find('=');
+  if (eq == std::string::npos)
+    return false;
+  auto roleName = entry.substr(0, eq);
+  auto colon = roleName.find(':');
+  if (colon == std::string::npos)
+    return false;
+  auto role = roleName.substr(0, colon);
+  slot.name = roleName.substr(colon + 1);
+  slot.isInput = role == "in";
+  if (role != "in" && role != "out")
+    return false;
+  auto spec = entry.substr(eq + 1);
+  auto c1 = spec.find('/');
+  if (c1 == std::string::npos || c1 == 0)
+    return false;
+  slot.area = (uint8_t)spec[0];
+  auto rest = spec.substr(c1 + 1);
+  auto c2 = rest.find('/');
+  if (c2 == std::string::npos)
+    return false;
+  auto addr = rest.substr(0, c2);
+  slot.bit = -1;
+  auto dot = addr.find('.');
+  if (dot != std::string::npos) {
+    slot.byteOff = (uint32_t)std::stoul(addr.substr(0, dot));
+    slot.bit = std::stoi(addr.substr(dot + 1));
+  } else {
+    slot.byteOff = (uint32_t)std::stoul(addr);
+  }
+  slot.width = (uint8_t)std::stoul(rest.substr(c2 + 1));
+  return slot.width >= 1 && slot.width <= 8 &&
+         (slot.bit < 0 || slot.bit < 8);
+}
+
+/// Read the --scan-inputs file into scan index -> [(name, value)].
+static bool parseScanInputsFile(
+    const std::string &path,
+    std::map<unsigned, std::vector<std::pair<std::string, int64_t>>> &out) {
+  std::ifstream f(path);
+  if (!f)
+    return false;
+  std::string line;
+  while (std::getline(f, line)) {
+    if (line.empty() || line[0] == '#')
+      continue;
+    std::istringstream ss(line);
+    unsigned idx;
+    if (!(ss >> idx))
+      return false;
+    auto &vec = out[idx];
+    std::string tok;
+    while (ss >> tok) {
+      auto eq = tok.find('=');
+      if (eq == std::string::npos)
+        return false;
+      vec.push_back({tok.substr(0, eq), std::stoll(tok.substr(eq + 1))});
+    }
+  }
+  return true;
+}
+} // namespace
 
 /// Returns a SCL AST resulting from parsing the file or a nullptr on error.
 std::unique_ptr<sclang::ModuleAST> parseInputFile(llvm::StringRef filename) {
@@ -518,11 +615,71 @@ int runJit(mlir::ModuleOp module) {
   // awlsim with no OB 1 just idles — tolerate a missing OB 1 (e.g. FB-only
   // source files) instead of failing the run.
   if (engine->lookupPacked("OB1")) {
+    // Per-scan I/O slots for trace-driven tests (--scan-io/--scan-inputs).
+    std::vector<ScanIoSlot> scanSlots;
+    std::map<unsigned, std::vector<std::pair<std::string, int64_t>>> scanIn;
+    bool scanIoOk = true;
+    if (!scanIo.empty()) {
+      if (runtimeKind != Sim) {
+        llvm::errs() << "--scan-io requires --runtime=sim\n";
+        return -1;
+      }
+      for (auto &entry : scanIo) {
+        ScanIoSlot slot;
+        if (!parseScanIoEntry(entry, slot)) {
+          llvm::errs() << "invalid --scan-io entry: " << entry << "\n";
+          scanIoOk = false;
+        } else {
+          scanSlots.push_back(slot);
+        }
+      }
+      if (!scanInputs.empty() &&
+          !parseScanInputsFile(scanInputs, scanIn)) {
+        llvm::errs() << "cannot parse --scan-inputs file: " << scanInputs
+                     << "\n";
+        scanIoOk = false;
+      }
+    }
+    if (!scanIoOk)
+      return -1;
     for (unsigned i = 0; i < jitCycles; ++i) {
+      // Before the scan: push this scan's input values into the in-slots.
+      if (auto it = scanIn.find(i); it != scanIn.end())
+        for (auto &slot : scanSlots) {
+          if (!slot.isInput)
+            continue;
+          auto vit = llvm::find_if(it->second, [&](auto &p) {
+            return p.first == slot.name;
+          });
+          if (vit == it->second.end())
+            continue;
+          if (slot.bit >= 0)
+            scl_rt_write_bit(slot.area, 0, slot.byteOff, (uint8_t)slot.bit,
+                             vit->second != 0);
+          else
+            scl_rt_write(slot.area, 0, slot.byteOff, slot.width,
+                         (uint64_t)vit->second);
+        }
       auto invocationResult = engine->invoke("OB1");
       if (invocationResult) {
         llvm::errs() << "JIT invocation failed\n" << invocationResult << "\n";
         return -1;
+      }
+      // After the scan: report the out-slots as `scan N: name=value ...`.
+      if (!scanSlots.empty()) {
+        llvm::outs() << "scan " << i << ":";
+        for (auto &slot : scanSlots) {
+          if (slot.isInput)
+            continue;
+          int64_t v = slot.bit >= 0
+                          ? (scl_rt_read_bit(slot.area, 0, slot.byteOff,
+                                             (uint8_t)slot.bit)
+                                 ? 1
+                                 : 0)
+                          : scl_rt_read(slot.area, 0, slot.byteOff, slot.width);
+          llvm::outs() << " " << slot.name << "=" << v;
+        }
+        llvm::outs() << "\n";
       }
       if (scl_rt_stop_requested())
         break; // SFC 46 (STOP) / SFC -3 (SHUTDOWN): awlsim halts the CPU

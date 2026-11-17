@@ -1,0 +1,38 @@
+// RUN: printf '0 x=3\n1 x=2\n2 x=7\n' > %t.in && sclang --emit=jit --jit-cycles=3 --scan-io=in:x=M/0/2 --scan-io=out:branch=M/2/2 --scan-inputs=%t.in %s 2>&1 | FileCheck %s
+// Per-scan I/O (--scan-io/--scan-inputs, used by the ST trace harness): the
+// driver writes the scan's inputs into the M area before each scan and
+// prints "scan i: name=value ..." after it. cnt accumulates x each scan:
+// branch = 3, 5, 12.
+// CHECK: scan 0: branch=3
+// CHECK: scan 1: branch=5
+// CHECK: scan 2: branch=12
+function_block cntfb
+var_input
+  x : int;
+end_var
+var_output
+  branch : int;
+end_var
+var
+  cnt : int := 0;
+end_var
+begin
+  cnt := cnt + x;
+  branch := cnt;
+end_function_block
+
+data_block inst
+  cntfb
+end_data_block
+
+function OB1 : int
+begin
+  "inst".x := %MW0;
+  cntfb."inst"();
+  %MW2 := "inst".branch;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function
