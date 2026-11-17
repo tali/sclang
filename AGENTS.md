@@ -19,7 +19,9 @@ one-line pointer here.
 - `docs/decisions/` — ADRs (Context/Decision/Consequences + Status/Date) for
   hard-to-reverse decisions: 001 big-endian storage (implemented), 002 runtime
   C ABI (sim vs host; sim implemented), 003 AWL as a parallel dialect
-  converging at std IR.
+  converging at std IR, 004 IEC ST as a `--std=iec` mode of the SCL frontend
+  (NO new dialect; LangMode threaded through Lexer/Parser/MLIRGen, dialect
+  only gains LREAL f64 type + `scl.config` op).
 - `docs/design/` — evolving design plans: memory-areas (phase 1 implemented),
   awl-frontend, scl-to-awl. Update these when the plan changes; add new ADRs
   when a decision becomes fixed.
@@ -323,6 +325,15 @@ has no `\b` — use python3 for regex edits.
 
 ## Key design decisions (do not regress)
 
+- IEC 61131-3 ST is a mode of the SCL frontend, not a dialect (ADR 004):
+  `--std=iec` (default `--std=s7`, `-x=st` alias) sets a `LangMode` threaded
+  through Lexer/Parser/MLIRGen. IEC-only constructs (CONFIGURATION/RESOURCE/
+  TASK, VAR_GLOBAL/VAR_EXTERNAL, LREAL, bare STRING→STRING[254]) are parsed
+  in IEC mode; S7-only ones (% directs, TIMER/COUNTER, EN/ENO, "DB".member)
+  in S7 mode. VAR_GLOBAL lowers to a global DATA_BLOCK named after the
+  CONFIGURATION; VAR_EXTERNAL resolves into it; RESOURCE/TASK bindings are
+  kept as a `scl.config` metadata op (the trace harness generates the scan
+  schedule from them). Do NOT create a parallel `st` dialect.
 - AWL scalar semantics follow awlsim exactly: 8/16-bit values are UNSIGNED
   at their width (`AwlMemoryObject_asScalar` masks 0xFF/0xFFFF), so loads
   zero-extend into the 32-bit ACCU (`zextAcc`) and integer literals in the
