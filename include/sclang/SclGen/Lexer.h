@@ -169,6 +169,11 @@ enum Token : int {
   tok_string_literal = -104,
   tok_time_literal = -105,
   tok_direct_address = -110, // %I0.0, %IB2, %MW10, %DB1.DBW4, ...
+  // IEC 61131-3 unsigned type names (map to the same-width S7 types;
+  // unsignedness is a display/comparison concern, not a storage one)
+  tok_usint = -111,
+  tok_uint = -112,
+  tok_udint = -113,
 
   // errors
   tok_error_symbol = -901,
@@ -536,6 +541,12 @@ private:
       return tok_var_output;
     if (lower == "var_temp")
       return tok_var_temp;
+    if (lower == "usint")
+      return tok_usint;
+    if (lower == "uint")
+      return tok_uint;
+    if (lower == "udint")
+      return tok_udint;
     if (lower == "while")
       return tok_while;
     if (lower == "word")
@@ -585,6 +596,9 @@ private:
     case tok_dword:
     case tok_int:
     case tok_dint:
+    case tok_usint:
+    case tok_uint:
+    case tok_udint:
       lastChar = Token(getNextChar());
       if (getNumberLiteralTok() != tok_integer_literal)
         return tok_error_integer;
@@ -638,15 +652,18 @@ private:
       } else if (isxdigit(lastChar) && state == Hex) {
         stringValue += lastChar;
       } else if (lastChar == '#' && state == Decimal) {
-        if (stringValue == "2")
+        // NB: stringValue may carry a leading '-' (negative base literal
+        // like -16#10); compare only the digits part.
+        auto digits = negative ? stringValue.substr(1) : stringValue;
+        if (digits == "2")
           state = Binary;
-        else if (stringValue == "8")
+        else if (digits == "8")
           state = Octal;
-        else if (stringValue == "16")
+        else if (digits == "16")
           state = Hex;
         else
           return tok_error_integer;
-        stringValue = "";
+        stringValue = negative ? "-" : "";
       } else if (lastChar == '.' && state == Decimal) {
         lastChar = Token(getNextChar());
         if (lastChar == '.') {
@@ -836,6 +853,21 @@ private:
       int num;
       if (!getNumber(num))
         return tok_error_time;
+      // fractional part (IEC 61131-3 allows e.g. T#1.5s): only valid on the
+      // seconds/ms component, converted to milliseconds
+      int fracMsec = 0;
+      if (lastChar == Token('.')) {
+        lastChar = Token(getNextChar());
+        std::string f;
+        while (isdigit(lastChar)) {
+          f += (char)lastChar;
+          lastChar = Token(getNextChar());
+        }
+        if (f.empty())
+          return tok_error_time;
+        double frac = std::stod("0." + f);
+        fracMsec = (int)(frac * 1000.0 + 0.5);
+      }
       int kind = tolower(lastChar);
       lastChar = Token(getNextChar());
       switch (kind) {
@@ -861,6 +893,8 @@ private:
       }
       if (pos < lastpos)
         return tok_error_time;
+      if (fracMsec && pos != Sec && pos != MSec)
+        return tok_error_time; // fractions only allowed on s/ms
       switch (pos) {
       case None:
         assert(false);
@@ -875,9 +909,11 @@ private:
         break;
       case Sec:
         secVal = num;
+        if (fracMsec)
+          msecVal += fracMsec;
         break;
       case MSec:
-        msecVal = num;
+        msecVal = num + fracMsec;
         break;
       }
     }

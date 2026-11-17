@@ -79,6 +79,22 @@ private:
       lexer.consume(tok_symbol);
       return identifier;
     }
+    // Soft keywords: in IEC 61131-3 ST these are not reserved words and may
+    // be used as identifiers (e.g. VAR counter : CTU; or ok : BOOL;).
+    switch (lexer.getCurToken()) {
+    case tok_counter:
+    case tok_timer:
+    case tok_ok:
+    case tok_en: {
+      // NB: getIdentifier() asserts on non-identifier tokens; the lexer's
+      // stringValue still holds the word for keyword tokens.
+      std::string identifier(lexer.getStringValue());
+      lexer.consume(lexer.getCurToken());
+      return identifier;
+    }
+    default:
+      break;
+    }
     if (lexer.getCurToken() != tok_identifier) {
       llvm::errs() << "expected identifier, got " << lexer.getCurToken()
                    << "\n";
@@ -314,6 +330,10 @@ private:
     if (identifier.empty())
       return nullptr;
     ParseBlockAttributes(); // TIA VERSION lines / braced attrs
+    // IEC 61131-3 ST writes `TYPE name : <type> END_TYPE`; TIA omits the
+    // colon (`TYPE "name" VERSION : 0.1 STRUCT ...`).
+    if (lexer.getCurToken() == tok_colon)
+      lexer.consume(tok_colon);
     auto type = ParseDataTypeSpec(); // TODO: STRUCT
     auto attrs = ParseBlockAttributes();
 
@@ -766,6 +786,16 @@ private:
     case tok_int:
       elementaryType = ElementaryDataTypeAST::Type_Int;
       break;
+    // IEC 61131-3 unsigned elementary types map to the same-width S7 types
+    case tok_usint:
+      elementaryType = ElementaryDataTypeAST::Type_Byte;
+      break;
+    case tok_uint:
+      elementaryType = ElementaryDataTypeAST::Type_Word;
+      break;
+    case tok_udint:
+      elementaryType = ElementaryDataTypeAST::Type_DWord;
+      break;
     case tok_dint:
       elementaryType = ElementaryDataTypeAST::Type_DInt;
       break;
@@ -1193,6 +1223,12 @@ private:
     case tok_minus:
       return ParseUnaryExpression();
     case tok_identifier:
+    // soft keywords usable as variable names / callees (see
+    // ParseIdentifierExpression)
+    case tok_counter:
+    case tok_timer:
+    case tok_ok:
+    case tok_en:
       return ParseIdentifierExpression();
     case tok_symbol:
       return ParseSymbolExpression();
@@ -1244,10 +1280,25 @@ private:
   std::unique_ptr<ExpressionAST> ParseIdentifierExpression() {
     auto loc = lexer.getLastLocation();
 
-    std::string variable(lexer.getIdentifier());
-    if (variable.empty())
-      return parseError<ExpressionAST>("variable", "for expression");
-    lexer.consume(tok_identifier);
+    std::string variable;
+    // Soft keywords may also name variables/callees (VAR counter : CTU;
+    // counter(CU := ...)). getIdentifier() asserts on keyword tokens, so
+    // read the lexer's stringValue directly for those.
+    switch (lexer.getCurToken()) {
+    case tok_counter:
+    case tok_timer:
+    case tok_ok:
+    case tok_en:
+      variable = std::string(lexer.getStringValue());
+      lexer.consume(lexer.getCurToken());
+      break;
+    default:
+      variable = std::string(lexer.getIdentifier());
+      if (variable.empty())
+        return parseError<ExpressionAST>("variable", "for expression");
+      lexer.consume(tok_identifier);
+      break;
+    }
 
     return std::make_unique<SimpleVariableAST>(std::move(loc),
                                                std::move(variable), false);
@@ -1426,6 +1477,17 @@ private:
     auto value = lexer.getIntegerValue();
     Token type = lexer.getLiteralType();
     lexer.consume(tok_integer_literal);
+
+    // SPEC[SCL] IEC 61131-3 ST integer literals: an unsuffixed literal takes
+    // the smallest integer type that can represent its value (INT, then
+    // DINT) instead of always defaulting to INT (which truncated e.g.
+    // 1_000_000 to 16 bits).
+    if (type == tok_none) {
+      if (value >= -32768 && value <= 32767)
+        type = tok_int;
+      else
+        type = tok_dint;
+    }
 
     return std::make_unique<IntegerConstantAST>(std::move(loc), value, type);
   }
@@ -1879,6 +1941,12 @@ private:
     if (!condition)
       return parseError<RepeatUntilAST>("expression",
                                         "repeat until loop condition");
+
+    // Optional END_REPEAT: IEC 61131-3 ST writes `UNTIL cond END_REPEAT;`,
+    // plain SCL writes `UNTIL cond;`. In the SCL form the ';' terminates the
+    // statement and is left for the caller.
+    if (lexer.getCurToken() == tok_end_repeat)
+      lexer.consume(tok_end_repeat);
 
     return std::make_unique<RepeatUntilAST>(
         std::move(loc), std::move(condition), std::move(code));

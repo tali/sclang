@@ -21,6 +21,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "sclang/SclGen/MLIRGen.h"
+#include "sclang/AwlDialect/AwlOps.h"
 #include "sclang/SclDialect/Dialect.h"
 #include "sclang/SclGen/AST.h"
 
@@ -30,6 +31,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -130,14 +132,17 @@ public:
       if (auto *fn = llvm::dyn_cast<FunctionAST>(unit.get())) {
         functionResultTypes[fn->getIdentifier()] = getType(fn->getType());
         collectVarTypes(fn->getDeclarations(),
-                        callableVarTypes[fn->getIdentifier()]);
+                        callableVarTypes[fn->getIdentifier()],
+                        &callableVarNames[fn->getIdentifier()]);
       } else if (auto *ob = llvm::dyn_cast<OrganizationBlockAST>(unit.get())) {
         functionResultTypes[ob->getIdentifier()] = builder.getNoneType();
         collectVarTypes(ob->getDeclarations(),
-                        callableVarTypes[ob->getIdentifier()]);
+                        callableVarTypes[ob->getIdentifier()],
+                        &callableVarNames[ob->getIdentifier()]);
       } else if (auto *fb = llvm::dyn_cast<FunctionBlockAST>(unit.get())) {
         collectVarTypes(fb->getDeclarations(),
-                        callableVarTypes[fb->getIdentifier()]);
+                        callableVarTypes[fb->getIdentifier()],
+                        &callableVarNames[fb->getIdentifier()]);
       }
     }
     if (errorOccurred)
@@ -204,11 +209,20 @@ private:
   /// collected in a pre-pass so call arguments can be typed (and string
   /// literals materialized) even before the callee is generated.
   llvm::StringMap<llvm::StringMap<mlir::Type>> callableVarTypes;
+  /// Callable name -> declared parameter names IN DECLARATION ORDER (for
+  /// positional call arguments: the i-th positional argument gets the i-th
+  /// parameter's name, so the canonicalizer can reorder/fill defaults).
+  llvm::StringMap<llvm::SmallVector<std::string, 8>> callableVarNames;
 
   /// Collect the declared types of all variables of a declaration section
   /// into `map`, keyed by variable name.
   void collectVarTypes(const DeclarationSectionAST *declarations,
                        llvm::StringMap<mlir::Type> &map) {
+    collectVarTypes(declarations, map, nullptr);
+  }
+  void collectVarTypes(const DeclarationSectionAST *declarations,
+                       llvm::StringMap<mlir::Type> &map,
+                       llvm::SmallVector<std::string, 8> *order) {
     if (!declarations)
       return;
     for (const auto &decl : declarations->getDecls()) {
@@ -221,8 +235,11 @@ private:
         auto type = getType(value->getDataType());
         if (!type)
           continue;
-        for (const auto &var : value->getVars())
+        for (const auto &var : value->getVars()) {
           map[var->getIdentifier()] = type;
+          if (order)
+            order->push_back(std::string(var->getIdentifier()));
+        }
       }
     }
   }
@@ -350,7 +367,17 @@ private:
         auto name = var->getIdentifier();
         if (failed(declare(location, name, type, nullptr)))
           return mlir::failure();
-        builder.create<VariableOp>(location, type, isInput, isOutput, name, init);
+        auto varOp =
+            builder.create<VariableOp>(location, type, isInput, isOutput, name,
+                                       init);
+        // SPEC[SCL] IEC 61131-3 ST VAR string initializer (VAR s : STRING :=
+        // 'abc'): recorded as an attribute so the cold-start value is baked
+        // into the instance DB global (DataBlockOpLowering), like integer
+        // initializers via initBits.
+        if (decl->getInitializer().has_value())
+          if (auto *sc = llvm::dyn_cast<StringConstantAST>(
+                  decl->getInitializer().value()))
+            varOp->setAttr("scl.init_str", builder.getStringAttr(sc->getValue()));
       }
     }
     return mlir::success();
@@ -1055,6 +1082,12 @@ private:
       return builder.create<LoadOp>(location, arrTy, storage);
     }
     auto it = paramTypes->find(name);
+    if (it == paramTypes->end())
+      for (auto &kv : *paramTypes)
+        if (kv.getKey().equals_insensitive(name)) {
+          it = paramTypes->find(kv.getKey());
+          break;
+        }
     if (it == paramTypes->end()) {
       emitError(location) << "string literal argument: unknown parameter '"
                           << name << "'";
@@ -1411,12 +1444,41 @@ private:
 
   mlir::Value mlirGen(const IntegerConstantAST *expr) {
     auto location = loc(expr->loc());
-    // Boolean literals are typed bool (i1); other integer literals are int.
+    // The literal's declared/typed token decides its type (IEC 61131-3:
+    // unsuffixed literals take the smallest type that fits, see
+    // ParseIntegerLiteralExpression); default is int (i16).
     mlir::Type type = getType(tok_int);
     unsigned width = 16;
-    if (expr->getType() == tok_bool) {
+    switch (expr->getType()) {
+    case tok_bool:
       type = getType(tok_bool);
       width = 1;
+      break;
+    case tok_byte:
+    case tok_usint:
+      type = getType(tok_byte);
+      width = 8;
+      break;
+    case tok_char:
+      type = getType(tok_char);
+      width = 8;
+      break;
+    case tok_word:
+    case tok_uint:
+      type = getType(tok_word);
+      width = 16;
+      break;
+    case tok_dword:
+    case tok_udint:
+      type = getType(tok_dword);
+      width = 32;
+      break;
+    case tok_dint:
+      type = getType(tok_dint);
+      width = 32;
+      break;
+    default:
+      break;
     }
     auto attrType = builder.getIntegerType(width);
     auto value = builder.getIntegerAttr(attrType, expr->getValue());
@@ -1600,8 +1662,7 @@ private:
           theModule, fbName);
       if (!fb)
         return nullptr;
-      auto var = mlir::dyn_cast_or_null<VariableOp>(
-          mlir::SymbolTable::lookupSymbolIn(fb, name));
+      auto var = lookupVariableCI(fb, name);
       return var ? var.getType() : nullptr;
     }
     if (auto structTy = baseTy.dyn_cast<StructType>())
@@ -1688,7 +1749,7 @@ private:
         byteViewTypes[cell] = ArrayType::get({{0, 255}}, i8);
         return cell;
       }
-      auto var = mlir::dyn_cast_or_null<VariableOp>(mlir::SymbolTable::lookupSymbolIn(fb, name));
+      auto var = lookupVariableCI(fb, name);
       if (!var && stubFbNames.count(fbName.getValue().str())) {
         emitWarning(location) << "member '" << name << "' of stub FB '"
                               << fbName << "' approximated by a temp cell";
@@ -1702,7 +1763,28 @@ private:
         return nullptr;
       }
       // Address the member as an i8 view into the instance byte buffer.
-      auto result = builder.create<GetVariableOp>(location, resultType, address, name);
+      auto addrElem = address.getType().cast<AddressType>().getElementType();
+      if (addrElem == idbType) {
+        // Direct access through the FB's own instance-DB argument ($self).
+        auto result = builder.create<GetVariableOp>(location, resultType, address, name);
+        byteViewTypes[result] = var.getType();
+        return result;
+      }
+      // The instance is reached through a byte view (e.g. a local FB-typed
+      // member `g.y` where g is a member of the enclosing FB): address it as
+      // a struct element so GetElementOpLowering can compute the offset from
+      // the FB's member layout (a GetVariableOp on a byte view has no IDB
+      // type and cannot be lowered).
+      SmallVector<mlir::StringAttr, 8> names;
+      SmallVector<mlir::Type, 8> types;
+      for (auto v : fb.getBody().getOps<VariableOp>()) {
+        names.push_back(builder.getStringAttr(v.getSymName()));
+        types.push_back(v.getType());
+      }
+      auto st = StructType::get(names, types);
+      auto result = builder.create<GetElementOp>(location, resultType, address,
+                                                 var.getSymName(),
+                                                 mlir::TypeAttr::get(st));
       byteViewTypes[result] = var.getType();
       return result;
     };
@@ -2114,10 +2196,23 @@ private:
       const llvm::StringMap<mlir::Type> *paramTypes = nullptr,
       std::function<mlir::LogicalResult (StringRef, const StringConstantAST *)>
           fStr = nullptr) {
+    // IEC 61131-3 ST allows all-positional argument lists (e.g. MAX(a, b),
+    // LIMIT(MN, IN, MX)); mixing positional and named arguments is not
+    // allowed.
+    bool sawNamed = false, sawPositional = false;
     for (auto &arg : fc->getParameters()) {
       auto binary = dyn_cast<BinaryExpressionAST>(arg.get());
-      if (binary && (binary->getOp() == tok_assignment ||
-                     binary->getOp() == tok_assign_output)) {
+      bool isNamed = binary && (binary->getOp() == tok_assignment ||
+                                binary->getOp() == tok_assign_output);
+      if (isNamed && sawPositional) {
+        emitError(loc(arg->loc()), "named argument after positional argument");
+        return mlir::failure();
+      }
+      if (!isNamed)
+        sawPositional = true;
+      else
+        sawNamed = true;
+      if (isNamed) {
         auto lhs = binary->getLhs();
         auto name = dyn_cast<SimpleVariableAST>(lhs);
         if (!name) {
@@ -2146,8 +2241,9 @@ private:
           emitError(loc(arg->loc()), "parameter without name");
           return mlir::failure();
         }
-        if (fc->getParameters().size() != 1) {
-          emitError(loc(arg->loc()), "parameter without name");
+        if (sawNamed) {
+          emitError(loc(arg->loc()),
+                    "positional argument after named argument");
           return mlir::failure();
         }
         fNN(mlirGenRValue(arg.get()));
@@ -2929,10 +3025,226 @@ private:
     return nullptr;
   }
 
+  /// SPEC[SCL] IEC 61131-3 ST standard functions (ed.3 table 32/33):
+  /// ABS/MAX/MIN/SEL/MUX/LIMIT on numeric types and the unary real functions
+  /// SIN/COS/TAN/ASIN/ACOS/ATAN/SQRT/EXP/LN/ABS on REAL. Real functions lower
+  /// through awl.real_math (scl_rt_realmath_f, awlsim-exact); the numeric
+  /// selection functions lower to arith ops. Returns nullptr when `callee`
+  /// is not a standard function.
+  mlir::Value mlirGenStdFunction(mlir::Location location,
+                                 const FunctionCallAST *expr, StringRef callee) {
+    std::string up = std::string(callee.upper());
+    // real math function kind -> awl.real_math kind
+    static const std::map<std::string, std::string> realFns = {
+        {"SIN", "sin"}, {"COS", "cos"}, {"TAN", "tan"}, {"ASIN", "asin"},
+        {"ACOS", "acos"}, {"ATAN", "atan"}, {"SQRT", "sqr"}, {"EXP", "exp"},
+        {"LN", "ln"}, {"LOG", "ln"}, {"ABS", "abs"}};
+    static const std::map<std::string, bool> selFns = {
+        {"MAX", true}, {"MIN", false}}; // max=true, min=false
+
+    SmallVector<mlir::Value, 4> args;
+    if (failed(mlirGenCallParameters(
+            expr, [&](StringRef, mlir::Value v) { args.push_back(v); },
+            [&](mlir::Value v) { args.push_back(v); })))
+      return nullptr;
+    if (args.empty() || !args[0])
+      return nullptr;
+    auto ctx = builder.getContext();
+    mlir::Type t0 = args[0].getType();
+
+    // Unary real functions (operand REAL/LREAL -> awl.real_math, f32).
+    if (auto it = realFns.find(up); it != realFns.end() &&
+                                      args.size() == 1 &&
+                                      t0.isa<RealType>()) {
+      auto f32 = mlir::FloatType::getF32(ctx);
+      mlir::Value v = args[0];
+      if (v.getType() != f32)
+        v = builder.create<DialectCastOp>(location, f32, v);
+      auto r = builder.create<mlir::awl::RealMathOp>(
+          location, f32, builder.getStringAttr(it->second), v);
+      if (r.getResult().getType() != t0)
+        return builder.create<DialectCastOp>(location, t0, r.getResult());
+      return r.getResult();
+    }
+
+    // Numeric selection functions on a common integer/float type.
+    auto toStd = [&](mlir::Value v, mlir::Type stdTy) -> mlir::Value {
+      if (v.getType() == stdTy)
+        return v;
+      return builder.create<DialectCastOp>(location, stdTy, v);
+    };
+    auto fromStd = [&](mlir::Value v, mlir::Type sclTy) -> mlir::Value {
+      if (v.getType() == sclTy)
+        return v;
+      return builder.create<DialectCastOp>(location, sclTy, v);
+    };
+
+    if (up == "ABS" && args.size() == 1 && t0.isa<IntegerType>()) {
+      auto it = t0.cast<IntegerType>();
+      auto stdTy = mlir::IntegerType::get(ctx, it.getWidth());
+      mlir::Value v = toStd(args[0], stdTy);
+      auto zero = builder.create<ConstantOp>(
+          location, t0, builder.getIntegerAttr(stdTy, 0));
+      mlir::Value z = toStd(zero, stdTy);
+      auto lt = builder.create<mlir::arith::CmpIOp>(
+          location, mlir::arith::CmpIPredicate::slt, v, z);
+      auto neg = builder.create<mlir::arith::SubIOp>(location, z, v);
+      auto res = builder.create<mlir::arith::SelectOp>(location, lt.getResult(), neg.getResult(), v).getResult();
+      return fromStd(res, t0);
+    }
+    if (auto it = selFns.find(up); it != selFns.end() && args.size() >= 2) {
+      bool isFloat = llvm::any_of(args, [](mlir::Value v) {
+        return v.getType().isa<RealType>();
+      });
+      mlir::Type resTy = t0;
+      mlir::Type stdTy;
+      if (isFloat)
+        stdTy = mlir::FloatType::getF32(ctx);
+      else {
+        unsigned w = 32;
+        for (auto a : args)
+          if (auto it2 = a.getType().dyn_cast<IntegerType>())
+            w = std::max<unsigned>(w, it2.getWidth());
+        stdTy = mlir::IntegerType::get(ctx, w);
+      }
+      mlir::Value acc = toStd(args[0], stdTy);
+      for (size_t i = 1; i < args.size(); ++i) {
+        mlir::Value v = toStd(args[i], stdTy);
+        // max/min are order-insensitive for values, so arg order is fine.
+        if (isFloat)
+          acc = it->second
+                    ? builder.create<mlir::arith::MaxFOp>(location, acc, v).getResult()
+                    : builder.create<mlir::arith::MinFOp>(location, acc, v).getResult();
+        else
+          acc = it->second
+                    ? builder.create<mlir::arith::MaxSIOp>(location, acc, v).getResult()
+                    : builder.create<mlir::arith::MinSIOp>(location, acc, v).getResult();
+      }
+      return fromStd(acc, resTy);
+    }
+    if (up == "SEL" && args.size() == 3) {
+      // SEL(G, IN0, IN1): G ? IN1 : IN0
+      mlir::Value g = toStd(args[0], mlir::IntegerType::get(ctx, 1));
+      mlir::Type stdTy = mlir::IntegerType::get(ctx, 32);
+      if (t0.isa<RealType>())
+        stdTy = mlir::FloatType::getF32(ctx);
+      else if (auto it2 = args[1].getType().dyn_cast<IntegerType>())
+        stdTy = mlir::IntegerType::get(ctx, it2.getWidth());
+      mlir::Value in0 = toStd(args[1], stdTy), in1 = toStd(args[2], stdTy);
+      auto res = builder.create<mlir::arith::SelectOp>(location, g, in1, in0).getResult();
+      return fromStd(res, t0.isa<RealType>() ? t0 : args[1].getType());
+    }
+    if (up == "LIMIT" && args.size() == 3) {
+      // LIMIT(MN, IN, MX) = MIN(MAX(IN, MN), MX)
+      bool isFloat = llvm::any_of(args, [](mlir::Value v) {
+        return v.getType().isa<RealType>();
+      });
+      mlir::Type stdTy = isFloat ? (mlir::Type)mlir::FloatType::getF32(ctx)
+                                 : (mlir::Type)mlir::IntegerType::get(ctx, 32);
+      if (!isFloat)
+        for (auto a : args)
+          if (auto it2 = a.getType().dyn_cast<IntegerType>())
+            stdTy = mlir::IntegerType::get(
+                ctx, std::max<unsigned>(
+                         it2.getWidth(),
+                         stdTy.cast<mlir::IntegerType>().getWidth()));
+      mlir::Value mn = toStd(args[0], stdTy), in = toStd(args[1], stdTy),
+                  mx = toStd(args[2], stdTy);
+      mlir::Value r;
+      if (isFloat)
+        r = builder.create<mlir::arith::MaxFOp>(location, in, mn).getResult();
+      else
+        r = builder.create<mlir::arith::MaxSIOp>(location, in, mn).getResult();
+      if (isFloat)
+        r = builder.create<mlir::arith::MinFOp>(location, r, mx).getResult();
+      else
+        r = builder.create<mlir::arith::MinSIOp>(location, r, mx).getResult();
+      return fromStd(r, args[1].getType());
+    }
+    if (up == "MUX" && args.size() >= 2) {
+      // MUX(K, IN0..INn): nested selects, INn is the ELSE
+      mlir::Value k = toStd(args[0], mlir::IntegerType::get(ctx, 32));
+      mlir::Type stdTy = mlir::FloatType::getF32(ctx);
+      bool isFloat = false;
+      for (size_t i = 1; i < args.size(); ++i)
+        if (args[i].getType().isa<RealType>())
+          isFloat = true;
+      if (!isFloat) {
+        unsigned w = 32;
+        for (size_t i = 1; i < args.size(); ++i)
+          if (auto it2 = args[i].getType().dyn_cast<IntegerType>())
+            w = std::max<unsigned>(w, it2.getWidth());
+        stdTy = mlir::IntegerType::get(ctx, w);
+      }
+      mlir::Value res = toStd(args.back(), stdTy);
+      for (size_t i = args.size() - 1; i >= 1; --i) {
+        auto ki = builder.create<ConstantOp>(
+            location, args[0].getType(),
+            builder.getIntegerAttr(mlir::IntegerType::get(ctx, 32),
+                                  (int64_t)(i - 1)));
+        auto kiv = toStd(ki, mlir::IntegerType::get(ctx, 32));
+        auto eq = builder.create<mlir::arith::CmpIOp>(
+            location, mlir::arith::CmpIPredicate::eq, k, kiv);
+        res = builder.create<mlir::arith::SelectOp>(location, eq.getResult(),
+                                                    toStd(args[i], stdTy), res).getResult();
+      }
+      return fromStd(res, args[1].getType());
+    }
+    return nullptr;
+  }
+
   mlir::Value mlirGenFcCall(const FunctionCallAST *expr, StringRef callee,
                             bool allowVoid = false) {
     auto location = loc(expr->loc());
     auto context = builder.getContext();
+
+    // SPEC[SCL] Test-support builtins (awlsim-style oracles in SCL form,
+    // used by test/conformance/run_st_traces.py and SCL oracle lit tests):
+    //   __ASSERT(<bool expr>) -> awl.assert (id=line, op ==, actual=i64(expr),
+    //                            expected=1) -> scl_rt_assert_cmp
+    //   __BITS(<value>)       -> bit.cast to the same-width integer (lets the
+    //                            trace driver observe REAL bit patterns)
+    std::string upTest = std::string(callee.upper());
+    if (upTest == "__ASSERT" || upTest == "__BITS") {
+      mlir::Value arg;
+      if (failed(mlirGenCallParameters(
+              expr, [&](StringRef, mlir::Value v) { arg = v; },
+              [&](mlir::Value v) { arg = v; })))
+        return nullptr;
+      if (!arg) {
+        emitError(location) << upTest << " needs exactly one argument";
+        return nullptr;
+      }
+      if (upTest == "__BITS") {
+        unsigned width;
+        if (auto it = arg.getType().dyn_cast<IntegerType>())
+          width = it.getWidth();
+        else if (auto lt = arg.getType().dyn_cast<LogicalType>())
+          width = lt.getWidth();
+        else if (arg.getType().isa<RealType>() || arg.getType().isa<TimeType>())
+          width = 32;
+        else {
+          emitError(location) << "__BITS: unsupported argument type "
+                              << arg.getType();
+          return nullptr;
+        }
+        return builder
+            .create<BitCastOp>(location, IntegerType::get(context, width), arg)
+            .getResult();
+      }
+      auto i64 = mlir::IntegerType::get(context, 64);
+      if (arg.getType() != i64)
+        arg = builder.create<DialectCastOp>(location, i64, arg);
+      auto one = builder.create<ConstantOp>(
+          location, i64, builder.getIntegerAttr(i64, 1));
+      builder.create<mlir::awl::AssertOp>(
+          location,
+          builder.getIntegerAttr(builder.getI32Type(),
+                                 (int32_t)expr->loc().line),
+          builder.getIntegerAttr(builder.getI8Type(), 0), arg,
+          one.getResult());
+      return nullptr; // statement, no value
+    }
 
     // IEC 61131-3 string function (LEN/CONCAT/...)? Handled before the
     // generic argument collection: these accept positional arguments, and
@@ -2946,14 +3258,29 @@ private:
     SmallVector<mlir::Attribute, 4> argNames;
     const llvm::StringMap<mlir::Type> *paramTypes = nullptr;
     auto ptIt = callableVarTypes.find(callee);
+    if (ptIt == callableVarTypes.end()) {
+      // case-insensitive callee lookup (IEC identifiers are case-insensitive)
+      for (auto &kv : callableVarTypes)
+        if (kv.getKey().equals_insensitive(callee)) {
+          ptIt = callableVarTypes.find(kv.getKey());
+          break;
+        }
+    }
     if (ptIt != callableVarTypes.end())
       paramTypes = &ptIt->second;
+    auto orderIt = callableVarNames.find(callee);
+    size_t posIdx = 0;
     if (failed(mlirGenCallParameters(expr, [&] (StringRef name, mlir::Value value) {
       argNames.push_back(mlir::StringAttr::get(context, name));
       arguments.push_back(value);
       return mlir::success();
     }, [&] (mlir::Value value) {
       arguments.push_back(value);
+      // positional argument: name it after the i-th declared parameter so
+      // the canonicalizer can reorder/fill omitted defaults by name
+      if (orderIt != callableVarNames.end() && posIdx < orderIt->second.size())
+        argNames.push_back(mlir::StringAttr::get(context, orderIt->second[posIdx]));
+      ++posIdx;
     }, paramTypes)))
       return nullptr;
 
@@ -2961,6 +3288,10 @@ private:
     if (rtIt == functionResultTypes.end()) {
       // IEC conversion builtin (INT_TO_WORD, TIME_TO_DINT, ...)?
       if (mlir::Value v = mlirGenBuiltinConversion(location, expr, callee))
+        return v;
+      // IEC 61131-3 standard functions (ABS/MAX/MIN/SEL/MUX/LIMIT and the
+      // real math functions)?
+      if (mlir::Value v = mlirGenStdFunction(location, expr, callee))
         return v;
       // TIA DATE_AND_TIME field extractor (DT_DAY(...), ...)?
       if (mlir::Value v = mlirGenDtField(location, expr, callee))
@@ -3001,6 +3332,32 @@ private:
 
     auto argNamesAttr = mlir::ArrayAttr::get(context, argNames);
     return builder.create<CallFcOp>(location, resultType, callee, arguments, argNamesAttr);
+  }
+
+  /// Case-insensitive VariableOp lookup in a function block: IEC 61131-3
+  /// (and TIA) identifiers are case-insensitive, so `counter(CU := ...)`
+  /// must find the member declared as `cu`.
+  VariableOp lookupVariableCI(FunctionBlockOp fb, StringRef name) {
+    if (auto v = mlir::dyn_cast_or_null<VariableOp>(
+            mlir::SymbolTable::lookupSymbolIn(fb, name)))
+      return v;
+    for (auto v : fb.getBody().getOps<VariableOp>())
+      if (llvm::StringRef(v.getSymName()).equals_insensitive(name))
+        return v;
+    return nullptr;
+  }
+
+  /// Case-insensitive lookup in a callable's parameter type map.
+  mlir::Type lookupParamTypeCI(const llvm::StringMap<mlir::Type> *map,
+                               StringRef name) {
+    if (!map)
+      return nullptr;
+    if (auto it = map->find(name); it != map->end())
+      return it->second;
+    for (auto &kv : *map)
+      if (kv.getKey().equals_insensitive(name))
+        return kv.getValue();
+    return nullptr;
   }
 
   /// If `name` is a local variable of FB-instance type (e.g. a TON_TIME
@@ -3112,6 +3469,13 @@ private:
       return IntegerType::get(builder.getContext(), 16);
     case tok_dint:
       return IntegerType::get(builder.getContext(), 32);
+    // IEC 61131-3 unsigned type names map to the same-width S7 types
+    case tok_usint:
+      return LogicalType::get(builder.getContext(), 8);
+    case tok_uint:
+      return LogicalType::get(builder.getContext(), 16);
+    case tok_udint:
+      return LogicalType::get(builder.getContext(), 32);
     case tok_real:
       return RealType::get(builder.getContext());
     case tok_date:
