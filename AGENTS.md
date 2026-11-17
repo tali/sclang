@@ -152,7 +152,7 @@ has no `\b` — use python3 for regex edits.
   compares per-scan outputs (PROGRAM rewritten to FB + instance DB + OB1
   wrapper; driver flags --scan-io/--scan-inputs feed M-area slots per scan,
   see test/sclang/jit_scan_io.scl; --cross diffs SCL->JIT vs SCL->AWL->JIT).
-  Current: 40/75 pass, 17 unsupported (CONFIGURATION/LREAL/STRING/...).
+  Current: 54/75 pass, 17 unsupported (CONFIGURATION/LREAL/STRING/...).
   Builtin standard FBs (TON/TOF/TP/CTU/CTD/CTUD/R_TRIG/F_TRIG/SR/RS) are
   real now: forced instance layouts in the lowering's FbLayoutCache match
   scl_rt_timer_fb/counter_fb/edge_fb (runtime ABI v11); member access on a

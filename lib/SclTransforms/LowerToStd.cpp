@@ -114,6 +114,15 @@ static std::optional<llvm::APInt> foldConstBits(Value v, unsigned width) {
       return fa.getValue().bitcastToAPInt().sextOrTrunc(width);
     return std::nullopt;
   }
+  // date/time literals carry their storage value directly (ms / day count)
+  if (auto ct = llvm::dyn_cast<scl::ConstantTimeOp>(def))
+    return llvm::APInt(width, (uint64_t)(int64_t)ct.getValue(), true);
+  if (auto cd = llvm::dyn_cast<scl::ConstantDateOp>(def))
+    return llvm::APInt(width, (uint64_t)cd.getValue());
+  if (auto ctod = llvm::dyn_cast<scl::ConstantTimeOfDayOp>(def))
+    return llvm::APInt(width, (uint64_t)ctod.getValue());
+  if (auto cdt = llvm::dyn_cast<scl::ConstantDateAndTimeOp>(def))
+    return llvm::APInt(width, cdt.getValue());
   if (llvm::isa<scl::AddOp, scl::SubOp, scl::MulOp, scl::DivOp, scl::ModOp>(
           def)) {
     if (def->getNumOperands() != 2)
@@ -172,6 +181,12 @@ static FbLayoutCache computeFbLayouts(ModuleOp module) {
             width = lt.getWidth();
           else if (var.getType().isa<scl::RealType>())
             width = 32;
+          else if (var.getType().isa<scl::TimeType>() ||
+                   var.getType().isa<scl::TimeOfDayType>())
+            width = 32;
+          else if (var.getType().isa<scl::S5TimeType>() ||
+                   var.getType().isa<scl::DateType>())
+            width = 16;
           if (auto bits = foldConstBits(init, width))
             member.initBits = *bits;
           else if (auto sa = var->getAttrOfType<StringAttr>("scl.init_str"))
@@ -1095,11 +1110,19 @@ struct UnaryNotOpLowering : public OpConversionPattern<scl::UnaryNotOp> {
   matchAndRewrite(scl::UnaryNotOp op, scl::UnaryNotOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto i1 = rewriter.getIntegerType(1);
-    auto falseVal = rewriter.create<ConstantIntOp>(loc, 0, i1);
-    auto trueVal = rewriter.create<ConstantIntOp>(loc, 1, i1);
-    rewriter.replaceOpWithNewOp<SelectOp>(op, adaptor.getRhs(), falseVal,
-                                          trueVal);
+    Value v = adaptor.getRhs();
+    if (v.getType().isInteger(1)) {
+      // logical NOT on a bool
+      auto i1 = rewriter.getIntegerType(1);
+      auto falseVal = rewriter.create<ConstantIntOp>(loc, 0, i1);
+      auto trueVal = rewriter.create<ConstantIntOp>(loc, 1, i1);
+      rewriter.replaceOpWithNewOp<SelectOp>(op, v, falseVal, trueVal);
+      return success();
+    }
+    // bitwise NOT on a bit string (BYTE/WORD/DWORD): x XOR all-ones
+    auto allOnes = rewriter.create<ConstantIntOp>(
+        loc, -1, v.getType().cast<IntegerType>().getWidth());
+    rewriter.replaceOpWithNewOp<XOrIOp>(op, v, allOnes);
     return success();
   }
 };

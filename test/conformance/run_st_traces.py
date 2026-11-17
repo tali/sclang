@@ -40,7 +40,7 @@ import tempfile
 # masks both sides to the slot width (the trace prints the unsigned value).
 TYPE_MAP = {
     'BOOL': (1, 'bit'),
-    'SINT': (1, 'int'), 'BYTE': (1, 'int'),
+    'SINT': (1, 'int'), 'BYTE': (1, 'uint'),
     'INT': (2, 'int'),
     'DINT': (4, 'int'),
     'TIME': (4, 'time'), 'LTIME': (8, 'time'),
@@ -241,7 +241,11 @@ def gen_wrapper(raw, prog, in_slots, out_slots):
     lines.append('FUNCTION OB1 : int')
     lines.append('BEGIN')
     for s in in_slots:
-        lines.append('  "inst".%s := %s;' % (s.name, s.direct()))
+        if s.kind == 'float':
+            # REAL inputs arrive as raw bit patterns in the M slot
+            lines.append('  "inst".%s := __UNBITS(%s);' % (s.name, s.direct()))
+        else:
+            lines.append('  "inst".%s := %s;' % (s.name, s.direct()))
     lines.append('  %s."inst"();' % prog)
     for s in out_slots:
         if s.kind == 'float':
@@ -268,6 +272,9 @@ def gen_inputs_file(trace, in_slots):
             v = parse_value(tok, kind_of[s.name])
             if v is None:
                 return None
+            if kind_of[s.name] == 'float':
+                # REAL inputs are fed as raw bit patterns (__UNBITS)
+                v = struct.unpack('<I', struct.pack('<f', v))[0]
             parts.append('%s=%d' % (s.name, v))
         lines.append(' '.join(parts))
     return '\n'.join(lines) + '\n'

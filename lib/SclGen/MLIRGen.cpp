@@ -32,6 +32,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -2116,6 +2117,13 @@ private:
     case tok_minus:
       return builder.create<UnaryMinusOp>(location, rhs);
     case tok_not:
+      // NOT on a bit string (BYTE/WORD/DWORD) is bitwise; only a BOOL operand
+      // is coerced to a logical value.
+      if (rhs.getType().isa<LogicalType>() &&
+          rhs.getType().cast<LogicalType>().getWidth() > 1)
+        return builder.create<UnaryNotOp>(location, rhs);
+      if (rhs.getType().isa<IntegerType>())
+        return builder.create<UnaryNotOp>(location, rhs);
       return builder.create<UnaryNotOp>(location, coerceToBool(location, rhs));
     case tok_plus:
       return rhs;
@@ -2481,8 +2489,11 @@ private:
     auto intTy = IntegerType::get(context, width);
     if (arg.getType() != intTy) {
       auto cast = builder.create<IntegerCastOp>(location, intTy, arg);
-      if (resTy.isa<LogicalType>())
-        cast.setZextAttr(builder.getUnitAttr()); // byte/word/dword: unsigned
+      // BYTE/WORD/DWORD (LogicalType) are unsigned bit strings: zero-extend
+      // on widening (UINT_TO_DINT(16#FFFF) = 65535, not -1). CHAR/SINT are
+      // IntegerType(8) and keep sign extension.
+      if (resTy.isa<LogicalType>() || arg.getType().isa<LogicalType>())
+        cast.setZextAttr(builder.getUnitAttr());
       arg = cast.getResult();
     }
     if (arg.getType() != resTy)
@@ -3070,16 +3081,55 @@ private:
     // real math function kind -> awl.real_math kind
     static const std::map<std::string, std::string> realFns = {
         {"SIN", "sin"}, {"COS", "cos"}, {"TAN", "tan"}, {"ASIN", "asin"},
-        {"ACOS", "acos"}, {"ATAN", "atan"}, {"SQRT", "sqr"}, {"EXP", "exp"},
+        {"ACOS", "acos"}, {"ATAN", "atan"}, {"SQRT", "sqrt"}, {"EXP", "exp"},
         {"LN", "ln"}, {"LOG", "ln"}, {"ABS", "abs"}};
     static const std::map<std::string, bool> selFns = {
         {"MAX", true}, {"MIN", false}}; // max=true, min=false
 
     SmallVector<mlir::Value, 4> args;
+    SmallVector<std::pair<std::string, mlir::Value>, 4> namedArgs;
+    bool sawNamed = false;
     if (failed(mlirGenCallParameters(
-            expr, [&](StringRef, mlir::Value v) { args.push_back(v); },
+            expr,
+            [&](StringRef n, mlir::Value v) {
+              namedArgs.push_back({std::string(n.upper()), v});
+              sawNamed = true;
+            },
             [&](mlir::Value v) { args.push_back(v); })))
       return nullptr;
+    if (sawNamed) {
+      // Formal call: reorder the named arguments to the function's declared
+      // parameter order (IEC ed.3 tables 22/23/32), e.g. LIMIT(MX, IN, MN).
+      args.clear();
+      auto pushByName = [&](StringRef n) -> bool {
+        for (auto &p : namedArgs)
+          if (p.first == n) {
+            args.push_back(p.second);
+            return true;
+          }
+        return false;
+      };
+      if (up == "MUX") { // MUX(K, IN0..INn): K first, then IN0.. by index
+        pushByName("K");
+        for (int i = 0;; ++i) {
+          std::string n = "IN" + std::to_string(i);
+          if (!pushByName(n))
+            break;
+        }
+      } else {
+        static const std::map<std::string, std::vector<std::string>>
+            paramOrder = {{"LIMIT", {"MN", "IN", "MX"}},
+                          {"SEL", {"G", "IN0", "IN1"}}};
+        auto it = paramOrder.find(up);
+        if (it != paramOrder.end()) {
+          for (auto &n : it->second)
+            pushByName(n);
+        } else {
+          for (auto &p : namedArgs)
+            args.push_back(p.second);
+        }
+      }
+    }
     if (args.empty() || !args[0])
       return nullptr;
     auto ctx = builder.getContext();
@@ -3111,6 +3161,183 @@ private:
         return v;
       return builder.create<DialectCastOp>(location, sclTy, v);
     };
+
+    // Common std type of numeric-ish scl args (int/logical/time/date): f32 if
+    // any REAL, else the max integer width (bit strings and date/time types
+    // map to their storage width).
+    auto commonStdTy = [&](ArrayRef<mlir::Value> vs) -> mlir::Type {
+      if (llvm::any_of(vs,
+                       [](mlir::Value v) { return v.getType().isa<RealType>(); }))
+        return (mlir::Type)mlir::FloatType::getF32(ctx);
+      unsigned w = 1;
+      for (auto v : vs) {
+        mlir::Type t = v.getType();
+        if (auto it = t.dyn_cast<IntegerType>())
+          w = std::max(w, (unsigned)it.getWidth());
+        else if (auto lt = t.dyn_cast<LogicalType>())
+          w = std::max(w, (unsigned)lt.getWidth());
+        else if (t.isa<TimeType>() || t.isa<TimeOfDayType>())
+          w = std::max(w, 32u);
+        else if (t.isa<S5TimeType>() || t.isa<DateType>())
+          w = std::max(w, 16u);
+        else if (t.isa<DateAndTimeType>())
+          w = std::max(w, 64u);
+      }
+      return (mlir::Type)mlir::IntegerType::get(ctx, w);
+    };
+    // Widest scl type among args (result type of n-ary numeric functions).
+    auto commonSclTy = [&](ArrayRef<mlir::Value> vs) -> mlir::Type {
+      mlir::Type best = vs[0].getType();
+      auto widthOf = [&](mlir::Type t) -> unsigned {
+        if (auto it = t.dyn_cast<IntegerType>())
+          return it.getWidth();
+        if (auto lt = t.dyn_cast<LogicalType>())
+          return lt.getWidth();
+        if (t.isa<RealType>())
+          return 1000; // real dominates
+        if (t.isa<TimeType>() || t.isa<TimeOfDayType>())
+          return 32;
+        if (t.isa<DateAndTimeType>())
+          return 64;
+        return 16;
+      };
+      for (auto v : vs)
+        if (widthOf(v.getType()) > widthOf(best))
+          best = v.getType();
+      return best;
+    };
+
+    // Comparison functions LT/LE/GT/GE/EQ/NE -> bool (SPEC[SCL] table 23).
+    static const std::map<std::string, mlir::arith::CmpIPredicate> cmpFns = {
+        {"LT", mlir::arith::CmpIPredicate::slt},
+        {"LE", mlir::arith::CmpIPredicate::sle},
+        {"GT", mlir::arith::CmpIPredicate::sgt},
+        {"GE", mlir::arith::CmpIPredicate::sge},
+        {"EQ", mlir::arith::CmpIPredicate::eq},
+        {"NE", mlir::arith::CmpIPredicate::ne}};
+    if (auto it = cmpFns.find(up); it != cmpFns.end() && args.size() == 2) {
+      mlir::Type stdTy = commonStdTy(args);
+      mlir::Value a = toStd(args[0], stdTy), b = toStd(args[1], stdTy);
+      mlir::Value res;
+      if (stdTy.isa<mlir::FloatType>()) {
+        static const std::map<std::string, mlir::arith::CmpFPredicate> cmpFFns = {
+            {"LT", mlir::arith::CmpFPredicate::OLT},
+            {"LE", mlir::arith::CmpFPredicate::OLE},
+            {"GT", mlir::arith::CmpFPredicate::OGT},
+            {"GE", mlir::arith::CmpFPredicate::OGE},
+            {"EQ", mlir::arith::CmpFPredicate::OEQ},
+            {"NE", mlir::arith::CmpFPredicate::ONE}};
+        res = builder.create<mlir::arith::CmpFOp>(location, cmpFFns.at(up), a, b)
+                  .getResult();
+      } else {
+        res = builder.create<mlir::arith::CmpIOp>(location, it->second, a, b)
+                  .getResult();
+      }
+      return fromStd(res, getType(tok_bool));
+    }
+
+    // N-ary arithmetic functions ADD/SUB/MUL/DIV (fold left; DIV is signed
+    // integer division for ints, float division for reals).
+    static const std::map<std::string, int> arithFns = {
+        {"ADD", 0}, {"SUB", 1}, {"MUL", 2}, {"DIV", 3}};
+    if (auto it = arithFns.find(up); it != arithFns.end() && args.size() >= 2) {
+      mlir::Type stdTy = commonStdTy(args);
+      mlir::Value acc = toStd(args[0], stdTy);
+      for (size_t i = 1; i < args.size(); ++i) {
+        mlir::Value v = toStd(args[i], stdTy);
+        if (stdTy.isa<mlir::FloatType>()) {
+          switch (it->second) {
+          case 0: acc = builder.create<mlir::arith::AddFOp>(location, acc, v).getResult(); break;
+          case 1: acc = builder.create<mlir::arith::SubFOp>(location, acc, v).getResult(); break;
+          case 2: acc = builder.create<mlir::arith::MulFOp>(location, acc, v).getResult(); break;
+          default: acc = builder.create<mlir::arith::DivFOp>(location, acc, v).getResult(); break;
+          }
+        } else {
+          switch (it->second) {
+          case 0: acc = builder.create<mlir::arith::AddIOp>(location, acc, v).getResult(); break;
+          case 1: acc = builder.create<mlir::arith::SubIOp>(location, acc, v).getResult(); break;
+          case 2: acc = builder.create<mlir::arith::MulIOp>(location, acc, v).getResult(); break;
+          default: acc = builder.create<mlir::arith::DivSIOp>(location, acc, v).getResult(); break;
+          }
+        }
+      }
+      return fromStd(acc, commonSclTy(args));
+    }
+
+    // Bit-string shift/rotate SHL/SHR/ROL/ROR(x, n): x is a BYTE/WORD/DWORD
+    // (LogicalType) or int; n an INT count. SHL/SHR clamp the count at the
+    // width (result 0); ROL/ROR rotate modulo the width.
+    if ((up == "SHL" || up == "SHR" || up == "ROL" || up == "ROR") &&
+        args.size() == 2) {
+      unsigned w = 8;
+      if (auto it = t0.dyn_cast<IntegerType>())
+        w = it.getWidth();
+      else if (auto lt = t0.dyn_cast<LogicalType>())
+        w = lt.getWidth();
+      auto stdTy = mlir::IntegerType::get(ctx, w);
+      mlir::Value x = toStd(args[0], stdTy);
+      auto i32 = mlir::IntegerType::get(ctx, 32);
+      mlir::Value n32 = toStd(args[1], i32);
+      auto c32 = [&](int64_t v) {
+        return builder.create<mlir::arith::ConstantOp>(
+            location, i32, builder.getIntegerAttr(i32, v));
+      };
+      auto truncW = [&](mlir::Value v) -> mlir::Value {
+        if (v.getType() == stdTy)
+          return v;
+        return builder.create<mlir::arith::TruncIOp>(location, stdTy, v)
+            .getResult();
+      };
+      mlir::Value res;
+      if (up == "SHL" || up == "SHR") {
+        // shift >= w yields 0 (avoid poisonous over-shift)
+        auto ge = builder.create<mlir::arith::CmpIOp>(
+            location, mlir::arith::CmpIPredicate::uge, n32, c32(w));
+        mlir::Value sh = up == "SHL"
+            ? (mlir::Value)builder.create<mlir::arith::ShLIOp>(location, x, truncW(n32)).getResult()
+            : (mlir::Value)builder.create<mlir::arith::ShRUIOp>(location, x, truncW(n32)).getResult();
+        auto zero = builder.create<mlir::arith::ConstantOp>(
+            location, stdTy, builder.getIntegerAttr(stdTy, 0));
+        res = builder.create<mlir::arith::SelectOp>(location, ge.getResult(), zero, sh).getResult();
+      } else {
+        // rotate: n mod w; (w - n) & (w-1) keeps the complementary shift in
+        // range (and yields 0 when n mod w == 0, making rol(x,0) = x)
+        auto mask = builder.create<mlir::arith::ConstantOp>(
+            location, i32, builder.getIntegerAttr(i32, (int64_t)(w - 1)));
+        mlir::Value nM = builder.create<mlir::arith::AndIOp>(location, n32, mask).getResult();
+        mlir::Value comp = builder.create<mlir::arith::AndIOp>(
+            location,
+            builder.create<mlir::arith::SubIOp>(location, c32(w), nM).getResult(),
+            mask).getResult();
+        mlir::Value a = up == "ROL"
+            ? (mlir::Value)builder.create<mlir::arith::ShLIOp>(location, x, truncW(nM)).getResult()
+            : (mlir::Value)builder.create<mlir::arith::ShRUIOp>(location, x, truncW(nM)).getResult();
+        mlir::Value b = up == "ROL"
+            ? (mlir::Value)builder.create<mlir::arith::ShRUIOp>(location, x, truncW(comp)).getResult()
+            : (mlir::Value)builder.create<mlir::arith::ShLIOp>(location, x, truncW(comp)).getResult();
+        res = builder.create<mlir::arith::OrIOp>(location, a, b).getResult();
+      }
+      return fromStd(res, t0);
+    }
+
+    // EXPT(a, b) = a ** b (float pow if any REAL, else integer pow).
+    if (up == "EXPT" && args.size() == 2) {
+      mlir::Type stdTy = commonStdTy(args);
+      mlir::Value a = toStd(args[0], stdTy), b = toStd(args[1], stdTy);
+      mlir::Value res = stdTy.isa<mlir::FloatType>()
+          ? (mlir::Value)builder.create<mlir::math::PowFOp>(location, a, b).getResult()
+          : (mlir::Value)builder.create<mlir::math::IPowIOp>(location, a, b).getResult();
+      return fromStd(res, commonSclTy(args));
+    }
+
+    // TRUNC(r): REAL -> integer, rounding toward zero (arith.truncf).
+    if (up == "TRUNC" && args.size() == 1 && t0.isa<RealType>()) {
+      auto f32 = mlir::FloatType::getF32(ctx);
+      mlir::Value v = toStd(args[0], f32);
+      auto i32 = mlir::IntegerType::get(ctx, 32);
+      mlir::Value r = builder.create<mlir::arith::FPToSIOp>(location, i32, v).getResult();
+      return fromStd(r, IntegerType::get(ctx, 32));
+    }
 
     if (up == "ABS" && args.size() == 1 && t0.isa<IntegerType>()) {
       auto it = t0.cast<IntegerType>();
@@ -3238,7 +3465,7 @@ private:
     //   __BITS(<value>)       -> bit.cast to the same-width integer (lets the
     //                            trace driver observe REAL bit patterns)
     std::string upTest = std::string(callee.upper());
-    if (upTest == "__ASSERT" || upTest == "__BITS") {
+    if (upTest == "__ASSERT" || upTest == "__BITS" || upTest == "__UNBITS") {
       mlir::Value arg;
       if (failed(mlirGenCallParameters(
               expr, [&](StringRef, mlir::Value v) { arg = v; },
@@ -3247,6 +3474,12 @@ private:
       if (!arg) {
         emitError(location) << upTest << " needs exactly one argument";
         return nullptr;
+      }
+      if (upTest == "__UNBITS") {
+        // __UNBITS(intBits): bit-cast a 32-bit pattern back to REAL (the
+        // inverse of __BITS; used by the trace harness to feed REAL inputs).
+        auto resTy = getType(tok_real);
+        return builder.create<BitCastOp>(location, resTy, arg).getResult();
       }
       if (upTest == "__BITS") {
         unsigned width;
