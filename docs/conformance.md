@@ -137,14 +137,19 @@ and the observed scan lines are compared to the trace. `--cross` also runs
 each wrapper SCL->AWL->JIT and requires identical scan lines (differential
 check of the SCL and AWL lowering paths; the AWL path itself is
 oracle-verified against awlsim above). Tests using constructs outside the
-supported subset (CONFIGURATION, LREAL, STRING/array/struct outputs, ...) are
-counted as "unsupported", not failures.
+supported subset are counted as "unsupported", not failures.
 
-Current: **87/87 pass (100%), 5 unsupported** (LREAL only; 74 traces are
-`status: conformant`, 18 `implementation-defined`). STRING outputs are
-observed via `--scan-io` string slots (width 0) fed by the `__STRTO_M` test
-builtin; STRING[n] declared lengths and TYPE aliases are honored by the
-harness. CONFIGURATION tests (multi-PROGRAM files with VAR_GLOBAL/
+Current: **92/92 pass (100%), 0 unsupported** (74 traces are
+`status: conformant`, 18 `implementation-defined`; 3 implementation-defined
+traces diverge from the reference and are counted as pass-with-DIFF).
+STRING outputs are observed via `--scan-io` string slots (width 0) fed by
+the `__STRTO_M` test builtin; STRING[n] declared lengths and TYPE aliases
+are honored by the harness. LREAL (binary64) inputs/outputs move as 64-bit
+bit patterns through 8-byte M slots (`__LOADM64`/`__STOREM64` test builtins
+around scl_rt_read/scl_rt_write; `__BITS`/`__UNBITS` bit-cast at 64 bit);
+see test/sclang/jit_st_lreal.scl. Real->integer typed conversions round to
+the nearest integer (ed.3 table 22); subrange-typed variables default to
+the lower limit (ed.3 table 10). CONFIGURATION tests (multi-PROGRAM files with VAR_GLOBAL/
 VAR_EXTERNAL and a RESOURCE task schedule) run through the IEC frontend
 (`-x=st`): VAR_GLOBAL lowers to a global DB named after the configuration,
 and the harness generates an OB1 that runs the PROGRAM instances per the

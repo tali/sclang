@@ -56,6 +56,8 @@ def Scl_InstanceDbType : Type<CPred<"$_self.isa<scl::InstanceDbType>()">, "IDB">
 def Scl_IntegerType : Type<CPred<"$_self.isa<scl::IntegerType>()">, "IntegerType">;
 def Scl_LogicalType : Type<CPred<"$_self.isa<scl::LogicalType>()">, "LogicalType">;
 def Scl_RealType : Type<CPred<"$_self.isa<scl::RealType>()">, "RealType">;
+def Scl_LrealType : Type<CPred<"$_self.isa<scl::LrealType>()">, "LrealType">;
+def Scl_BuiltinIntegerType : Type<CPred<"$_self.isa<::mlir::IntegerType>()">, "builtin-integer">;
 def Scl_StructType : Type<CPred<"$_self.isa<scl::StructType>()">, "StructType">;
 def Scl_S5TimeType : Type<CPred<"$_self.isa<scl::S5TimeType>()">, "S5TimeType">;
 def Scl_TimeType : Type<CPred<"$_self.isa<scl::TimeType>()">, "TimeType">;
@@ -74,12 +76,13 @@ def Scl_Type : AnyTypeOf<[
   Scl_IntegerType,
   Scl_LogicalType,
   Scl_RealType,
+  Scl_LrealType,
   Scl_StructType,
   Scl_S5TimeType,
   Scl_TimeType,
   Scl_TimeOfDayType
 ]>;
-def Scl_NumericType : AnyTypeOf<[Scl_IntegerType, Scl_RealType]>;
+def Scl_NumericType : AnyTypeOf<[Scl_IntegerType, Scl_RealType, Scl_LrealType]>;
 
 
 // Base class for toy dialect operations. This operation inherits from the base

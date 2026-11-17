@@ -190,6 +190,7 @@ enum Token : int {
   tok_var_global = -121,
   tok_var_external = -122,
   tok_var_config = -123,
+  tok_lreal = -124, // IEC 61131-3 LREAL (binary64); IEC mode only
 
   // errors
   tok_error_symbol = -901,
@@ -312,7 +313,7 @@ public:
   }
 
   /// Return the value of a real number literal.
-  float getRealNumberValue() {
+  double getRealNumberValue() {
     assert(curTok == tok_real_number_literal);
     return realVal;
   }
@@ -588,6 +589,8 @@ private:
         return tok_var_external;
       if (lower == "var_config")
         return tok_var_config;
+      if (lower == "lreal")
+        return tok_lreal;
     }
     if (lower == "usint")
       return tok_usint;
@@ -759,7 +762,7 @@ private:
       return tok_integer_literal;
     case Real:
     case Exponent:
-      if (!llvm::to_float(stringValue, realVal))
+      if (!llvm::to_float(stringValue, realVal))  // parses into double
         return tok_error_real;
       return tok_real_number_literal;
     }
@@ -1179,7 +1182,7 @@ private:
   bool negative = false;
 
   /// If the current Token is a number, this contains the value.
-  float realVal = 0;
+  double realVal = 0;
 
   int64_t intVal = 0;
 

@@ -133,17 +133,18 @@ plus the lit tests under `test/` and the external corpus tests listed in
 | AWL | Siemens AWL manual indirect addressing [ARn, P#x.y] -> awl.indirect (AR + bit offset) | full | [include/sclang/AwlDialect/AwlOps.td:540](../include/sclang/AwlDialect/AwlOps.td#L540) |
 | AWL | Siemens AWL manual indirect load (L B/W/D [ARn, P#x.y]) -> awl.load_indirect | full | [include/sclang/AwlDialect/AwlOps.td:549](../include/sclang/AwlDialect/AwlOps.td#L549) |
 | AWL | Siemens AWL manual indirect store (T B/W/D [ARn, P#x.y]) -> awl.store_indirect | full | [include/sclang/AwlDialect/AwlOps.td:558](../include/sclang/AwlDialect/AwlOps.td#L558) |
-| SCL | IEC 61131-3 ST VAR string initializer (VAR s : STRING := | full | [lib/SclGen/MLIRGen.cpp:816](../lib/SclGen/MLIRGen.cpp#L816) |
-| SCL | IEC 61131-3 array/struct initializers | full | [lib/SclGen/MLIRGen.cpp:823](../lib/SclGen/MLIRGen.cpp#L823) |
-| SCL | IEC 61131-3 ST organization block (OB) -> void function with scan-cycle hooks (ADR 002) | full | [lib/SclGen/MLIRGen.cpp:1003](../lib/SclGen/MLIRGen.cpp#L1003) |
-| ST | IEC 61131-3 CONFIGURATION (ed.3 6.8): VAR_GLOBAL becomes a | full | [lib/SclGen/MLIRGen.cpp:1269](../lib/SclGen/MLIRGen.cpp#L1269) |
-| SCL | IEC 61131-3 ST statement list: assignment, call, IF/ELSIF/ELSE, | full | [lib/SclGen/MLIRGen.cpp:1431](../lib/SclGen/MLIRGen.cpp#L1431) |
-| SCL | IEC 61131-3 ST assignment (:=), incl. string/array copies -> see mlirGenStringAssignment and the array-copy path below | full | [lib/SclGen/MLIRGen.cpp:1768](../lib/SclGen/MLIRGen.cpp#L1768) |
-| SCL | IEC 61131-3 ed.3 table 30 date/time arithmetic (DATE - DATE -> TIME, DT +/- TIME -> DT, DT - DT -> TIME), DT_TO_DATE / DT_TO_TOD conversions and DT_YEAR..DT_WEEKDAY field extractors -> mlirGenDateTimeArith / bcdDtToMs / msToBcdDt / mlirGenDtField (DATE = days since 1990-01-01 u16; DT = 8 big-endian BCD bytes in an i64, ADR-001; civil-calendar math via Hinnant's algorithms; BCD byte extraction is floor-div based because the DT sign bit is set for years 1990-1999) | full | [lib/SclGen/MLIRGen.cpp:3154](../lib/SclGen/MLIRGen.cpp#L3154) |
-| SCL | IEC 61131-3 ST type conversions (INT_TO_WORD, CHAR_TO_INT, ...) -> mlirGenBuiltinConversion; string functions (LEN/CONCAT/...) -> mlirGenStringBuiltin | full | [lib/SclGen/MLIRGen.cpp:3585](../lib/SclGen/MLIRGen.cpp#L3585) |
-| SCL | IEC 61131-3 ST string functions LEN/LEFT/RIGHT/MID/FIND/CONCAT/DELETE/INSERT/REPLACE and <type>_TO_STRING/STRING_TO_<type> -> mlirGenStringBuiltin (approx: flat zero-padded buffers with C-string length; STRING_TO_REAL/REAL_TO_STRING/VAL_STRG remain external stubs) | approx | [lib/SclGen/MLIRGen.cpp:3690](../lib/SclGen/MLIRGen.cpp#L3690) |
-| SCL | IEC 61131-3 ST standard functions (ed.3 table 32/33): | full | [lib/SclGen/MLIRGen.cpp:4278](../lib/SclGen/MLIRGen.cpp#L4278) |
-| SCL | Test-support builtins (awlsim-style oracles in SCL form, | full | [lib/SclGen/MLIRGen.cpp:4668](../lib/SclGen/MLIRGen.cpp#L4668) |
+| SCL | IEC 61131-3 ST VAR string initializer (VAR s : STRING := | full | [lib/SclGen/MLIRGen.cpp:828](../lib/SclGen/MLIRGen.cpp#L828) |
+| SCL | IEC 61131-3 array/struct initializers | full | [lib/SclGen/MLIRGen.cpp:835](../lib/SclGen/MLIRGen.cpp#L835) |
+| SCL | IEC 61131-3 ST organization block (OB) -> void function with scan-cycle hooks (ADR 002) | full | [lib/SclGen/MLIRGen.cpp:1018](../lib/SclGen/MLIRGen.cpp#L1018) |
+| ST | IEC 61131-3 CONFIGURATION (ed.3 6.8): VAR_GLOBAL becomes a | full | [lib/SclGen/MLIRGen.cpp:1284](../lib/SclGen/MLIRGen.cpp#L1284) |
+| SCL | IEC 61131-3 ST statement list: assignment, call, IF/ELSIF/ELSE, | full | [lib/SclGen/MLIRGen.cpp:1478](../lib/SclGen/MLIRGen.cpp#L1478) |
+| SCL | IEC 61131-3 ST assignment (:=), incl. string/array copies -> see mlirGenStringAssignment and the array-copy path below | full | [lib/SclGen/MLIRGen.cpp:1815](../lib/SclGen/MLIRGen.cpp#L1815) |
+| ST | IEC 61131-3 ed.3 6.4.4.1: a real literal that is not exactly | full | [lib/SclGen/MLIRGen.cpp:2212](../lib/SclGen/MLIRGen.cpp#L2212) |
+| SCL | IEC 61131-3 ed.3 table 30 date/time arithmetic (DATE - DATE -> TIME, DT +/- TIME -> DT, DT - DT -> TIME), DT_TO_DATE / DT_TO_TOD conversions and DT_YEAR..DT_WEEKDAY field extractors -> mlirGenDateTimeArith / bcdDtToMs / msToBcdDt / mlirGenDtField (DATE = days since 1990-01-01 u16; DT = 8 big-endian BCD bytes in an i64, ADR-001; civil-calendar math via Hinnant's algorithms; BCD byte extraction is floor-div based because the DT sign bit is set for years 1990-1999) | full | [lib/SclGen/MLIRGen.cpp:3232](../lib/SclGen/MLIRGen.cpp#L3232) |
+| SCL | IEC 61131-3 ST type conversions (INT_TO_WORD, CHAR_TO_INT, ...) -> mlirGenBuiltinConversion; string functions (LEN/CONCAT/...) -> mlirGenStringBuiltin | full | [lib/SclGen/MLIRGen.cpp:3663](../lib/SclGen/MLIRGen.cpp#L3663) |
+| SCL | IEC 61131-3 ST string functions LEN/LEFT/RIGHT/MID/FIND/CONCAT/DELETE/INSERT/REPLACE and <type>_TO_STRING/STRING_TO_<type> -> mlirGenStringBuiltin (approx: flat zero-padded buffers with C-string length; STRING_TO_REAL/REAL_TO_STRING/VAL_STRG remain external stubs) | approx | [lib/SclGen/MLIRGen.cpp:3781](../lib/SclGen/MLIRGen.cpp#L3781) |
+| SCL | IEC 61131-3 ST standard functions (ed.3 table 32/33): | full | [lib/SclGen/MLIRGen.cpp:4369](../lib/SclGen/MLIRGen.cpp#L4369) |
+| SCL | Test-support builtins (awlsim-style oracles in SCL form, | full | [lib/SclGen/MLIRGen.cpp:4785](../lib/SclGen/MLIRGen.cpp#L4785) |
 | AWL | IEC 61131-3 STL memory areas (P/Q/M/DB/DI/L/T/C, big-endian S7 storage — docs/decisions/001) -> scl_rt_read/read_bit (C ABI, docs/decisions/002) | full | [lib/Runtime/SimRuntime.cpp:262](../lib/Runtime/SimRuntime.cpp#L262) |
 | AWL | IEC 61131-3 STL memory areas, stores -> scl_rt_write/write_bit (C ABI) | full | [lib/Runtime/SimRuntime.cpp:312](../lib/Runtime/SimRuntime.cpp#L312) |
 | AWL | Siemens AWL manual local data stack (L/VL frames per block call, incl. FC param area and 256-depth guard) -> scl_rt_l_push/l_pop/param_in/param_out | full | [lib/Runtime/SimRuntime.cpp:566](../lib/Runtime/SimRuntime.cpp#L566) |
@@ -153,6 +154,7 @@ plus the lit tests under `test/` and the external corpus tests listed in
 | AWL | Siemens AWL manual status word (STW) cleared at OB entry (awlsim statusWord.reset) -> scl_rt_ob_start | full | [lib/Runtime/SimRuntime.cpp:2031](../lib/Runtime/SimRuntime.cpp#L2031) |
 | AWL | awlsim __FEATURE t [, v] -> scl_rt_feature (nrAccus, OB-temp presets) | full | [lib/Runtime/SimRuntime.cpp:2070](../lib/Runtime/SimRuntime.cpp#L2070) |
 | ST | IEC 61131-3 ST STRING outputs observed by trace tests: the | full | [lib/Runtime/SimRuntime.cpp:2143](../lib/Runtime/SimRuntime.cpp#L2143) |
+| ST | IEC 61131-3 LREAL (binary64) unary math functions (ed.3 table 33): | full | [lib/Runtime/SimRuntime.cpp:2173](../lib/Runtime/SimRuntime.cpp#L2173) |
 | AWL | IEC 61131-3 STL memory areas P/Q/M/DB/DI/L/T/C and direct operands | full | [test/AwlGen/areas.awl:2](../test/AwlGen/areas.awl#L2) |
 | AWL | awlsim __ASSERT oracle directives -> awl.assert -> scl_rt_assert_cmp | full | [test/AwlGen/assert.awl:2](../test/AwlGen/assert.awl#L2) |
 | AWL | IEC 61131-3 STL block calls incl. FB instance DBs and parameter passing | full | [test/AwlGen/call_fb.awl:2](../test/AwlGen/call_fb.awl#L2) |

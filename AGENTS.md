@@ -52,7 +52,22 @@ one-line pointer here.
   op, erased by LowerToStd; VAR_EXTERNAL resolves via `externalVars` into
   that DB — load with the declared type in mlirGenRValue, NOT the address
   element type). IEC keywords are only keywords in IEC mode. S7-only
-  constructs are diagnosed in IEC mode and vice versa. fbNames is keyed
+  constructs are diagnosed in IEC mode and vice versa. LREAL is a real
+  dialect type `!scl.lreal` lowering to f64; IEC real literals not exactly
+  representable in binary32 become LREAL constants; mixed REAL/LREAL
+  arithmetic promotes to LREAL; unary math fns on LREAL call
+  scl_rt_realmath_d (libm, ABI v13). Test-builtin support: __BITS on an
+  LREAL yields a builtin i64 (scl IntegerType only spans 8/16/32),
+  __UNBITS of a 64-bit int yields LREAL, and __LOADM64(base)/
+  __STOREM64(base, v) read/write 8 M bytes via scl_rt_read/scl_rt_write
+  (emitted as func.call — CallFcOp results must be Scl_Type). REAL<->LREAL
+  assignments/conversions coerce via scl.mlir.cast (fpext/fptrunc), and
+  real->integer typed conversions carry a `round` attr on scl.mlir.cast
+  lowered as math.round + fptosi (IEC ed.3 table 22 rounds to nearest;
+  ties are implementation-defined). Subrange types (INT (5..10)) default
+  their variables to the lower limit (subrangeMin map, ed.3 table 10).
+  The scan-inputs parser uses stoull (64-bit bit patterns overflow stoll).
+  fbNames is keyed
   UPPER-CASE (fbNameOrig keeps the original spelling; MLIR symbols are
   case-sensitive) — a user FB named e.g. "counter" wins over the
   TIMER/COUNTER builtin aliases in MLIRGen AND in LowerToStd's CallFbOp.
@@ -173,7 +188,8 @@ has no `\b` — use python3 for regex edits.
   compares per-scan outputs (PROGRAM rewritten to FB + instance DB + OB1
   wrapper; driver flags --scan-io/--scan-inputs feed M-area slots per scan,
   see test/sclang/jit_scan_io.scl; --cross diffs SCL->JIT vs SCL->AWL->JIT).
-  Current: 75/75 pass (100%), 17 unsupported (CONFIGURATION/LREAL/STRING/...).
+  Current: 92/92 pass (100%), 0 unsupported (3 implementation-defined
+  traces diverge and are counted as pass-with-DIFF).
   Frontend additions (committed): enum types (`TYPE C : (RED, GREEN);` ->
   INT storage + named constants resolved in codegen incl. CASE labels),
   subrange types (`INT (5..10)` -> base type, unchecked), multi-declaration

@@ -241,6 +241,7 @@ int main(int argc, char **argv) {
   context.getOrLoadDialect<mlir::awl::AwlDialect>();
   context.getOrLoadDialect<mlir::cf::ControlFlowDialect>();
   context.getOrLoadDialect<mlir::math::MathDialect>();
+  context.getOrLoadDialect<mlir::func::FuncDialect>();
 
   mlir::OwningOpRef<mlir::ModuleOp> module;
   if (int error = loadAndProcessMLIR(context, module))

@@ -124,6 +124,13 @@ public:
   using Base::Base;
 };
 
+/// IEC 61131-3 LREAL: binary64 real (ADR 004). Lowers to f64.
+class LrealType
+    : public mlir::Type::TypeBase<LrealType, mlir::Type, mlir::TypeStorage> {
+public:
+  using Base::Base;
+};
+
 /// This class defines the SCL struct type. It represents a collection of
 /// element types. All derived types in MLIR must inherit from the CRTP class
 /// 'Type::TypeBase'. It takes as template parameters the concrete type

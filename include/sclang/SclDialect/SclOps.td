@@ -234,7 +234,9 @@ def BitCastOp : SclOp<"bit.cast", [DeclareOpInterfaceMethods<CastOpInterface>, P
 
 def DialectCastOp : SclOp<"mlir.cast", [DeclareOpInterfaceMethods<CastOpInterface>, Pure]> {
   let summary = "Type cast between SCL and Standard dialect";
-  let arguments = (ins AnyType:$value);
+  // `round`: a real -> integer conversion rounds to the nearest integer
+  // (IEC 61131-3 ed.3 table 22) instead of truncating.
+  let arguments = (ins AnyType:$value, OptionalAttr<UnitAttr>:$round);
   let results = (outs AnyType:$result);
   let assemblyFormat = "attr-dict $value `:` type($value) `to` type($result)";
 }
@@ -245,7 +247,10 @@ def IntegerCastOp : SclOp<"int.cast", [DeclareOpInterfaceMethods<CastOpInterface
   // an IntegerType of the same width during lowering. The optional `zext`
   // attribute requests zero-extension on widening (unsigned source, e.g.
   // byte/word); the default is sign-extension (signed int/dint).
-  let arguments = (ins AnyTypeOf<[Scl_IntegerType, Scl_LogicalType,
+  // the builtin IntegerType (e.g. i64 from __BITS on an LREAL) is accepted
+  // as well: it truncates/extends to the Scl_IntegerType result
+  let arguments = (ins AnyTypeOf<[Scl_IntegerType, Scl_BuiltinIntegerType,
+                                  Scl_LogicalType,
                                   Scl_S5TimeType, Scl_TimeType, Scl_TimeOfDayType,
                                   Scl_DateType, Scl_DateAndTimeType]>:$value,
                        OptionalAttr<UnitAttr>:$zext);

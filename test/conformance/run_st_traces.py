@@ -45,6 +45,7 @@ TYPE_MAP = {
     'DINT': (4, 'int'),
     'TIME': (4, 'time'), 'LTIME': (8, 'time'),
     'REAL': (4, 'float'),  # observed via __BITS bit pattern
+    'LREAL': (8, 'lreal'),  # binary64, observed via __BITS 64-bit pattern
     'STRING': (256, 'str'),  # S7-layout buffer in the M area, width 0 = str
     'USINT': (1, 'uint'), 'UINT': (2, 'uint'), 'UDINT': (4, 'uint'),
     'WORD': (2, 'uint'), 'DWORD': (4, 'uint'),
@@ -115,6 +116,8 @@ def parse_value(tok, kind):
         return None
     if kind == 'str':
         return decode_st_string(tok)
+    if kind == 'lreal':
+        return float(tok) if tok.lower() not in ('nan',) else float(tok)
     if kind == 'bit':
         return 1 if tok.upper() == 'TRUE' else 0
     if kind == 'time':
@@ -342,7 +345,12 @@ def gen_config_wrapper(cfg, trace, in_slots, out_slots, out_src):
     lines.append('  %MD996 := %MD996 + 1;')  # scan counter (0-based: -1)
     # scan inputs -> globals
     for s in in_slots:
-        lines.append('  "%s".%s := %s;' % (conf, s.name, s.direct()))
+        if s.kind == 'lreal':
+            # 64-bit bit pattern: read 8 M bytes (__LOADM64), reinterpret
+            lines.append('  "%s".%s := __UNBITS(__LOADM64(%d));'
+                         % (conf, s.name, s.byte))
+        else:
+            lines.append('  "%s".%s := %s;' % (conf, s.name, s.direct()))
     # schedule: tasks in priority order (lower PRIORITY number first)
     prev_bit = 990  # M bytes 990.. hold SINGLE edge memories
     tasks = sorted(cfg['tasks'], key=lambda t: (t['prio'], t['order']))
@@ -370,6 +378,8 @@ def gen_config_wrapper(cfg, trace, in_slots, out_slots, out_src):
         src = out_src[s.name]
         if s.kind == 'float':
             lines.append('  %s := __BITS(%s);' % (s.direct(), src))
+        elif s.kind == 'lreal':
+            lines.append('  __STOREM64(%d, __BITS(%s));' % (s.byte, src))
         elif s.kind == 'str':
             lines.append('  __STRTO_M(%d, %d, %s);' % (s.byte, s.maxlen, src))
         else:
@@ -392,7 +402,7 @@ class Slot:
     def direct(self):
         if self.kind == 'bit':
             return '%%M%d.%d' % (self.byte, self.bit)
-        letter = {1: 'B', 2: 'W', 4: 'D', 8: 'D'}[self.width]
+        letter = {1: 'B', 2: 'W', 4: 'D'}[self.width]
         return '%%M%s%d' % (letter, self.byte)
 
     def scan_io_arg(self, role):
@@ -434,12 +444,19 @@ def gen_wrapper(raw, prog, in_slots, out_slots):
         if s.kind == 'float':
             # REAL inputs arrive as raw bit patterns in the M slot
             lines.append('  "inst".%s := __UNBITS(%s);' % (s.name, s.direct()))
+        elif s.kind == 'lreal':
+            # LREAL: 64-bit pattern, read 8 M bytes (__LOADM64)
+            lines.append('  "inst".%s := __UNBITS(__LOADM64(%d));'
+                         % (s.name, s.byte))
         else:
             lines.append('  "inst".%s := %s;' % (s.name, s.direct()))
     lines.append('  %s."inst"();' % prog)
     for s in out_slots:
         if s.kind == 'float':
             lines.append('  %s := __BITS("inst".%s);' % (s.direct(), s.name))
+        elif s.kind == 'lreal':
+            lines.append('  __STOREM64(%d, __BITS("inst".%s));'
+                         % (s.byte, s.name))
         elif s.kind == 'str':
             lines.append('  __STRTO_M(%d, %d, "inst".%s);'
                          % (s.byte, s.maxlen, s.name))
@@ -468,6 +485,8 @@ def gen_inputs_file(trace, in_slots):
             if kind_of[s.name] == 'float':
                 # REAL inputs are fed as raw bit patterns (__UNBITS)
                 v = struct.unpack('<I', struct.pack('<f', v))[0]
+            elif kind_of[s.name] == 'lreal':
+                v = struct.unpack('<Q', struct.pack('<d', v))[0]
             parts.append('%s=%d' % (s.name, v))
         lines.append(' '.join(parts))
     return '\n'.join(lines) + '\n'
@@ -528,6 +547,13 @@ def compare_scans(trace, observed, out_slots):
                 if got != exp:
                     errs.append('scan %d %s: expected %s got %r'
                                 % (idx, name, tok, got))
+            elif kind == 'lreal':
+                gd = struct.unpack('<d', struct.pack('<Q', got & 0xFFFFFFFFFFFFFFFF))[0]
+                ok = (gd != gd and exp != exp) or gd == exp or (
+                    abs(gd - exp) <= 1e-12 * max(1.0, abs(exp)))
+                if not ok:
+                    errs.append('scan %d %s: expected %s got %r'
+                                % (idx, name, tok, gd))
             elif kind == 'float':
                 gf = struct.unpack('f', struct.pack('I', got & 0xFFFFFFFF))[0]
                 # NaN matches any NaN (bit pattern is impl-defined); inf

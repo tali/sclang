@@ -270,6 +270,10 @@ uint64_t scl_rt_assert_failures(void);
 /// STRING outputs (sclang `__STRTO_M` builtin). Sim-only; returns 0.
 int32_t scl_rt_str_to_m(int32_t byteOff, int32_t maxLen, uint64_t srcPtr);
 
+/// Test/std support (ABI v13): unary libm function on binary64 (LREAL).
+/// kind: 1=sin 2=cos 3=tan 4=asin 5=acos 6=atan 7=sqrt 8=exp 9=ln 10=abs.
+double scl_rt_realmath_d(int32_t kind, double x);
+
 /// L-stack frames (S7 local data): every called block pushes a frame of
 /// `bytes` bytes; L-area accesses are relative to the current frame base.
 /// The block lowering emits scl_rt_l_push at function entry and

@@ -34,6 +34,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopedHashTable.h"
@@ -42,6 +43,8 @@
 
 #include <map>
 #include <set>
+#include "llvm/Support/Process.h"
+
 #include <functional>
 #include <numeric>
 #include <string>
@@ -248,6 +251,8 @@ public:
     // Verify the module after we have finished constructing it, this will check
     // the structural properties of the IR and invoke any specific verifiers we
     // have on the Toy operations.
+    if (llvm::sys::Process::GetEnv("SCL_DUMP_PREVERIFY"))
+      theModule.print(llvm::errs());
     if (failed(mlir::verify(theModule))) {
       theModule.emitError("module verification error");
       return nullptr;
@@ -280,6 +285,10 @@ private:
   llvm::StringMap<mlir::Block *> labelBlocks;
   /// User-defined type name -> struct type.
   llvm::StringMap<mlir::Type> udtTypes;
+  /// Lower bound of IEC 61131-3 subrange types (TYPE SMALL : INT (5..10)),
+  /// keyed by upper-cased type name: the default initial value of a variable
+  /// of that type is the lower limit (ed.3 6.4.4.4 / table 10).
+  llvm::StringMap<int64_t> subrangeMin;
 
   /// Enumerated-value constants (upper-case name -> value), registered when
   /// an enum TYPE is declared; resolved as a fallback in mlirGenVariable.
@@ -804,6 +813,9 @@ private:
         init = mlirGen(initAST);
         if (!init)
           return mlir::failure();
+      } else if (!initAST) {
+        // no initializer: a subrange-typed member starts at the lower limit
+        init = subrangeDefault(loc(decl->loc()), decl->getDataType(), type);
       }
       for (const auto &var : decl->getVars()) {
         auto location = loc(var->loc());
@@ -908,7 +920,10 @@ private:
             builder.create<StoreOp>(location, varStorage, value);
           }
         } else if (defaultInit) {
-          if (mlir::Value zero = defaultInitValue(location, type))
+          mlir::Value zero = defaultInitValue(location, type);
+          if (mlir::Value sr = subrangeDefault(location, decl->getDataType(), type))
+            zero = sr;
+          if (zero)
             builder.create<StoreOp>(location, varStorage, zero);
         }
       }
@@ -1405,7 +1420,39 @@ private:
     if (!type)
       return mlir::failure();
     udtTypes[udt->getIdentifier()] = type;
+    if (auto *sr = llvm::dyn_cast<SubrangeDataTypeSpecAST>(udt->getType())) {
+      int64_t min = 0;
+      if (mlir::succeeded(foldConstIntAST(sr->getMin(), min)))
+        subrangeMin[llvm::StringRef(udt->getIdentifier()).upper()] = min;
+    }
     return mlir::success();
+  }
+
+  /// If `spec` names a subrange type, the default initial value of a variable
+  /// of that type: the lower limit as a constant of the (base) storage type.
+  mlir::Value subrangeDefault(mlir::Location location,
+                              const DataTypeSpecAST *spec, mlir::Type type) {
+    auto *udt = llvm::dyn_cast<UserDefinedTypeIdentifierAST>(spec);
+    if (!udt)
+      return nullptr;
+    auto it = subrangeMin.find(llvm::StringRef(udt->getName()).upper());
+    if (it == subrangeMin.end())
+      return nullptr;
+    if (auto it2 = type.dyn_cast<IntegerType>())
+      return builder
+          .create<ConstantOp>(location, type,
+                              builder.getIntegerAttr(
+                                  builder.getIntegerType(it2.getWidth()),
+                                  it->second))
+          .getResult();
+    if (auto lt = type.dyn_cast<LogicalType>())
+      return builder
+          .create<ConstantOp>(location, type,
+                              builder.getIntegerAttr(
+                                  builder.getIntegerType(lt.getWidth()),
+                                  it->second))
+          .getResult();
+    return nullptr;
   }
 
   // MARK: C.2 Structure of Declaration Sections
@@ -1910,6 +1957,8 @@ private:
     auto widthOfTy = [](mlir::Type t) -> int {
       if (auto it = t.dyn_cast<IntegerType>())
         return it.getWidth();
+      if (auto it = t.dyn_cast<mlir::IntegerType>())
+        return it.getWidth();
       if (auto lt = t.dyn_cast<LogicalType>())
         return lt.getWidth();
       return -1;
@@ -1928,7 +1977,9 @@ private:
                                          ? declared.cast<IntegerType>().getWidth()
                                          : dw),
               0));
-    } else if (dw > 0 && rw > 0 && dw != rw && rhs.getType().isa<IntegerType>()) {
+    } else if (dw > 0 && rw > 0 && dw != rw &&
+               (rhs.getType().isa<IntegerType>() ||
+                rhs.getType().isa<mlir::IntegerType>())) {
       mlir::Type castTy = declared.isa<IntegerType>()
                               ? declared
                               : IntegerType::get(builder.getContext(), dw);
@@ -1946,6 +1997,15 @@ private:
         cast.setZextAttr(builder.getUnitAttr());
       rhs = cast.getResult();
     }
+
+    // REAL <-> LREAL assignment coercion (IEC 61131-3 LREAL, ADR 004):
+    // fpext/fptrunc at lowering via scl.mlir.cast.
+    auto isRealTy = [](mlir::Type t) {
+      return t.isa<RealType>() || t.isa<LrealType>();
+    };
+    if (isRealTy(declared) && isRealTy(rhs.getType()) &&
+        declared != rhs.getType())
+      rhs = builder.create<DialectCastOp>(location, declared, rhs);
 
     builder.create<StoreOp>(location, lhs, rhs);
 
@@ -2148,8 +2208,16 @@ private:
 
   mlir::Value mlirGen(const RealConstantAST *expr) {
     auto location = loc(expr->loc());
+    double v = expr->getValue();
+    // SPEC[ST] IEC 61131-3 ed.3 6.4.4.1: a real literal that is not exactly
+    // representable in binary32 is an LREAL (binary64) literal (IEC mode).
+    if (iecMode() && (double)(float)v != v) {
+      auto type = getType(tok_lreal);
+      return builder.create<ConstantOp>(location, type,
+                                        builder.getF64FloatAttr(v));
+    }
     auto type = getType(tok_real);
-    auto value = builder.getF32FloatAttr(expr->getValue());
+    auto value = builder.getF32FloatAttr((float)v);
     return builder.create<ConstantOp>(location, type, value);
   }
 
@@ -2821,8 +2889,18 @@ private:
 
     // Mixed real/integer operands: convert the integer side to real
     // (sitofp at lowering) so comparisons/arithmetic have matching types.
-    if (lhs.getType().isa<RealType>() != rhs.getType().isa<RealType>()) {
-      auto realTy = lhs.getType().isa<RealType>() ? lhs.getType() : rhs.getType();
+    // LREAL (binary64) counts as real; mixed REAL/LREAL promotes to LREAL.
+    auto isRealTy = [](mlir::Type t) {
+      return t.isa<RealType>() || t.isa<LrealType>();
+    };
+    if (isRealTy(lhs.getType()) != isRealTy(rhs.getType()) ||
+        (isRealTy(lhs.getType()) && isRealTy(rhs.getType()) &&
+         lhs.getType() != rhs.getType())) {
+      bool lLreal = lhs.getType().isa<LrealType>();
+      bool rLreal = rhs.getType().isa<LrealType>();
+      auto realTy = (lLreal || rLreal) ? getType(tok_lreal)
+                                       : (isRealTy(lhs.getType()) ? lhs.getType()
+                                                                  : rhs.getType());
       auto toReal = [&](mlir::Value v) -> mlir::Value {
         if (v.getType() == realTy)
           return v;
@@ -3607,8 +3685,10 @@ private:
     else if (dst == "TOD" || dst == "TIME_OF_DAY") dstTok = tok_time_of_day;
     else if (dst == "DT" || dst == "DATE_AND_TIME" || dst == "DTL")
       dstTok = tok_date_and_time;
-    else if (dst == "REAL" || dst == "LREAL")
+    else if (dst == "REAL")
       dstTok = tok_real;
+    else if (dst == "LREAL")
+      dstTok = tok_lreal;
     else
       return nullptr; // string targets not supported yet
     mlir::Type resTy = getType(dstTok);
@@ -3629,12 +3709,21 @@ private:
           location, resTy,
           builder.getIntegerAttr(builder.getIntegerType(16), 0));
     }
-    // REAL source: dialect-cast straight to the target (fptosi/… at lowering)
-    if (arg.getType().isa<RealType>() && !resTy.isa<RealType>()) {
-      if (arg.getType() != resTy)
-        arg = builder.create<DialectCastOp>(location, resTy, arg);
-      return arg;
+    // REAL/LREAL source: dialect-cast straight to the target (fptosi/… at
+    // lowering); REAL <-> LREAL is an fpext/fptrunc.
+    auto isRealTy = [](mlir::Type t) {
+      return t.isa<RealType>() || t.isa<LrealType>();
+    };
+    if (isRealTy(arg.getType()) && !isRealTy(resTy)) {
+      auto cast = builder.create<DialectCastOp>(location, resTy, arg);
+      // IEC 61131-3 ed.3 table 22: real -> integer conversions round to the
+      // nearest integer (ties are implementation-defined)
+      if (resTy.isa<IntegerType>() || resTy.isa<LogicalType>())
+        cast.setRoundAttr(builder.getUnitAttr());
+      return cast.getResult();
     }
+    if (isRealTy(arg.getType()) && isRealTy(resTy) && arg.getType() != resTy)
+      return builder.create<DialectCastOp>(location, resTy, arg).getResult();
     // cast to the destination width as an IntegerType first (int.cast only
     // has integer results), then dialect-cast to the scl target type
     int width = 16;
@@ -3644,14 +3733,16 @@ private:
       width = lt.getWidth();
     else if (resTy.isa<RealType>())
       width = 32;
+    else if (resTy.isa<LrealType>())
+      width = 64;
     else if (resTy.isa<S5TimeType>() || resTy.isa<DateType>())
       width = 16;
     else if (resTy.isa<TimeType>() || resTy.isa<TimeOfDayType>())
       width = 32;
     else if (resTy.isa<DateAndTimeType>())
       width = 64;
-    if (resTy.isa<RealType>()) {
-      // int -> real: sitofp at lowering, via mlir.cast i32 -> !scl.real
+    if (isRealTy(resTy)) {
+      // int -> real/lreal: sitofp at lowering, via mlir.cast i32 -> !scl.real
       auto intTy = IntegerType::get(context, 32);
       if (arg.getType() != intTy) {
         auto cast = builder.create<IntegerCastOp>(location, intTy, arg);
@@ -4341,6 +4432,32 @@ private:
     auto ctx = builder.getContext();
     mlir::Type t0 = args[0].getType();
 
+    // Unary real functions on LREAL: scl_rt_realmath_d (libm on binary64).
+    if (auto it = realFns.find(up); it != realFns.end() &&
+                                      args.size() == 1 &&
+                                      t0.isa<LrealType>()) {
+      static const std::map<std::string, int> kindOf = {
+          {"sin", 1}, {"cos", 2},  {"tan", 3},  {"asin", 4}, {"acos", 5},
+          {"atan", 6}, {"sqrt", 7}, {"exp", 8},  {"ln", 9},   {"abs", 10}};
+      auto kIt = kindOf.find(it->second);
+      if (kIt == kindOf.end())
+        return nullptr;
+      auto lrealTy = getType(tok_lreal);
+      auto i32 = builder.getI32Type();
+      auto fnTy = builder.getFunctionType({i32, lrealTy}, {lrealTy});
+      auto fn = mlir::SymbolTable::lookupNearestSymbolFrom<FunctionOp>(
+          theModule, builder.getStringAttr("scl_rt_realmath_d"));
+      if (!fn) {
+        mlir::OpBuilder b(theModule.getBody(), theModule.getBody()->begin());
+        fn = b.create<FunctionOp>(location, "scl_rt_realmath_d", fnTy);
+        fn.setPrivate();
+      }
+      auto kindC = builder.create<ConstantOp>(
+          location, i32, builder.getIntegerAttr(i32, kIt->second));
+      return builder.create<CallFcOp>(location, lrealTy, "scl_rt_realmath_d",
+                                      mlir::ValueRange{kindC, args[0]},
+                                      mlir::ArrayAttr::get(ctx, {}));
+    }
     // Unary real functions (operand REAL/LREAL -> awl.real_math, f32).
     if (auto it = realFns.find(up); it != realFns.end() &&
                                       args.size() == 1 &&
@@ -4719,6 +4836,67 @@ private:
                                mlir::ArrayAttr::get(context, {}));
       return nullptr; // statement, no value
     }
+    //   __LOADM64(<byteBase>)         -> scl_rt_read('M', 0, base, 8) as i64
+    //   __STOREM64(<byteBase>, <v>)   -> scl_rt_write('M', 0, base, 8, v)
+    // 64-bit M-area access, used by the trace harness for LREAL bit patterns
+    // (a %MD direct is only 32 bit wide).
+    if (upTest == "__LOADM64" || upTest == "__STOREM64") {
+      auto params = expr->getParameters();
+      if (params.size() != (upTest == "__LOADM64" ? 1 : 2)) {
+        emitError(location) << upTest << " needs "
+                            << (upTest == "__LOADM64" ? "one" : "two")
+                            << " argument(s) (byte base[, value])";
+        return nullptr;
+      }
+      mlir::Value base = mlirGen(params[0].get());
+      if (!base)
+        return nullptr;
+      auto i8 = builder.getI8Type();
+      auto i32 = builder.getI32Type();
+      auto i64 = mlir::IntegerType::get(context, 64);
+      if (base.getType() != i32)
+        base = builder.create<DialectCastOp>(location, i32, base);
+      auto areaC = builder.create<ConstantOp>(
+          location, i8, builder.getIntegerAttr(i8, (uint8_t)'M'));
+      auto dbC = builder.create<ConstantOp>(location, i32,
+                                            builder.getIntegerAttr(i32, 0));
+      auto widthC = builder.create<ConstantOp>(location, i8,
+                                               builder.getIntegerAttr(i8, 8));
+      // func.call directly (not scl.call.fc): CallFcOp's result must be an
+      // Scl_Type, and the 64-bit pattern needs a builtin i64.
+      if (upTest == "__LOADM64") {
+        auto fnTy = builder.getFunctionType({i8, i32, i32, i8}, {i64});
+        auto stub = mlir::SymbolTable::lookupNearestSymbolFrom<mlir::func::FuncOp>(
+            theModule, builder.getStringAttr("scl_rt_read"));
+        if (!stub) {
+          mlir::OpBuilder b(theModule.getBody(), theModule.getBody()->begin());
+          stub = b.create<mlir::func::FuncOp>(location, "scl_rt_read", fnTy);
+          stub.setPrivate();
+        }
+        return builder
+            .create<mlir::func::CallOp>(location, i64, "scl_rt_read",
+                                        mlir::ValueRange{areaC, dbC, base, widthC})
+            .getResult(0);
+      }
+      mlir::Value val = mlirGen(params[1].get());
+      if (!val)
+        return nullptr;
+      if (val.getType() != i64)
+        val = builder.create<DialectCastOp>(location, i64, val);
+      auto fnTy = builder.getFunctionType({i8, i32, i32, i8, i64}, {});
+      auto stub = mlir::SymbolTable::lookupNearestSymbolFrom<mlir::func::FuncOp>(
+          theModule, builder.getStringAttr("scl_rt_write"));
+      if (!stub) {
+        mlir::OpBuilder b(theModule.getBody(), theModule.getBody()->begin());
+        stub = b.create<mlir::func::FuncOp>(location, "scl_rt_write", fnTy);
+        stub.setPrivate();
+      }
+      builder.create<mlir::func::CallOp>(location, mlir::TypeRange{},
+                                         "scl_rt_write",
+                                         mlir::ValueRange{areaC, dbC, base,
+                                                          widthC, val});
+      return nullptr; // statement, no value
+    }
     if (upTest == "__ASSERT" || upTest == "__BITS" || upTest == "__UNBITS") {
       mlir::Value arg;
       if (failed(mlirGenCallParameters(
@@ -4730,9 +4908,15 @@ private:
         return nullptr;
       }
       if (upTest == "__UNBITS") {
-        // __UNBITS(intBits): bit-cast a 32-bit pattern back to REAL (the
-        // inverse of __BITS; used by the trace harness to feed REAL inputs).
-        auto resTy = getType(tok_real);
+        // __UNBITS(intBits): bit-cast a 32-bit pattern back to REAL (64-bit
+        // to LREAL) — the inverse of __BITS; used by the trace harness to
+        // feed REAL/LREAL inputs.
+        unsigned argWidth = 0;
+        if (auto it = arg.getType().dyn_cast<IntegerType>())
+          argWidth = it.getWidth();
+        else if (auto it = arg.getType().dyn_cast<mlir::IntegerType>())
+          argWidth = it.getWidth();
+        auto resTy = argWidth == 64 ? getType(tok_lreal) : getType(tok_real);
         return builder.create<BitCastOp>(location, resTy, arg).getResult();
       }
       if (upTest == "__BITS") {
@@ -4741,6 +4925,8 @@ private:
           width = it.getWidth();
         else if (auto lt = arg.getType().dyn_cast<LogicalType>())
           width = lt.getWidth();
+        else if (arg.getType().isa<LrealType>())
+          width = 64;
         else if (arg.getType().isa<RealType>() || arg.getType().isa<TimeType>())
           width = 32;
         else {
@@ -4748,9 +4934,11 @@ private:
                               << arg.getType();
           return nullptr;
         }
-        return builder
-            .create<BitCastOp>(location, IntegerType::get(context, width), arg)
-            .getResult();
+        mlir::Type resTy =
+            width > 32
+                ? mlir::Type(mlir::IntegerType::get(context, width))
+                : mlir::Type(IntegerType::get(context, width));
+        return builder.create<BitCastOp>(location, resTy, arg).getResult();
       }
       auto i64 = mlir::IntegerType::get(context, 64);
       if (arg.getType() != i64)
@@ -5312,6 +5500,8 @@ private:
       return LogicalType::get(builder.getContext(), 32);
     case tok_real:
       return RealType::get(builder.getContext());
+    case tok_lreal:
+      return LrealType::get(builder.getContext());
     case tok_date:
       return DateType::get(builder.getContext());
     case tok_date_and_time:
@@ -5344,6 +5534,8 @@ private:
       return getType(tok_dint);
     case ElementaryDataTypeAST::Type_Real:
       return getType(tok_real);
+    case ElementaryDataTypeAST::Type_Lreal:
+      return getType(tok_lreal);
     case ElementaryDataTypeAST::Type_Date:
       return getType(tok_date);
     case ElementaryDataTypeAST::Type_DateAndTime:

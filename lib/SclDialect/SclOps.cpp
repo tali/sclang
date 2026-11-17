@@ -524,8 +524,14 @@ int bitWidth(Type type) {
     return t.getWidth();
   if (auto t = type.dyn_cast<scl::LogicalType>())
     return t.getWidth();
+  if (auto t = type.dyn_cast<mlir::IntegerType>())
+    return t.getWidth();
+  if (auto t = type.dyn_cast<mlir::FloatType>())
+    return t.getWidth();
   if (type.isa<scl::RealType>())
     return 32;
+  if (type.isa<scl::LrealType>())
+    return 64;
   if (type.isa<scl::S5TimeType>() || type.isa<scl::DateType>())
     return 16;
   if (type.isa<scl::TimeType>() || type.isa<scl::TimeOfDayType>())
@@ -858,7 +864,8 @@ bool IntegerCastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
   // dword/bool) input is allowed as well — it converts to an IntegerType of
   // the same width during lowering.
   Type input = inputs.front();
-  if (!input.isa<IntegerType>() && !input.isa<LogicalType>() &&
+  if (!input.isa<IntegerType>() && !input.isa<mlir::IntegerType>() &&
+      !input.isa<LogicalType>() &&
       !input.isa<S5TimeType>() && !input.isa<TimeType>() &&
       !input.isa<TimeOfDayType>() && !input.isa<DateType>() &&
       !input.isa<DateAndTimeType>())

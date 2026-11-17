@@ -256,13 +256,13 @@ public:
 };
 
 class RealConstantAST : public ConstantAST {
-  float value;
+  double value; // kept at full precision: IEC LREAL literals need binary64
 
 public:
-  RealConstantAST(Location loc, float value, Token type)
+  RealConstantAST(Location loc, double value, Token type)
       : ConstantAST(std::move(loc), Expr_RealConstant, type), value(value) {}
 
-  float getValue() const { return value; }
+  double getValue() const { return value; }
 
   /// LLVM style RTTI
   static bool classof(const ExpressionAST *e) {
@@ -358,6 +358,7 @@ public:
     Type_Int,
     Type_DInt,
     Type_Real,
+    Type_Lreal, // IEC LREAL (ADR 004)
     // Time Type
     Type_S5Time,
     Type_Time,

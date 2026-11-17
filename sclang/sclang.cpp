@@ -296,7 +296,10 @@ static bool parseScanInputsFile(
       auto eq = tok.find('=');
       if (eq == std::string::npos)
         return false;
-      vec.push_back({tok.substr(0, eq), std::stoll(tok.substr(eq + 1))});
+      // parse unsigned: 64-bit REAL/LREAL bit patterns (via __BITS) can
+      // exceed INT64_MAX
+      vec.push_back({tok.substr(0, eq),
+                     (int64_t)std::stoull(tok.substr(eq + 1))});
     }
   }
   return true;
@@ -520,6 +523,7 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_counter_fb", (void *)&scl_rt_counter_fb);
     add("scl_rt_edge_fb", (void *)&scl_rt_edge_fb);
     add("scl_rt_str_to_m", (void *)&scl_rt_str_to_m);
+    add("scl_rt_realmath_d", (void *)&scl_rt_realmath_d);
     add("scl_rt_assert_cmp", (void *)&scl_rt_assert_cmp);
     add("scl_rt_assert_cmp_r", (void *)&scl_rt_assert_cmp_r);
     // ABI v5: DB register / address registers / indirect access
@@ -794,6 +798,7 @@ int main(int argc, char **argv) {
   context.getOrLoadDialect<mlir::awl::AwlDialect>();
   context.getOrLoadDialect<mlir::cf::ControlFlowDialect>();
   context.getOrLoadDialect<mlir::math::MathDialect>();
+  context.getOrLoadDialect<mlir::func::FuncDialect>();
   // Load other target dialects
   context.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
   context.getOrLoadDialect<mlir::memref::MemRefDialect>();

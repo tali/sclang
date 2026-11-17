@@ -711,6 +711,8 @@ mlir::Type SclDialect::parseType(mlir::DialectAsmParser &parser) const {
 
   if (keyword == "real")
     return RealType::get(getContext());
+  if (keyword == "lreal")
+    return LrealType::get(getContext());
 
   if (keyword == "date")
     return DateType::get(getContext());
@@ -770,6 +772,7 @@ void SclDialect::printType(mlir::Type type,
         }
       })
       .Case<RealType>([&](RealType) { printer << "real"; })
+      .Case<LrealType>([&](LrealType) { printer << "lreal"; })
       .Case<StructType>([&](StructType type) { print(type, printer); })
       .Case<S5TimeType>([&](S5TimeType) { printer << "s5time"; })
       .Case<TimeType>([&](TimeType) { printer << "time"; })
@@ -789,6 +792,7 @@ void SclDialect::registerTypes() {
   addTypes<IntegerType>();
   addTypes<LogicalType>();
   addTypes<RealType>();
+  addTypes<LrealType>();
   addTypes<StructType>();
   addTypes<S5TimeType>();
   addTypes<TimeType>();

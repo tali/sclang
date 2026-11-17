@@ -74,6 +74,8 @@ static int64_t byteSize(Type type, const FbLayoutCache &layouts) {
     return (logTy.getWidth() + 7) / 8;
   if (type.isa<scl::RealType>())
     return 4;
+  if (type.isa<scl::LrealType>())
+    return 8;
   if (auto arrTy = type.dyn_cast<scl::ArrayType>()) {
     int64_t count = 1;
     for (auto &dim : arrTy.getDimensions())
@@ -329,6 +331,9 @@ public:
     });
     addConversion([&](scl::RealType type) {
       return FloatType::getF32(type.getContext());
+    });
+    addConversion([&](scl::LrealType type) {
+      return FloatType::getF64(type.getContext());
     });
     addConversion([&](scl::DirectType type) {
       return IntegerType::get(type.getContext(), 64);
@@ -681,6 +686,15 @@ struct DialectCastOpLowering : public OpConversionPattern<scl::DialectCastOp> {
             rewriter.create<arith::AddIOp>(loc, basePtr, meta.getOffset());
         Value ptr = rewriter.create<arith::IndexCastOp>(loc, targetTy, ptrIdx);
         rewriter.replaceOp(op, ptr);
+        return success();
+      }
+      // real -> integer with `round` (IEC 61131-3 ed.3 table 22): round to
+      // the nearest integer first, then fptosi
+      if (op.getRoundAttr() && value.getType().isa<FloatType>() &&
+          targetTy.isa<IntegerType>()) {
+        Value rounded =
+            rewriter.create<math::RoundOp>(op.getLoc(), value).getResult();
+        rewriter.replaceOpWithNewOp<arith::FPToSIOp>(op, targetTy, rounded);
         return success();
       }
       if (Value converted = ::convertScalarTo(rewriter, op.getLoc(), value, targetTy)) {

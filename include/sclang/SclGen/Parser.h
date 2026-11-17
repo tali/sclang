@@ -1023,6 +1023,9 @@ private:
     case tok_real:
       elementaryType = ElementaryDataTypeAST::Type_Real;
       break;
+    case tok_lreal:
+      elementaryType = ElementaryDataTypeAST::Type_Lreal;
+      break;
     // Time Type
     case tok_s5time:
       elementaryType = ElementaryDataTypeAST::Type_S5Time;

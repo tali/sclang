@@ -2170,6 +2170,24 @@ int32_t scl_rt_str_to_m(int32_t byteOff, int32_t maxLen, uint64_t srcPtr) {
   return 0;
 }
 
+// SPEC[ST] IEC 61131-3 LREAL (binary64) unary math functions (ed.3 table 33):
+// libm on double, parallel to the f32 awl.real_math path.
+double scl_rt_realmath_d(int32_t kind, double x) {
+  switch (kind) {
+  case 1: return sin(x);
+  case 2: return cos(x);
+  case 3: return tan(x);
+  case 4: return asin(x);
+  case 5: return acos(x);
+  case 6: return atan(x);
+  case 7: return sqrt(x);
+  case 8: return exp(x);
+  case 9: return log(x);
+  case 10: return fabs(x);
+  }
+  return 0.0;
+}
+
 void scl_rt_sim_dump_areas(void) {
   auto &s = state();
   if (s.vtable)

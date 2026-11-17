@@ -1,0 +1,48 @@
+// RUN: printf '0 a=4612811918334230528 b=4616189618054758400 x=3224371200\n' > %t.in && sclang -x=st --emit=jit --jit-cycles=1 --scan-io=in:a=M/0/8 --scan-io=in:b=M/8/8 --scan-io=in:x=M/16/4 --scan-io=out:sum=M/24/8 --scan-io=out:sq=M/32/8 --scan-io=out:r2i=M/40/2 --scan-io=out:l2r=M/42/4 --scan-inputs=%t.in %s 2>&1 | FileCheck %s
+// IEC 61131-3 ST mode (-x=st): LREAL (binary64) end to end. LREAL scan-io
+// slots are 8 M bytes wide and move as raw bit patterns: __LOADM64/__UNBITS
+// feed the inputs, __BITS/__STOREM64 report the outputs.
+// Inputs: a=2.5, b=4.0 (as f64 bit patterns), x=-2.75 (f32 bit pattern).
+// sum = a+b = 6.5 -> 4619004367821864960; sq = SQRT(b*b) = 4.0 ->
+// 4616189618054758400 (SQRT on LREAL goes through scl_rt_realmath_d);
+// r2i = REAL_TO_INT(-2.75) = -3 (rounds to nearest, ed.3 table 22);
+// l2r = LREAL_TO_REAL(6.5) -> f32 bits 1087373312 (REAL<->LREAL coercion).
+// CHECK: scan 0: sum=4619004367821864960 sq=4616189618054758400 r2i=-3 l2r=1087373312
+PROGRAM main
+  VAR_INPUT
+    a : LREAL;
+    b : LREAL;
+    x : REAL;
+  END_VAR
+  VAR_OUTPUT
+    sum : LREAL;
+    sq  : LREAL;
+    r2i : INT;
+    l2r : REAL;
+  END_VAR
+  sum := a + b;
+  sq  := SQRT(b * b);
+  r2i := REAL_TO_INT(x);
+  l2r := LREAL_TO_REAL(sum);
+END_PROGRAM
+
+DATA_BLOCK inst
+  main
+END_DATA_BLOCK
+
+FUNCTION OB1 : int
+BEGIN
+  "inst".a := __UNBITS(__LOADM64(0));
+  "inst".b := __UNBITS(__LOADM64(8));
+  "inst".x := __UNBITS(%MD16);
+  main."inst"();
+  __STOREM64(24, __BITS("inst".sum));
+  __STOREM64(32, __BITS("inst".sq));
+  %MW40 := "inst".r2i;
+  %MD42 := __BITS("inst".l2r);
+END_FUNCTION
+
+FUNCTION _mlir_ciface_OB1 : void
+BEGIN
+  OB1();
+END_FUNCTION
