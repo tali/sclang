@@ -140,8 +140,11 @@ oracle-verified against awlsim above). Tests using constructs outside the
 supported subset (CONFIGURATION, LREAL, STRING/array/struct outputs, ...) are
 counted as "unsupported", not failures.
 
-Current: **75/75 pass (100%), 17 unsupported** (74 traces are `status:
-conformant`, 18 `implementation-defined`). Builtin standard FBs (TON/TOF/TP,
+Current: **81/81 pass (100%), 11 unsupported** (6 CONFIGURATION/no-top-level-
+PROGRAM, 5 LREAL; 74 traces are `status: conformant`, 18
+`implementation-defined`). STRING outputs are observed via `--scan-io`
+string slots (width 0) fed by the `__STRTO_M` test builtin; STRING[n]
+declared lengths and TYPE aliases are honored by the harness. Builtin standard FBs (TON/TOF/TP,
 CTU/CTD/CTUD, R_TRIG/F_TRIG/SR/RS) are implemented: fixed instance layouts
 (forced in the lowering's FbLayoutCache, mirrored by scl_rt_timer_fb /
 scl_rt_counter_fb / scl_rt_edge_fb in the runtime, ABI v11) with member
