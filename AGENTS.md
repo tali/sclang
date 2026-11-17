@@ -152,7 +152,7 @@ has no `\b` — use python3 for regex edits.
   compares per-scan outputs (PROGRAM rewritten to FB + instance DB + OB1
   wrapper; driver flags --scan-io/--scan-inputs feed M-area slots per scan,
   see test/sclang/jit_scan_io.scl; --cross diffs SCL->JIT vs SCL->AWL->JIT).
-  Current: 71/75 pass (95%), 17 unsupported (CONFIGURATION/LREAL/STRING/...).
+  Current: 73/75 pass (97%), 17 unsupported (CONFIGURATION/LREAL/STRING/...).
   Frontend additions (committed): enum types (`TYPE C : (RED, GREEN);` ->
   INT storage + named constants resolved in codegen incl. CASE labels),
   subrange types (`INT (5..10)` -> base type, unchecked), multi-declaration
@@ -185,6 +185,14 @@ has no `\b` — use python3 for regex edits.
   mlir::IntegerType) — use builder.getIntegerType(w) for the attr; the old
   pattern crashed the attr uniquer non-deterministically (APInt memcmp on a
   mismatched width) in DT code paths. lit: test/sclang/jit_date_time.scl.
+  FUNCTION/OB/METHOD VAR sections (unlike VAR_TEMP) are default-initialised
+  to the type's zero value at every invocation (ed.3 6.6.2.1: functions have
+  no internal state) — mlirGenTempVar(decls, /*defaultInit=*/isVar).
+  FOR loops re-read the TO bound on every iteration (ed.3 7.3.3.4.2 leaves
+  modifying it undefined; the reference traces record the re-read behavior):
+  ForDoOp's `to` operand is the ADDRESS of a $for_bound temp cell that the
+  body re-stores at the end of each iteration, and the lowering reloads it
+  in the cond block (AWL emitFor loads it from its direct too).
   sclang-gen now registers a diagnostic handler (MLIRGen errors were
   previously swallowed, giving a silent rc=1).
   Builtin standard FBs (TON/TOF/TP/CTU/CTD/CTUD/R_TRIG/F_TRIG/SR/RS) are

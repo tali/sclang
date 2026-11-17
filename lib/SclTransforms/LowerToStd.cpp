@@ -1720,7 +1720,7 @@ struct ForDoOpLowering : public OpConversionPattern<scl::ForDoOp> {
     auto loc = op.getLoc();
     Value var = adaptor.getVar();
     Value init = adaptor.getInit();
-    Value to = adaptor.getTo();
+    Value toAddr = adaptor.getTo(); // address of the bound cell (re-read below)
     Value step = adaptor.getBy();
     if (!step) {
       auto ty = init.getType();
@@ -1748,10 +1748,14 @@ struct ForDoOpLowering : public OpConversionPattern<scl::ForDoOp> {
     recordLoopTerminators(bodyBlocks, incrB, endB, *loopTargets);
     lowerTerminatorsInBlocks(rewriter, loc, bodyBlocks, incrB, endB);
 
-    // cond: iv = load var; cond = step > 0 ? iv <= to : iv >= to
+    // cond: iv = load var; to = reload bound cell (the body may have
+    // re-stored it); cond = step > 0 ? iv <= to : iv >= to
     rewriter.setInsertionPointToStart(condB);
     Value iv = loadFromByteBuffer(rewriter, loc, var, init.getType());
     if (!iv)
+      return failure();
+    Value to = loadFromByteBuffer(rewriter, loc, toAddr, init.getType());
+    if (!to)
       return failure();
     auto zero = rewriter.create<arith::ConstantOp>(
         loc, step.getType(), rewriter.getIntegerAttr(step.getType(), 0));

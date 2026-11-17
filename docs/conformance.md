@@ -140,7 +140,7 @@ oracle-verified against awlsim above). Tests using constructs outside the
 supported subset (CONFIGURATION, LREAL, STRING/array/struct outputs, ...) are
 counted as "unsupported", not failures.
 
-Current: **71/75 pass (95%), 17 unsupported** (74 traces are `status:
+Current: **73/75 pass (97%), 17 unsupported** (74 traces are `status:
 conformant`, 18 `implementation-defined`). Builtin standard FBs (TON/TOF/TP,
 CTU/CTD/CTUD, R_TRIG/F_TRIG/SR/RS) are implemented: fixed instance layouts
 (forced in the lowering's FbLayoutCache, mirrored by scl_rt_timer_fb /
@@ -153,10 +153,10 @@ DATE/TOD/DT are now implemented (ed.3 table 30 arithmetic on decoded
 values, BCD calendar math in MLIRGen, DT_TO_DATE/DT_TO_TOD extractors,
 TOD fractional literals scaled to ms; see test/sclang/jit_date_time.scl and
 AGENTS.md — incl. the rule that IntegerAttrs must use mlir::IntegerType).
-Open clusters: FUNCTION VAR retention across calls
-(pou/function_var_not_retained), live-PT timer semantics
-(undefined/timer_pt_zero, undefined/ton_pt_change), FOR bound
-re-evaluation (undefined/for_bound_modified).
+FUNCTION VAR is re-initialised per call (ed.3 6.6.2.1) and FOR re-reads the
+TO bound each iteration (matches the recorded implementation-defined
+traces). Open cluster: live-PT timer semantics
+(undefined/timer_pt_zero, undefined/ton_pt_change).
 
 ## Remaining failures and known approximations
 

@@ -17,8 +17,8 @@ end_var
 
 begin
 
-// CHECK:      scl.for %i : !scl.address<!scl.int> = %c1 : !scl.int to %c2 : !scl.int do {
-// CHECK:        scl.for %j : !scl.address<!scl.int> = %c1 : !scl.int to %c3 : !scl.int do {
+// CHECK:      scl.for %i : !scl.address<!scl.int> = %c1 : !scl.int to %$for_bound : !scl.address<!scl.int> do {
+// CHECK:      scl.for %j : !scl.address<!scl.int> = %c1 : !scl.int to %$for_bound_0 : !scl.address<!scl.int> do {
 // CHECK-DAG:      [[A:%[a-z]+]] = scl.getvariable @a from %arg0
 // CHECK-DAG:      [[I:%[0-9]+]] = scl.load %i : !scl.address<!scl.int>
 // CHECK-DAG:      [[J:%[0-9]+]] = scl.load %j : !scl.address<!scl.int>

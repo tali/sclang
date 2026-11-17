@@ -788,7 +788,45 @@ private:
     return mlir::success();
   }
 
-  mlir::LogicalResult mlirGenTempVar(const VariableDeclarationSubsectionAST *decls) {
+  /// The default initial value of a scalar type (IEC 61131-3 ed.3 table 12:
+  /// numeric 0, BOOL FALSE, TIME 0 ms, DATE D#1990-01-01, TOD midnight,
+  /// DT 1990-01-01-00:00:00). Returns nullptr for composite types.
+  mlir::Value defaultInitValue(mlir::Location location, mlir::Type type) {
+    auto *ctx = builder.getContext();
+    auto zeroInt = [&](int width) {
+      return builder
+          .create<ConstantOp>(location, type,
+                              builder.getIntegerAttr(builder.getIntegerType(width),
+                                                     0))
+          .getResult();
+    };
+    if (auto it = type.dyn_cast<IntegerType>())
+      return zeroInt(it.getWidth());
+    if (auto lt = type.dyn_cast<LogicalType>())
+      return zeroInt(lt.getWidth());
+    if (type.isa<RealType>())
+      return builder
+          .create<ConstantOp>(location, type,
+                              builder.getFloatAttr(builder.getF32Type(), 0.0))
+          .getResult();
+    if (type.isa<S5TimeType>() || type.isa<DateType>())
+      return zeroInt(16);
+    if (type.isa<TimeType>() || type.isa<TimeOfDayType>())
+      return zeroInt(32);
+    if (type.isa<DateAndTimeType>())
+      return builder.create<ConstantDateAndTimeOp>(location, 1990, 1, 1, 0, 0,
+                                                   0, 0)
+          .getResult();
+    return nullptr; // arrays/structs/strings: no scalar default
+  }
+
+  /// Allocate the temp/var storage of a function-like's local variables.
+  /// `defaultInit` (VAR sections of FUNCTIONs/OBs/METHODs, ed.3 6.6.2.1:
+  /// functions have no internal state, their VAR variables are initialised
+  /// at each invocation) stores the type's default value when the declaration
+  /// has no explicit initializer; VAR_TEMP stays uninitialised.
+  mlir::LogicalResult mlirGenTempVar(const VariableDeclarationSubsectionAST *decls,
+                                     bool defaultInit = false) {
     for (const auto &decl : decls->getValues()) {
       auto type = getType(decl->getDataType());
       if (!type)
@@ -816,6 +854,9 @@ private:
               return mlir::failure();
             builder.create<StoreOp>(location, varStorage, value);
           }
+        } else if (defaultInit) {
+          if (mlir::Value zero = defaultInitValue(location, type))
+            builder.create<StoreOp>(location, varStorage, zero);
         }
       }
     }
@@ -955,7 +996,10 @@ private:
     }
     std::vector<mlir::Type> output_types;
     std::vector<llvm::StringRef> output_names;
-    std::vector<const VariableDeclarationSubsectionAST *> tempvar;
+    // (subsection, isVar): VAR sections of function-likes get default-initialised
+    // per call (ed.3 6.6.2.1), VAR_TEMP stays uninitialised.
+    std::vector<std::pair<const VariableDeclarationSubsectionAST *, bool>>
+        tempvar;
     // register function result as output variable (under the plain,
     // unqualified method name)
     if (functionHasReturnValue) {
@@ -992,8 +1036,10 @@ private:
           addAddrVariables(vardecls, input_types, input_names, input_is_addr);
           break;
         case VariableDeclarationSubsectionAST::Var:
+          tempvar.push_back({&vardecls, /*isVar=*/true});
+          break;
         case VariableDeclarationSubsectionAST::VarTemp:
-          tempvar.push_back(&vardecls);
+          tempvar.push_back({&vardecls, /*isVar=*/false});
           break;
         }
       }
@@ -1054,9 +1100,9 @@ private:
       argIndex++;
     }
 
-    // prologue: stack space for temporary variables
-    for (const auto subsection : tempvar) {
-      if (failed(mlirGenTempVar(subsection)))
+    // prologue: stack space for temporary variables (VAR initialised per call)
+    for (const auto &[subsection, isVar] : tempvar) {
+      if (failed(mlirGenTempVar(subsection, isVar)))
         return nullptr;
     }
 
@@ -5286,18 +5332,42 @@ private:
 
     mlir::Value var = mlirGen(assign->getLhs());
     mlir::Value start = mlirGenRValue(assign->getRhs());
-    mlir::Value last = mlirGenRValue(forDo->getLast());
     mlir::Value incr = nullptr;
     if (forDo->getIncrement().has_value())
       incr = mlirGenRValue(forDo->getIncrement().value());
 
-    auto forDoOp = builder.create<ForDoOp>(location, var, start, last, incr);
+    // The TO bound lives in a temp cell so it can be re-evaluated at the end
+    // of every iteration (ed.3 7.3.3.4.2: modifying the final value inside the
+    // loop is undefined; the reference traces record the re-read behavior).
+    mlir::Value last = mlirGenRValue(forDo->getLast());
+    if (!last)
+      return mlir::failure();
+    if (last.getType() != start.getType())
+      last = builder.create<DialectCastOp>(location, start.getType(), last)
+                 .getResult();
+    auto boundCell = builder.create<TempVariableOp>(
+        location, AddressType::get(start.getType()),
+        builder.getStringAttr("$for_bound"));
+    builder.create<StoreOp>(location, boundCell, last);
+
+    auto forDoOp = builder.create<ForDoOp>(location, var, start, boundCell,
+                                           incr);
 
     auto old = builder.saveInsertionPoint();
 
     builder.createBlock(&forDoOp.getDoBody());
     if (failed(mlirGen(forDo->getCode())))
       return mlir::failure();
+
+    // Re-read the TO bound for the next iteration's condition check.
+    mlir::Value lastAgain = mlirGenRValue(forDo->getLast());
+    if (lastAgain) {
+      if (lastAgain.getType() != start.getType())
+        lastAgain = builder.create<DialectCastOp>(location, start.getType(),
+                                                   lastAgain)
+                        .getResult();
+      builder.create<StoreOp>(location, boundCell, lastAgain);
+    }
 
     createEndOp(location);
     builder.restoreInsertionPoint(old);

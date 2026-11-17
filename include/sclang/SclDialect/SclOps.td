@@ -434,10 +434,17 @@ def EndOp : SclOp<"end", [Pure, Terminator]> {
 
 def ForDoOp : SclOp<"for"> {
   let summary = "for-do loop";
+  let description = [{
+    The final value (`to`) is passed as the address of a cell holding the
+    bound, so the bound expression can be re-evaluated on every iteration
+    (stored back into the cell at the end of the loop body): ed.3 7.3.3.4.2
+    leaves the behavior undefined when the loop modifies the final value,
+    and the reference traces record the re-read behavior.
+  }];
   let arguments = (
     ins Scl_AddressType:$var,
     Scl_NumericType:$init,
-    Scl_NumericType:$to,
+    Scl_AddressType:$to,
     Optional<Scl_NumericType>:$by
   );
   let regions = (region AnyRegion:$doBody);

@@ -16,7 +16,7 @@ end_var
 begin
 
 // CHECK: %0 = scl.load %a : !scl.address<!scl.int>
-// CHECK: scl.for %i : !scl.address<!scl.int> = %c1 : !scl.int to %0 : !scl.int by %c2 : !scl.int do {
+// CHECK: scl.for %i : !scl.address<!scl.int> = %c1 : !scl.int to %$for_bound : !scl.address<!scl.int> by %c2 : !scl.int do {
 // CHECK:   %1 = scl.load %i : !scl.address<!scl.int> : !scl.int
 // CHECK:   scl.store %test : !scl.address<!scl.int> = %1 : !scl.int
   for i := 1 to a by 2 do

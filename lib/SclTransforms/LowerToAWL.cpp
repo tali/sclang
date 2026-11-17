@@ -993,12 +993,16 @@ struct FuncConverter {
     std::string condL = newLabel("FOR"), bodyL = newLabel("BODY"),
                 stepL = newLabel("STEP"), endL = newLabel("END");
     emitLabel(condL);
-    // cond: var <= to  (assumes positive step)
+    // cond: var <= to  (assumes positive step); `to` is a cell address that
+    // is reloaded here on every iteration (the body may have re-stored it)
     Type vt = awlDirectValueType(ctx, dt);
+    scl::DirectType toDt = directOf(f.getTo());
+    if (!toDt)
+      return failure();
     Value v = b.create<awl::LoadOp>(loc, vt, directValue(dt));
-    Value t = castTo(materialize(f.getTo()), vt);
+    Value t = b.create<awl::LoadOp>(loc, vt, directValue(toDt));
     Value c = b.create<awl::CmpLeOp>(loc, IntegerType::get(ctx, 1),
-                                     castTo(v, vt), t);
+                                     castTo(v, vt), castTo(t, vt));
     emitJumpIfNot(c, endL);
     emitLabel(bodyL);
     loops.push_back({stepL, endL});
