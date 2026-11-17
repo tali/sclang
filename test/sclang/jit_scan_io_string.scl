@@ -1,0 +1,36 @@
+// RUN: sclang --emit=jit --jit-cycles=2 --area-size M=8192 --scan-io=out:s=M/0/0 --scan-io=out:t=M/256/0 %s 2>&1 | FileCheck %s
+// String scan-io slots (width 0): __STRTO_M(base, maxlen, str) copies the
+// flat string buffer into the M area as S7 layout (maxlen@0, actlen@1,
+// chars@2..) and the driver reports it as name='...' with IEC $ escapes.
+// Scan 0: s=t='a b' -> 'a$20b'; scan 1: CONCAT adds 'x' -> 'a$20bx'.
+// CHECK: scan 0: s='a$20b' t='a$20b'
+// CHECK: scan 1: s='a$20bx' t='a$20bx'
+function_block strfb
+var_output
+  s : string;
+  t : string;
+end_var
+var
+  acc : string := 'a b';
+end_var
+begin
+  s := acc;
+  acc := concat(acc, 'x');
+  t := s;
+end_function_block
+
+data_block inst
+  strfb
+end_data_block
+
+function OB1 : int
+begin
+  strfb."inst"();
+  __STRTO_M(0, 254, "inst".s);
+  __STRTO_M(256, 254, "inst".t);
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

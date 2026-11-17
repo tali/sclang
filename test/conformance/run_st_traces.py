@@ -45,6 +45,7 @@ TYPE_MAP = {
     'DINT': (4, 'int'),
     'TIME': (4, 'time'), 'LTIME': (8, 'time'),
     'REAL': (4, 'float'),  # observed via __BITS bit pattern
+    'STRING': (256, 'str'),  # S7-layout buffer in the M area, width 0 = str
     'USINT': (1, 'uint'), 'UINT': (2, 'uint'), 'UDINT': (4, 'uint'),
     'WORD': (2, 'uint'), 'DWORD': (4, 'uint'),
 }
@@ -77,11 +78,43 @@ def parse_time_ms(tok):
     return total
 
 
+def decode_st_string(tok):
+    """Decode an IEC 61131-3 ST string literal body ('...' without quotes):
+    $' -> ', $$ -> $, $T/$L/$N/$P/$R -> tab/LF/LF/FF/CR, $<2 hex> -> char."""
+    if len(tok) < 2 or tok[0] != "'" or tok[-1] != "'":
+        return None
+    body = tok[1:-1]
+    out = []
+    i = 0
+    special = {"'": "'", '$': '$', 'T': '\t', 'L': '\n', 'N': '\n',
+               'P': '\f', 'R': '\r'}
+    while i < len(body):
+        c = body[i]
+        if c == '$' and i + 1 < len(body):
+            n = body[i + 1]
+            if n in special:
+                out.append(special[n])
+                i += 2
+                continue
+            if i + 2 < len(body):
+                try:
+                    out.append(chr(int(body[i + 1:i + 3], 16)))
+                    i += 3
+                    continue
+                except ValueError:
+                    pass
+        out.append(c)
+        i += 1
+    return ''.join(out)
+
+
 def parse_value(tok, kind):
     """Parse a trace value token according to the declared type kind.
     Returns None for '?' (undefined / implementation-defined wildcard)."""
     if tok == '?':
         return None
+    if kind == 'str':
+        return decode_st_string(tok)
     if kind == 'bit':
         return 1 if tok.upper() == 'TRUE' else 0
     if kind == 'time':
@@ -164,6 +197,14 @@ def parse_program(path):
     text = strip_comments(raw)
     if re.search(r'\bCONFIGURATION\b', text, re.I):
         return None
+    # simple TYPE aliases (TYPE S5 : STRING[5]; END_TYPE) resolve to their
+    # target type for slot allocation
+    aliases = {}
+    for tm in re.finditer(
+            r'\bTYPE\s+([A-Za-z_]\w*)\s*:\s*([^;]+);.*?\bEND_TYPE\b',
+            text, re.S | re.I):
+        aliases[tm.group(1).upper()] = re.sub(r'\s+', ' ', tm.group(2)
+                                             .strip().upper())
     m = re.search(r'\bPROGRAM\s+([A-Za-z_]\w*)\b', text, re.I)
     if not m:
         return None
@@ -173,6 +214,7 @@ def parse_program(path):
         return None
     body = text[m.end():m.end() + end.start()]
     decls = {}
+    strlens = {}  # declared STRING[n] max length per variable
     for sm in SEC_RE.finditer(body):
         section = sm.group(1).upper()
         sec = []
@@ -183,12 +225,21 @@ def parse_program(path):
             names, _, rest = decl.partition(':')
             ty = rest.split(':=')[0].strip().upper()
             ty = re.sub(r'\s+', ' ', ty)
+            # IEC bare STRING or S7-style STRING[n]: same slot layout
+            m2 = re.match(r'^STRING\s*\[(\d+)\]$', ty)
+            while ty in aliases:
+                ty = aliases[ty]
+            if m2 is None:
+                m2 = re.match(r'^STRING\s*\[(\d+)\]$', ty)
+            ty = re.sub(r'^STRING\s*(\[[^]]*\])?$', 'STRING', ty)
             for n in names.split(','):
                 n = n.strip()
                 if n:
                     sec.append((n, ty))
+                    if m2:
+                        strlens[n] = int(m2.group(1))
         decls.setdefault(section, []).extend(sec)
-    return prog, decls, raw
+    return prog, decls, raw, strlens
 
 
 def transform_to_scl(raw, prog):
@@ -200,9 +251,10 @@ def transform_to_scl(raw, prog):
 
 # ------------------------------------------------------------------ wrapper
 class Slot:
-    def __init__(self, name, kind, byte, bit, width):
+    def __init__(self, name, kind, byte, bit, width, maxlen=254):
         self.name, self.kind = name, kind
         self.byte, self.bit, self.width = byte, bit, width
+        self.maxlen = maxlen
 
     def direct(self):
         if self.kind == 'bit':
@@ -217,7 +269,7 @@ class Slot:
                                              self.width)
 
 
-def alloc_slots(names, kinds, start):
+def alloc_slots(names, kinds, start, strlens=None):
     """Assign M-area slots; returns (slots, next_free_byte)."""
     slots = []
     byte = start
@@ -229,6 +281,11 @@ def alloc_slots(names, kinds, start):
         if k == 'bit':
             slots.append(Slot(name, k, byte, 0, 1))
             byte += 1
+        elif k == 'str':
+            # width 0 = string slot; maxlen from the declared STRING[n]
+            ml = (strlens or {}).get(name, 254)
+            slots.append(Slot(name, k, byte, -1, 0, ml))
+            byte += width
         else:
             slots.append(Slot(name, k, byte, -1, width))
             byte += width
@@ -250,6 +307,9 @@ def gen_wrapper(raw, prog, in_slots, out_slots):
     for s in out_slots:
         if s.kind == 'float':
             lines.append('  %s := __BITS("inst".%s);' % (s.direct(), s.name))
+        elif s.kind == 'str':
+            lines.append('  __STRTO_M(%d, %d, "inst".%s);'
+                         % (s.byte, s.maxlen, s.name))
         else:
             lines.append('  %s := "inst".%s;' % (s.direct(), s.name))
     lines.append('END_FUNCTION\n')
@@ -298,6 +358,9 @@ def parse_scan_lines(output):
         vals = {}
         for t in m.group(2).split():
             k, _, v = t.partition('=')
+            if v.startswith("'"):
+                vals[k] = decode_st_string(v)
+                continue
             try:
                 vals[k] = int(v, 10)
             except ValueError:
@@ -328,7 +391,11 @@ def compare_scans(trace, observed, out_slots):
                 errs.append('scan %d %s: unparseable (%s vs %s)'
                             % (idx, name, tok, got))
                 continue
-            if kind == 'float':
+            if kind == 'str':
+                if got != exp:
+                    errs.append('scan %d %s: expected %s got %r'
+                                % (idx, name, tok, got))
+            elif kind == 'float':
                 gf = struct.unpack('f', struct.pack('I', got & 0xFFFFFFFF))[0]
                 # NaN matches any NaN (bit pattern is impl-defined); inf
                 # must match exactly.
@@ -374,7 +441,7 @@ def run_one(args, st_path, trace, tmpdir, cross):
     parsed = parse_program(st_path)
     if parsed is None:
         return 'unsupported', 'CONFIGURATION or no top-level PROGRAM'
-    prog, decls, raw = parsed
+    prog, decls, raw, strlens = parsed
     in_decls = decls.get('VAR_INPUT', [])
     out_decls = decls.get('VAR_OUTPUT', [])
     in_names = [n for n, _ in in_decls]
@@ -397,7 +464,7 @@ def run_one(args, st_path, trace, tmpdir, cross):
             return 'unsupported', 'type %s of %s not supported' % (k, n)
     in_slots, nxt = alloc_slots(trace['inputs'] or in_names, in_kinds, M_BASE)
     out_slots, nxt2 = alloc_slots(trace['outputs'] or out_names, out_kinds,
-                                   nxt or M_BASE + 64)
+                                   nxt or M_BASE + 64, strlens)
     if in_slots is None or out_slots is None:
         return 'unsupported', 'slot allocation failed'
     wrapper = gen_wrapper(raw, prog, in_slots, out_slots)

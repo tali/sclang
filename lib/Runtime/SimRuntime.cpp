@@ -2140,6 +2140,36 @@ void scl_rt_assert_cmp_r(uint32_t id, uint8_t op, double actual,
 
 uint64_t scl_rt_assert_failures(void) { return state().assertFailures; }
 
+// SPEC[ST] IEC 61131-3 ST STRING outputs observed by trace tests: the
+// __STRTO_M test builtin lowers to scl_rt_str_to_m, copying the S7-layout
+// string buffer (maxlen@0, actlen@1, chars@2..) into the M area so the
+// driver's --scan-io string slot can read it back (sim only).
+int32_t scl_rt_str_to_m(int32_t byteOff, int32_t maxLen, uint64_t srcPtr) {
+  if (state().vtable)
+    return 0; // a host runtime owns the memory
+  // srcPtr is the string's char-array address; FB string members are flat
+  // char arrays of exactly maxLen bytes with C-string length semantics
+  // (strLenOf), so the actual length is the first zero byte within maxLen.
+  // The M slot gets the S7 layout (maxlen @0, actlen @1, chars @2..) so
+  // --scan-io string slots can read it back.
+  const uint8_t *chars =
+      reinterpret_cast<const uint8_t *>((uintptr_t)srcPtr);
+  if (!chars)
+    return 0;
+  if (maxLen < 0)
+    maxLen = 0;
+  if (maxLen > 254)
+    maxLen = 254;
+  uint32_t actlen = 0;
+  while (actlen < (uint32_t)maxLen && chars[actlen])
+    ++actlen;
+  scl_rt_write(SCL_RT_AREA_M, 0, (uint32_t)byteOff, 1, (uint64_t)maxLen);
+  scl_rt_write(SCL_RT_AREA_M, 0, (uint32_t)byteOff + 1, 1, actlen);
+  for (uint32_t i = 0; i < actlen; ++i)
+    scl_rt_write(SCL_RT_AREA_M, 0, (uint32_t)byteOff + 2 + i, 1, chars[i]);
+  return 0;
+}
+
 void scl_rt_sim_dump_areas(void) {
   auto &s = state();
   if (s.vtable)

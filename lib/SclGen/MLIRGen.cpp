@@ -1623,27 +1623,30 @@ private:
     if (!lhs)
       return mlir::failure();
     auto baseElem = lhs.getType().cast<AddressType>().getElementType();
-    // char := 'A': a string literal assigns its first byte to a char
-    if (auto it8 = baseElem.dyn_cast<IntegerType>()) {
-      if (it8.getWidth() == 8 && !str->getValue().empty()) {
-        auto byteVal = builder.create<ConstantOp>(
-            location, baseElem,
-            builder.getIntegerAttr(builder.getIntegerType(8),
-                                   (uint8_t)str->getValue()[0]));
-        builder.create<StoreOp>(location, lhs, byteVal);
-        return mlir::success();
-      }
-    }
+    // A string member (byte view of an array type) takes the whole literal;
+    // only a plain char target gets just the first byte (char := 'A').
     ArrayType arrTy;
     if (auto at = baseElem.dyn_cast<ArrayType>()) {
       arrTy = at;
     } else {
       auto it = byteViewTypes.find(lhs);
-      if (it == byteViewTypes.end() || !it->second.isa<ArrayType>()) {
-        emitError(location) << "string literal assigned to non-string target";
-        return mlir::failure();
+      if (it != byteViewTypes.end() && it->second.isa<ArrayType>())
+        arrTy = it->second.cast<ArrayType>();
+    }
+    if (!arrTy) {
+      // char := 'A': a string literal assigns its first byte to a char
+      if (auto it8 = baseElem.dyn_cast<IntegerType>()) {
+        if (it8.getWidth() == 8 && !str->getValue().empty()) {
+          auto byteVal = builder.create<ConstantOp>(
+              location, baseElem,
+              builder.getIntegerAttr(builder.getIntegerType(8),
+                                     (uint8_t)str->getValue()[0]));
+          builder.create<StoreOp>(location, lhs, byteVal);
+          return mlir::success();
+        }
       }
-      arrTy = it->second.cast<ArrayType>();
+      emitError(location) << "string literal assigned to non-string target";
+      return mlir::failure();
     }
     return mlirGenStoreStringBytes(location, lhs, arrTy, str->getValue());
   }
@@ -3834,12 +3837,27 @@ private:
       }
       if (up == "LEFT" || up == "RIGHT" || up == "MID" || up == "DELETE" ||
           up == "INSERT" || up == "REPLACE" || up == "FIND") {
-        // integer parameters L / P (1-based position), as scl dint
+        // integer parameters L / P (1-based position), as scl dint; their
+        // positional index follows the ed.3 table 34 signature of each
+        // function: LEFT/RIGHT(IN,L), MID/DELETE(IN,L,P), INSERT(IN,IN2,P),
+        // REPLACE(IN,IN2,L,P), FIND(IN1,IN2) has no numeric parameter.
         auto numArg = [&](const char *name, int pos) -> mlir::Value {
           auto *e = arg(name, pos);
-          return e ? numArgD(location, e) : mlir::Value();
+          if (!e || llvm::isa<StringConstantAST>(e))
+            return mlir::Value();
+          return numArgD(location, e);
         };
-        mlir::Value L = numArg("L", 1), P = numArg("P", 2);
+        int lPos = -1, pPos = -1;
+        if (up == "LEFT" || up == "RIGHT" || up == "MID" || up == "DELETE")
+          lPos = 1;
+        if (up == "MID" || up == "DELETE" || up == "INSERT")
+          pPos = 2;
+        if (up == "REPLACE") {
+          lPos = 2;
+          pPos = 3;
+        }
+        mlir::Value L = lPos >= 0 ? numArg("L", lPos) : mlir::Value();
+        mlir::Value P = pPos >= 0 ? numArg("P", pPos) : mlir::Value();
         if (up == "LEFT" || up == "RIGHT") {
           if (!L)
             return nullptr;
@@ -3940,42 +3958,54 @@ private:
                        builder.create<LessThanOp>(location, ic, pm1),
                        byteHead, byteTail);
           } else if (up == "INSERT" || up == "REPLACE") {
-            // result = a[0..P-2] + b + a[P-1(+L)..]  (REPLACE skips L chars of a)
+            // INSERT(IN,IN2,P): IN2 goes in AFTER position P, i.e. at 0-based
+            // index P (clamped to lenA). REPLACE(IN,IN2,L,P): IN2 replaces the
+            // L chars of IN starting at 1-based position P (0-based P-1).
             mlir::Value skip = up == "REPLACE" ? L : sclConst(location, d, 0);
+            mlir::Value pos =
+                up == "INSERT"
+                    ? mux(location,
+                          builder.create<GreaterThanOp>(location, P, lenA),
+                          lenA, P)
+                    : pm1;
             int64_t nBInt = b.maxLen();
             mlir::Value srcB = clampIdx(
-                location, builder.create<SubOp>(location, ic, pm1).getResult(), nBInt);
+                location, builder.create<SubOp>(location, ic, pos).getResult(), nBInt);
             mlir::Value byteB = byteVD(location, b, srcB);
             byteB = mux(location,
                         builder.create<LessThanOp>(location, srcB, lenB), byteB,
                         sclConst(location, d, 0));
-            // tail of a after the replaced/inserted region: a[i - lenB + skip]
-            mlir::Value srcA = clampIdx(
-                location,
+            // tail of a after the replaced/inserted region: a[i - lenB + skip];
+            // keep the raw index for the range check (clampIdx is only for
+            // the load itself)
+            mlir::Value rawSrcA =
                 builder.create<AddOp>(
                     location,
                     builder.create<SubOp>(location, ic, lenB).getResult(),
-                    skip).getResult(),
-                nA);
+                    skip).getResult();
+            mlir::Value srcA = clampIdx(location, rawSrcA, nA);
             mlir::Value inMid = builder.create<AndOp>(
                 location,
-                builder.create<GreaterEqualOp>(location, ic, pm1),
+                builder.create<GreaterEqualOp>(location, ic, pos),
                 builder.create<LessThanOp>(
                     location, ic,
-                    builder.create<AddOp>(location, pm1, lenB).getResult()));
+                    builder.create<AddOp>(location, pos, lenB).getResult()));
             mlir::Value inTail = builder.create<AndOp>(
                 location,
                 builder.create<GreaterEqualOp>(
                     location, ic,
-                    builder.create<AddOp>(location, pm1, lenB).getResult()),
-                builder.create<LessThanOp>(
-                    location, srcA, lenA));
+                    builder.create<AddOp>(location, pos, lenB).getResult()),
+                builder.create<AndOp>(
+                    location,
+                    builder.create<GreaterEqualOp>(location, rawSrcA,
+                                                   sclConst(location, d, 0)),
+                    builder.create<LessThanOp>(location, rawSrcA, lenA)));
             mlir::Value byteHead = mux(
-                location, builder.create<LessThanOp>(location, ic, pm1),
+                location, builder.create<LessThanOp>(location, ic, pos),
                 byteD(location, a, i), sclConst(location, d, 0));
             mlir::Value byteTail = mux(location, inTail,
                                        byteVD(location, a, srcA), sclConst(location, d, 0));
-            byte = mux(location, builder.create<LessThanOp>(location, ic, pm1),
+            byte = mux(location, builder.create<LessThanOp>(location, ic, pos),
                        byteHead, mux(location, inMid, byteB, byteTail));
           }
           storeStrByte(location, buf, i, byte);
@@ -4492,7 +4522,54 @@ private:
     //                            expected=1) -> scl_rt_assert_cmp
     //   __BITS(<value>)       -> bit.cast to the same-width integer (lets the
     //                            trace driver observe REAL bit patterns)
+    //   __STRTO_M(<byteBase>, <string lvalue>)
+    //                         -> scl_rt_str_to_m: copy the S7-layout string
+    //                            buffer into the M area at byteBase (lets
+    //                            --scan-io observe STRING outputs)
     std::string upTest = std::string(callee.upper());
+    if (upTest == "__STRTO_M") {
+      auto params = expr->getParameters();
+      if (params.size() != 3) {
+        emitError(location) << "__STRTO_M needs exactly three arguments "
+                               "(byte base, max length, string lvalue)";
+        return nullptr;
+      }
+      mlir::Value base = mlirGen(params[0].get());
+      mlir::Value maxLen = mlirGen(params[1].get());
+      if (!base || !maxLen)
+        return nullptr;
+      auto i32 = builder.getI32Type();
+      if (base.getType() != i32)
+        base = builder.create<DialectCastOp>(location, i32, base);
+      if (maxLen.getType() != i32)
+        maxLen = builder.create<DialectCastOp>(location, i32, maxLen);
+      // The string argument is taken as an lvalue: its !scl.address is the
+      // buffer pointer passed to the runtime (lowers to i64).
+      mlir::Value strAddr = mlirGenLValue(params[2].get());
+      if (!strAddr || !strAddr.getType().isa<AddressType>()) {
+        emitError(location) << "__STRTO_M: third argument must be a string "
+                               "lvalue";
+        return nullptr;
+      }
+      // The string buffer's raw data pointer as i64 (DialectCastOp on a
+      // byte view lowers to the memref base+offset pointer).
+      auto i64 = mlir::IntegerType::get(context, 64);
+      mlir::Value strPtr =
+          builder.create<DialectCastOp>(location, i64, strAddr);
+      auto fnTy =
+          builder.getFunctionType({i32, i32, i64}, {getType(tok_dint)});
+      auto stub = mlir::SymbolTable::lookupNearestSymbolFrom<FunctionOp>(
+          theModule, builder.getStringAttr("scl_rt_str_to_m"));
+      if (!stub) {
+        mlir::OpBuilder b(theModule.getBody(), theModule.getBody()->begin());
+        stub = b.create<FunctionOp>(location, "scl_rt_str_to_m", fnTy);
+        stub.setPrivate();
+      }
+      builder.create<CallFcOp>(location, getType(tok_dint), "scl_rt_str_to_m",
+                               mlir::ValueRange{base, maxLen, strPtr},
+                               mlir::ArrayAttr::get(context, {}));
+      return nullptr; // statement, no value
+    }
     if (upTest == "__ASSERT" || upTest == "__BITS" || upTest == "__UNBITS") {
       mlir::Value arg;
       if (failed(mlirGenCallParameters(

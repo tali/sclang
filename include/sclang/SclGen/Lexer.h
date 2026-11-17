@@ -747,17 +747,17 @@ private:
       if (c == '$') {
         c = getNextChar();
         switch (c) {
-        default:
-          return tok_error_string;
         case Token('$'):
         case Token('\''):
           stringValue += c;
           break;
         case Token('l'):
         case Token('L'):
+        case Token('n'):
+        case Token('N'):
         case Token('p'):
         case Token('P'):
-          stringValue += '\n'; // TODO: check
+          stringValue += '\n';
           break;
         case Token('r'):
         case Token('R'):
@@ -767,6 +767,18 @@ private:
         case Token('T'):
           stringValue += '\t';
           break;
+        default: {
+          // IEC 61131-3 $<2 hex digits> character code, e.g. $20 = space
+          if (isxdigit((unsigned char)c)) {
+            char c2 = getNextChar();
+            if (!isxdigit((unsigned char)c2))
+              return tok_error_string;
+            stringValue += (char)std::stoi(std::string(1, c) + c2, nullptr,
+                                           16);
+            break;
+          }
+          return tok_error_string;
+        }
         case Token('>'): // TODO: check
           while (getNextChar() != '$')
             ;

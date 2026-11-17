@@ -242,8 +242,37 @@ static bool parseScanIoEntry(const std::string &entry, ScanIoSlot &slot) {
     slot.byteOff = (uint32_t)std::stoul(addr);
   }
   slot.width = (uint8_t)std::stoul(rest.substr(c2 + 1));
+  // width 0 = string slot: an S7-layout string buffer (maxlen@0, actlen@1,
+  // chars@2.., up to 256 bytes) reported as name='...' with IEC $ escapes.
+  if (slot.width == 0)
+    return slot.bit < 0;
   return slot.width >= 1 && slot.width <= 8 &&
          (slot.bit < 0 || slot.bit < 8);
+}
+
+/// Encode a string for the scan output in the IEC 61131-3 ST literal escape
+/// form used by the conformance traces ('$' -> $$, quote -> $', tab -> $T,
+/// LF -> $L, CR -> $R, other non-printables -> $<2 hex digits>).
+static std::string encodeScanString(llvm::StringRef s) {
+  std::string out;
+  for (char c : s) {
+    switch (c) {
+    case '\'': out += "$'"; break;
+    case '$': out += "$$"; break;
+    case '\t': out += "$T"; break;
+    case '\n': out += "$L"; break;
+    case '\r': out += "$R"; break;
+    default:
+      if (c <= 0x20 || c >= 0x7F) { // space too: scan lines are whitespace-split
+        char buf[4];
+        snprintf(buf, sizeof(buf), "$%02X", (unsigned char)c);
+        out += buf;
+      } else {
+        out += c;
+      }
+    }
+  }
+  return out;
 }
 
 /// Read the --scan-inputs file into scan index -> [(name, value)].
@@ -490,6 +519,7 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_timer_fb", (void *)&scl_rt_timer_fb);
     add("scl_rt_counter_fb", (void *)&scl_rt_counter_fb);
     add("scl_rt_edge_fb", (void *)&scl_rt_edge_fb);
+    add("scl_rt_str_to_m", (void *)&scl_rt_str_to_m);
     add("scl_rt_assert_cmp", (void *)&scl_rt_assert_cmp);
     add("scl_rt_assert_cmp_r", (void *)&scl_rt_assert_cmp_r);
     // ABI v5: DB register / address registers / indirect access
@@ -693,6 +723,22 @@ int runJit(mlir::ModuleOp module) {
         for (auto &slot : scanSlots) {
           if (slot.isInput)
             continue;
+          if (slot.width == 0) {
+            // String slot: S7 layout maxlen@0, actlen@1, chars@2..
+            uint32_t maxlen =
+                (uint8_t)scl_rt_read(slot.area, 0, slot.byteOff, 1);
+            uint32_t actlen =
+                (uint8_t)scl_rt_read(slot.area, 0, slot.byteOff + 1, 1);
+            if (actlen > maxlen)
+              actlen = maxlen;
+            std::string s;
+            for (uint32_t i = 0; i < actlen; ++i)
+              s += (char)(uint8_t)scl_rt_read(slot.area, 0,
+                                              slot.byteOff + 2 + i, 1);
+            llvm::outs() << " " << slot.name << "='" << encodeScanString(s)
+                         << "'";
+            continue;
+          }
           int64_t v = slot.bit >= 0
                           ? (scl_rt_read_bit(slot.area, 0, slot.byteOff,
                                              (uint8_t)slot.bit)

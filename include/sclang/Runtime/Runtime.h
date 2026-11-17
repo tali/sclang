@@ -262,6 +262,14 @@ void scl_rt_assert_cmp_r(uint32_t id, uint8_t op, double actual,
 /// assert support is registered).
 uint64_t scl_rt_assert_failures(void);
 
+/// Test-support (ABI v12): copy an S7-layout string buffer (maxlen byte @0,
+/// actual-length byte @1, chars @2..) from `srcPtr` (a JIT memref pointer)
+/// into the M area at `byteOff`; `maxLen` is the string's declared maximum
+/// length (the source buffer is a flat char array of exactly maxLen bytes).
+/// Lets the trace driver's --scan-io observe
+/// STRING outputs (sclang `__STRTO_M` builtin). Sim-only; returns 0.
+int32_t scl_rt_str_to_m(int32_t byteOff, int32_t maxLen, uint64_t srcPtr);
+
 /// L-stack frames (S7 local data): every called block pushes a frame of
 /// `bytes` bytes; L-area accesses are relative to the current frame base.
 /// The block lowering emits scl_rt_l_push at function entry and

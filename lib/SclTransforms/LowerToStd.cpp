@@ -668,6 +668,21 @@ struct DialectCastOpLowering : public OpConversionPattern<scl::DialectCastOp> {
     Type targetTy = typeConverter->convertType(op.getType());
 
     if (value.getType() != targetTy) {
+      // A byte view (converted !scl.address) cast to i64 yields its raw data
+      // pointer: aligned base plus the view offset (same extraction the
+      // builtin-FB lowerings use to pass instance DBs to the runtime).
+      if (value.getType().isa<MemRefType>() && targetTy.isInteger(64)) {
+        auto loc = op.getLoc();
+        auto meta =
+            rewriter.create<memref::ExtractStridedMetadataOp>(loc, value);
+        Value basePtr = rewriter.create<memref::ExtractAlignedPointerAsIndexOp>(
+            loc, meta.getBaseBuffer());
+        Value ptrIdx =
+            rewriter.create<arith::AddIOp>(loc, basePtr, meta.getOffset());
+        Value ptr = rewriter.create<arith::IndexCastOp>(loc, targetTy, ptrIdx);
+        rewriter.replaceOp(op, ptr);
+        return success();
+      }
       if (Value converted = ::convertScalarTo(rewriter, op.getLoc(), value, targetTy)) {
         rewriter.replaceOp(op, converted);
         return success();
