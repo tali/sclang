@@ -161,6 +161,13 @@ traces whose recorded behavior differs are reported as DIFF but count as
 pass (non-normative); the one remaining divergence is timer_pt_zero's TOF
 power-up Q=TRUE, a documented IronPLC deviation that contradicts the
 conformant timers/tof trace.
+The ST tier is part of run_conformance.py (floor 0.95, `ST traces (JIT)`
+line). The `--cross` differential (SCL->JIT vs SCL->AWL->JIT per trace) now
+runs end-to-end: wrappers are renamed to the AWL OBn/FBn/FCn/DBn convention
+(awl_compat in run_st_traces.py), DB1 is pre-sized, and AWL-unrepresentable
+constructs are cross-skips. Current: 46/75 traces identical across both
+paths; the rest are AWL-backend gaps (builtin FB calls in SCL FBs, CASE
+expressions, struct copies in expressions), listed in AGENTS.md.
 
 ## Remaining failures and known approximations
 

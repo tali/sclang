@@ -202,6 +202,16 @@ has no `\b` — use python3 for regex edits.
   timers/tof). run_st_traces.py counts `status: implementation-defined`
   mismatches as pass-with-DIFF-note, not failures (the behavior is
   non-normative by definition).
+  The ST tier is wired into run_conformance.py as a tier with floor 0.95
+  (FLOOR_ST_TRACES; prints `ST traces (JIT)` and propagates FAIL/DIFF lines).
+  --cross mode runs each passing wrapper SCL->AWL->JIT and requires identical
+  scan lines: the wrapper is renamed to the AWL naming convention by
+  awl_compat() (prog->FB1, inst->DB1, other FUNCTIONs->FCn), DB1 is sized via
+  --area-size DB1=8192 (the AWL backend drops DATA_BLOCK declarations), and
+  constructs the AWL backend cannot represent are cross-skips, not failures.
+  Current cross: 46/75 identical; remaining diffs are AWL-backend gaps
+  (builtin FB calls TON/CTU/R_TRIG inside SCL FBs, CASE expr, whole-struct
+  expression materialization, ...).
   sclang-gen now registers a diagnostic handler (MLIRGen errors were
   previously swallowed, giving a silent rc=1).
   Builtin standard FBs (TON/TOF/TP/CTU/CTD/CTUD/R_TRIG/F_TRIG/SR/RS) are
