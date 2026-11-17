@@ -156,6 +156,17 @@ public:
                         &callableAllOrder[fb->getIdentifier()],
                         &callableInOut[fb->getIdentifier()],
                         &callableOutputs[fb->getIdentifier()]);
+        // IEC 61131-3 ed.3 METHODs: registered as functions "<FB>.<METHOD>"
+        // whose first parameter is the instance-DB address.
+        for (auto &m : fb->getMethods()) {
+          std::string mname =
+              (fb->getIdentifier() + "." + m->getIdentifier()).str();
+          functionResultTypes[mname] = getType(m->getType());
+          collectVarTypes(m->getDeclarations(), callableVarTypes[mname],
+                          &callableVarNames[mname], &callableVarDefaults[mname],
+                          &callableAllOrder[mname], &callableInOut[mname],
+                          &callableOutputs[mname]);
+        }
       }
     }
     if (errorOccurred)
@@ -172,6 +183,25 @@ public:
       if (!func || errorOccurred)
         return nullptr;
       theModule.push_back(func);
+      for (auto *op : extraOps)
+        theModule.push_back(op);
+      extraOps.clear();
+      // Emit queued FB methods at module level (fresh symbol scope).
+      for (auto &pm : pendingMethods) {
+        // NB: create the op detached (cleared insertion point, like the
+        // main loop does for units) so the push_back below does not link it
+        // into the module twice.
+        builder.clearInsertionPoint();
+        auto fn = mlirGenFunctionLike(pm.second->getIdentifier(),
+                                      getType(pm.second->getType()),
+                                      pm.second->getDeclarations(),
+                                      pm.second->getCode(),
+                                      loc(pm.second->loc()), pm.first);
+        if (!fn || errorOccurred)
+          return nullptr;
+        theModule.push_back(fn);
+      }
+      pendingMethods.clear();
     }
 
     // Verify the module after we have finished constructing it, this will check
@@ -209,6 +239,23 @@ private:
   llvm::StringMap<mlir::Block *> labelBlocks;
   /// User-defined type name -> struct type.
   llvm::StringMap<mlir::Type> udtTypes;
+
+  /// Enumerated-value constants (upper-case name -> value), registered when
+  /// an enum TYPE is declared; resolved as a fallback in mlirGenVariable.
+  llvm::StringMap<int64_t> enumConsts;
+
+  /// Ops generated alongside a unit but pushed to the module separately
+  /// (methods of an FB become their own FunctionOps "<FB>.<METHOD>").
+  std::vector<mlir::Operation *> extraOps;
+
+  /// Per-instance storage cells for the implicit EN/ENO pins of FB calls
+  /// (keyed by instance identity: global-DB symbol name, else the address's
+  /// defining op), so `inst.ENO` reads back what the last call wrote.
+  llvm::StringMap<mlir::Value> enoCells;
+
+  /// Methods of the FB currently being generated; emitted as module-level
+  /// FunctionOps by the main loop after the FB's symbol scope is closed.
+  std::vector<std::pair<FunctionBlockOp, const MethodAST *>> pendingMethods;
   /// Byte-view address value -> declared SCL type of the member it points
   /// into (FB/struct members are addressed as i8 byte views; the declared
   /// type is needed to type loads and to resolve nested member access).
@@ -282,7 +329,8 @@ private:
           if (outputNames && vardecls.getKind() ==
                                 VariableDeclarationSubsectionAST::VarOutput)
             outputNames->insert(std::string(var->getIdentifier()));
-          if (defaults && value->getInitializer().has_value()) {
+          if (defaults && value->getInitializer().has_value() &&
+              !isCompositeInitAST(value->getInitializer().value())) {
             int64_t v = 0;
             if (mlir::succeeded(foldConstIntAST(value->getInitializer().value(), v)))
               (*defaults)[var->getIdentifier()] = {true, v};
@@ -429,15 +477,278 @@ private:
     }
   }
 
+  /// Byte size of an SCL type (packed, big-endian layout — mirrors byteSize
+  /// in LowerToStd.cpp, which computes the instance layouts).
+  static int64_t sclByteSize(mlir::Type t) {
+    if (auto it = t.dyn_cast<IntegerType>())
+      return (it.getWidth() + 7) / 8;
+    if (auto lt = t.dyn_cast<LogicalType>())
+      return (lt.getWidth() + 7) / 8;
+    if (t.isa<RealType>())
+      return 4;
+    if (auto at = t.dyn_cast<ArrayType>()) {
+      int64_t count = 1;
+      for (auto &dim : at.getDimensions())
+        count *= dim.second - dim.first + 1;
+      return count * sclByteSize(at.getElementType());
+    }
+    if (auto st = t.dyn_cast<StructType>()) {
+      int64_t size = 0;
+      for (auto elem : st.getElementTypes())
+        size += sclByteSize(elem);
+      return size;
+    }
+    if (t.isa<S5TimeType>() || t.isa<DateType>())
+      return 2;
+    if (t.isa<TimeType>() || t.isa<TimeOfDayType>())
+      return 4;
+    if (t.isa<DateAndTimeType>())
+      return 8;
+    return 0;
+  }
+
+  /// Is this initializer an array/structure literal (vs. a scalar value)?
+  static bool isCompositeInitAST(const ExpressionAST *e) {
+    return llvm::isa<ExpressionListAST>(e) || llvm::isa<RepeatedConstantAST>(e);
+  }
+
+  /// Flatten an array-literal expression into its element expressions,
+  /// expanding `n(v)` repetition factors. Nested lists are flattened too
+  /// (multi-dimensional literals are row-major flat) — used for folding.
+  static void flattenInitList(const ExpressionAST *e,
+                              std::vector<const ExpressionAST *> &out) {
+    if (auto *list = llvm::dyn_cast<ExpressionListAST>(e)) {
+      for (auto &v : list->getValues())
+        flattenInitList(v.get(), out);
+      return;
+    }
+    if (auto *rep = llvm::dyn_cast<RepeatedConstantAST>(e)) {
+      for (int32_t i = 0; i < rep->getRepetitions(); ++i)
+        out.push_back(rep->getValue());
+      return;
+    }
+    out.push_back(e);
+  }
+
+  /// Direct elements of an array literal: nested lists stay intact (they
+  /// are sub-array literals), only `n(v)` repetitions are expanded.
+  static void initListElements(const ExpressionAST *e,
+                               std::vector<const ExpressionAST *> &out) {
+    if (auto *list = llvm::dyn_cast<ExpressionListAST>(e)) {
+      for (auto &v : list->getValues()) {
+        if (auto *rep = llvm::dyn_cast<RepeatedConstantAST>(v.get()))
+          for (int32_t i = 0; i < rep->getRepetitions(); ++i)
+            out.push_back(rep->getValue());
+        else
+          out.push_back(v.get());
+      }
+      return;
+    }
+    if (auto *rep = llvm::dyn_cast<RepeatedConstantAST>(e)) {
+      for (int32_t i = 0; i < rep->getRepetitions(); ++i)
+        out.push_back(rep->getValue());
+      return;
+    }
+    out.push_back(e);
+  }
+
+  /// Fold a constant composite initializer (array/struct literal) to the
+  /// big-endian bit pattern of the whole value, for cold-start baking into
+  /// instance DBs (scl.init_bits on VariableOp, consumed by the lowering).
+  std::optional<llvm::APInt> foldConstCompositeAST(const ExpressionAST *e,
+                                                   mlir::Type t) {
+    if (auto at = t.dyn_cast<ArrayType>()) {
+      int64_t total = sclByteSize(t);
+      llvm::APInt result(total * 8, 0);
+      // Shallow elements: a multi-dim array carries all dimensions in one
+      // ArrayType (flat row-major literal), while a nested list is a
+      // sub-array/struct literal folded recursively.
+      std::vector<const ExpressionAST *> elems;
+      initListElements(e, elems);
+      int64_t elemBytes = sclByteSize(at.getElementType());
+      unsigned idx = 0;
+      for (auto *el : elems) {
+        auto bits = foldConstCompositeAST(el, at.getElementType());
+        if (!bits || bits->getBitWidth() != (unsigned)(elemBytes * 8))
+          return std::nullopt;
+        unsigned shift = (unsigned)((total - (idx + 1) * elemBytes) * 8);
+        result |= bits->zext(total * 8) << shift;
+        ++idx;
+      }
+      return result;
+    }
+    if (auto st = t.dyn_cast<StructType>()) {
+      // Structure literal: `(x := 1, y := 10)` (named) or `(1, 10)`
+      // (positional), as an ExpressionListAST.
+      std::vector<const ExpressionAST *> elems;
+      initListElements(e, elems);
+      auto names = st.getElementNames();
+      auto types = st.getElementTypes();
+      llvm::APInt result(sclByteSize(t) * 8, 0);
+      int64_t off = 0;
+      for (unsigned i = 0; i < types.size(); ++i) {
+        int64_t msize = sclByteSize(types[i]);
+        const ExpressionAST *me = nullptr;
+        if (i < elems.size()) {
+          me = elems[i];
+          // named element `name := v`?
+          if (auto *bin = llvm::dyn_cast<BinaryExpressionAST>(me))
+            if (bin->getOp() == tok_assignment)
+              me = bin->getRhs();
+        }
+        if (me) {
+          auto bits = foldConstCompositeAST(me, types[i]);
+          if (!bits || bits->getBitWidth() != (unsigned)(msize * 8))
+            return std::nullopt;
+          result |= bits->zext(result.getBitWidth()) << ((sclByteSize(t) - off - msize) * 8);
+        }
+        off += msize;
+      }
+      return result;
+    }
+    // scalar element
+    if (auto *rc = llvm::dyn_cast<RealConstantAST>(e)) {
+      float f = rc->getValue();
+      uint32_t bits;
+      std::memcpy(&bits, &f, 4);
+      return llvm::APInt(32, bits);
+    }
+    if (auto *sc = llvm::dyn_cast<StringConstantAST>(e)) {
+      // string literal: zero-padded bytes, big-endian order
+      std::string v = sc->getValue().str();
+      int64_t bytes = sclByteSize(t);
+      llvm::APInt result(bytes * 8, 0);
+      for (size_t i = 0; i < v.size() && i < (size_t)bytes; ++i)
+        result |= llvm::APInt(bytes * 8, (uint8_t)v[i])
+                  << ((bytes - 1 - (int64_t)i) * 8);
+      return result;
+    }
+    int64_t iv = 0;
+    if (mlir::failed(foldConstIntAST(e, iv)))
+      return std::nullopt;
+    int64_t bytes = sclByteSize(t);
+    if (bytes <= 0)
+      return std::nullopt;
+    return llvm::APInt(bytes * 8, (uint64_t)iv, true);
+  }
+
+  /// Emit per-element stores for a composite initializer into a plain
+  /// (non-byte-view) variable address — used for local/temp variables.
+  mlir::LogicalResult emitCompositeInit(mlir::Location location,
+                                        mlir::Value addr, mlir::Type t,
+                                        const ExpressionAST *e) {
+    if (auto at = t.dyn_cast<ArrayType>()) {
+      std::vector<const ExpressionAST *> elems;
+      initListElements(e, elems);
+      auto dims = at.getDimensions();
+      auto intTy = getType(tok_int);
+      // innermost element type (a multi-dim ArrayType carries all dims and
+      // the scalar element type)
+      mlir::Type elemTy = at.getElementType();
+      unsigned flat = 0;
+      for (auto *el : elems) {
+        // decompose the flat index into per-dimension indices (row-major:
+        // the last dimension varies fastest)
+        SmallVector<mlir::Value, 2> indices;
+        int64_t rem = flat;
+        for (int d = (int)dims.size() - 1; d >= 0; --d) {
+          int64_t count = dims[d].second - dims[d].first + 1;
+          int64_t idx = count > 0 ? rem % count : 0;
+          rem = count > 0 ? rem / count : 0;
+          indices.insert(indices.begin(),
+                         builder.create<ConstantOp>(
+                             location, intTy,
+                             builder.getIntegerAttr(
+                                 builder.getIntegerType(16),
+                                 (int64_t)(dims[d].first + idx)))
+                             .getResult());
+        }
+        // Mirror mlirGen(IndexedVariableAST): a plain array base yields a
+        // typed element address (no attr); a byte-view base (array member of
+        // a FB/struct) yields an i8 view with the array type recorded.
+        mlir::Type baseElem = addr.getType().cast<AddressType>().getElementType();
+        bool byteBase = baseElem.isa<IntegerType>() &&
+                        baseElem.cast<IntegerType>().getWidth() == 8;
+        mlir::TypeAttr attr;
+        mlir::Type resultElem;
+        if (byteBase) {
+          resultElem = baseElem;
+          attr = mlir::TypeAttr::get(at);
+        } else {
+          resultElem = elemTy;
+        }
+        auto elemAddr = builder.create<GetIndexOp>(
+            location, AddressType::get(resultElem), addr, indices, attr);
+        if (byteBase)
+          byteViewTypes[elemAddr] = elemTy;
+        if (mlir::failed(emitCompositeInit(location, elemAddr, elemTy, el)))
+          return mlir::failure();
+        ++flat;
+      }
+      return mlir::success();
+    }
+    if (t.dyn_cast<StructType>()) {
+      std::vector<const ExpressionAST *> elems;
+      initListElements(e, elems);
+      auto st = t.cast<StructType>();
+      auto names = st.getElementNames();
+      unsigned pos = 0;
+      for (auto *el : elems) {
+        std::string mname;
+        const ExpressionAST *rhs = el;
+        if (auto *bin = llvm::dyn_cast<BinaryExpressionAST>(el))
+          if (bin->getOp() == tok_assignment) {
+            if (auto *sv = llvm::dyn_cast<SimpleVariableAST>(bin->getLhs()))
+              mname = sv->getName().str();
+            rhs = bin->getRhs();
+          }
+        if (mname.empty() && pos < names.size())
+          mname = names[pos].getValue().str();
+        ++pos;
+        auto elemAddr = mlirGenElement(location, addr, mname);
+        if (!elemAddr)
+          return mlir::failure();
+        auto it = byteViewTypes.find(elemAddr);
+        mlir::Type mty = it != byteViewTypes.end()
+                             ? it->second
+                             : st.getElementType(mname);
+        if (mty.dyn_cast<ArrayType>() || mty.dyn_cast<StructType>()) {
+          if (mlir::failed(emitCompositeInit(location, elemAddr, mty, rhs)))
+            return mlir::failure();
+        } else {
+          auto val = mlirGenRValue(rhs);
+          if (!val)
+            return mlir::failure();
+          if (val.getType() != mty)
+            val = builder.create<DialectCastOp>(location, mty, val);
+          builder.create<StoreOp>(location, elemAddr, val);
+        }
+      }
+      return mlir::success();
+    }
+    // scalar
+    auto val = mlirGenRValue(e);
+    if (!val)
+      return mlir::failure();
+    if (val.getType() != t)
+      val = builder.create<DialectCastOp>(location, t, val);
+    builder.create<StoreOp>(location, addr, val);
+    return mlir::success();
+  }
+
   mlir::LogicalResult mlirGen(const VariableDeclarationSubsectionAST *decls,
                               bool isInput, bool isOutput) {
     for (const auto &decl : decls->getValues()) {
       auto type = getType(decl->getDataType());
       if (!type)
         return mlir::failure();
+      const ExpressionAST *initAST =
+          decl->getInitializer().has_value()
+              ? decl->getInitializer().value()
+              : nullptr;
       mlir::Value init = nullptr;
-      if (decl->getInitializer().has_value()) {
-        init = mlirGen(decl->getInitializer().value());
+      if (initAST && !isCompositeInitAST(initAST)) {
+        init = mlirGen(initAST);
         if (!init)
           return mlir::failure();
       }
@@ -453,10 +764,25 @@ private:
         // 'abc'): recorded as an attribute so the cold-start value is baked
         // into the instance DB global (DataBlockOpLowering), like integer
         // initializers via initBits.
-        if (decl->getInitializer().has_value())
-          if (auto *sc = llvm::dyn_cast<StringConstantAST>(
-                  decl->getInitializer().value()))
+        if (initAST)
+          if (auto *sc = llvm::dyn_cast<StringConstantAST>(initAST))
             varOp->setAttr("scl.init_str", builder.getStringAttr(sc->getValue()));
+        // SPEC[SCL] IEC 61131-3 array/struct initializers
+        // (VAR a : ARRAY[1..3] OF INT := [7, 8, 9];): folded to the
+        // big-endian bit pattern of the whole value and baked into the
+        // instance DB cold start via scl.init_bits (see FbLayoutCache).
+        if (initAST && isCompositeInitAST(initAST)) {
+          if (auto bits = foldConstCompositeAST(initAST, type)) {
+            varOp->setAttr("scl.init_bits",
+                           builder.getIntegerAttr(
+                               builder.getIntegerType(bits->getBitWidth()),
+                               *bits));
+          } else {
+            emitWarning(location)
+                << "non-constant array/struct initializer of '" << name
+                << "' is ignored (member starts zeroed)";
+          }
+        }
       }
     }
     return mlir::success();
@@ -480,8 +806,16 @@ private:
         if (failed(declare(location, name, addressType, varStorage)))
           return mlir::failure();
         if (init) {
-          auto value = mlirGen(init.value());
-          builder.create<StoreOp>(location, varStorage, value);
+          if (isCompositeInitAST(init.value())) {
+            if (mlir::failed(emitCompositeInit(location, varStorage, type,
+                                               init.value())))
+              return mlir::failure();
+          } else {
+            auto value = mlirGen(init.value());
+            if (!value)
+              return mlir::failure();
+            builder.create<StoreOp>(location, varStorage, value);
+          }
         }
       }
     }
@@ -591,11 +925,21 @@ private:
   FunctionOp mlirGenFunctionLike(llvm::StringRef identifier, mlir::Type retType,
                                  const DeclarationSectionAST *declarations,
                                  const CodeSectionAST *code,
-                                 mlir::Location location) {
+                                 mlir::Location location,
+                                 FunctionBlockOp fbCtx = nullptr) {
     functionName = identifier;
+    enoCells.clear();
     functionHasReturnValue = !retType.isa<mlir::NoneType>();
     labelBlocks.clear();
     std::string name(identifier);
+    // A METHOD of an FB becomes a function "<FB>.<METHOD>" with the
+    // instance-DB address as its first ($self) parameter.
+    mlir::Type selfAddrTy;
+    if (fbCtx) {
+      name = (fbCtx.getName() + "." + identifier).str();
+      auto idb = InstanceDbType::get(builder.getContext(), fbCtx.getName());
+      selfAddrTy = AddressType::get(idb);
+    }
 
     // Create a scope in the symbol table to hold variable declarations.
     llvm::ScopedHashTableScope<StringRef, VariableSymbol> var_scope(
@@ -604,13 +948,19 @@ private:
     std::vector<mlir::Type> input_types;
     std::vector<llvm::StringRef> input_names;
     std::vector<bool> input_is_addr;
+    if (selfAddrTy) {
+      input_types.push_back(selfAddrTy);
+      input_names.push_back("$self");
+      input_is_addr.push_back(true); // by-address: use the block arg directly
+    }
     std::vector<mlir::Type> output_types;
     std::vector<llvm::StringRef> output_names;
     std::vector<const VariableDeclarationSubsectionAST *> tempvar;
-    // register function result as output variable
+    // register function result as output variable (under the plain,
+    // unqualified method name)
     if (functionHasReturnValue) {
       output_types.push_back(retType);
-      output_names.push_back(name);
+      output_names.push_back(identifier);
     }
 
     // Parse the declaration subsections
@@ -654,8 +1004,10 @@ private:
     // name already exists, the new definition replaces it (and a forward
     // declaration arriving after the definition is skipped).
     auto func_type = builder.getFunctionType(input_types, output_types);
-    if (auto prev = mlir::SymbolTable::lookupNearestSymbolFrom<FunctionOp>(
-            theModule, builder.getStringAttr(name))) {
+    FunctionOp prev;
+    for (auto f : theModule.getOps<FunctionOp>())
+      if (f.getName() == name) { prev = f; break; }
+    if (prev) {
       bool newIsFwdDecl = code->getInstructions().empty();
       if (!newIsFwdDecl)
         prev.erase(); // real definition replaces the forward declaration
@@ -708,6 +1060,12 @@ private:
         return nullptr;
     }
 
+    // A METHOD sees the FB's members as instance elements (via $self).
+    if (fbCtx)
+      for (auto v : fbCtx.getBody().getOps<VariableOp>())
+        if (failed(declare(location, v.getSymName(), v.getType(), nullptr)))
+          return nullptr;
+
     // Declare all the function outputs in the symbol table.
     for (const auto name_value : llvm::zip(output_types, output_names)) {
       auto type = std::get<0>(name_value);
@@ -743,6 +1101,7 @@ private:
 
   FunctionBlockOp mlirGen(const FunctionBlockAST *fb) {
     auto location = loc(fb->loc());
+    enoCells.clear();
     functionName = fb->getIdentifier();
     functionHasReturnValue = false;
     std::string name(fb->getIdentifier());
@@ -790,6 +1149,12 @@ private:
     // Implicitly return if the current block has no terminator yet.
     if (!blockHasTerminator())
       mlirgenReturn(location);
+
+    // IEC 61131-3 ed.3 METHODs: queued for emission as module-level
+    // FunctionOps "<FB>.<METHOD>" (taking the instance-DB address as $self)
+    // by the main loop, once this FB's symbol scope is closed.
+    for (auto &m : fb->getMethods())
+      pendingMethods.push_back({function, m.get()});
 
     return function;
   }
@@ -1398,6 +1763,18 @@ private:
                               ? declared
                               : IntegerType::get(builder.getContext(), dw);
       rhs = builder.create<IntegerCastOp>(location, castTy, rhs);
+    } else if (dw > 0 && rw > 0 && dw != rw &&
+               (rhs.getType().isa<LogicalType>() ||
+                declared.isa<LogicalType>())) {
+      // bool <-> int assignment (e.g. `r := c.CLEAR()`): zero-extend or
+      // truncate through an integer of the declared width.
+      mlir::Type castTy = declared.isa<IntegerType>()
+                              ? declared
+                              : IntegerType::get(builder.getContext(), dw);
+      auto cast = builder.create<IntegerCastOp>(location, castTy, rhs);
+      if (rhs.getType().isa<LogicalType>())
+        cast.setZextAttr(builder.getUnitAttr());
+      rhs = cast.getResult();
     }
 
     builder.create<StoreOp>(location, lhs, rhs);
@@ -1727,6 +2104,36 @@ private:
       mlir::Type address = AddressType::get(db.getType());
       return builder.create<GetGlobalOp>(location, address, name);
     }
+    // implicit EN/ENO of the enclosing FB (e.g. `IF NOT ENO THEN` inside a
+    // function block): the block's own pin cell, shared with the caller's
+    // `inst.ENO` writes (same instance address).
+    {
+      std::string up = llvm::StringRef(name).upper();
+      if (up == "ENO" || up == "EN") {
+        auto self = symbolTable.lookup("$self");
+        if (self.isAddress()) {
+          auto cell = fbEnoCell(location, self.getValue());
+          byteViewTypes[cell] = getType(tok_bool);
+          return cell;
+        }
+        // Outside an FB (e.g. in a FUNCTION) there is no instance pin;
+        // keep the historical simulator behavior: ENO reads as FALSE.
+        return builder.create<ConstantOp>(
+            location, getType(tok_bool),
+            builder.getIntegerAttr(builder.getI1Type(), 0));
+      }
+    }
+    // enumerated value (e.g. `c := GREEN`)?
+    {
+      std::string up = llvm::StringRef(name).upper();
+      auto it = enumConsts.find(up);
+      if (it != enumConsts.end()) {
+        auto i16 = getType(tok_int);
+        return builder.create<ConstantOp>(
+            location, i16, builder.getIntegerAttr(builder.getIntegerType(16),
+                                                   it->second));
+      }
+    }
     emitError(location) << "unknown variable '" << name << "'";
     return nullptr;
   }
@@ -1848,6 +2255,13 @@ private:
         else if (mUp == "PT" || mUp == "ET")
           t = getType(tok_time);
         if (!t) {
+          // implicit EN/ENO pins of the instance
+          std::string mUp0 = std::string(llvm::StringRef(name).upper());
+          if (mUp0 == "ENO" || mUp0 == "EN") {
+            auto cell = fbEnoCell(location, address);
+            byteViewTypes[cell] = getType(tok_bool);
+            return cell;
+          }
           emitError(location) << "unknown variable '" << name
                               << "' in builtin FB '" << fbName << "'";
           return nullptr;
@@ -1886,6 +2300,13 @@ private:
         return cell;
       }
       if (!var) {
+        // implicit EN/ENO pins of the instance
+        std::string mUp0 = std::string(llvm::StringRef(name).upper());
+        if (mUp0 == "ENO" || mUp0 == "EN") {
+          auto cell = fbEnoCell(location, address);
+          byteViewTypes[cell] = getType(tok_bool);
+          return cell;
+        }
         emitError(location) << "unknown variable '" << name << "' in FB '" << fbName << "'";
         return nullptr;
       }
@@ -2247,6 +2668,14 @@ private:
     .Case<BinaryExpressionAST>([&](auto callee) {
       if (callee->getOp() != tok_dot)
         return mlir::failure();
+      // `instance.method(...)` (IEC 61131-3 ed.3 METHOD call)
+      {
+        mlir::Value instAddr;
+        if (auto m = resolveMethodCallee(callee, instAddr)) {
+          mlirGenFcCall(expr, *m, /*allowVoid=*/true, instAddr);
+          return mlir::success();
+        }
+      }
       // `#valve.timerClose.TON(...)`: explicit timer-FB suffix on an
       // instance member — call TON/TOF/TP on the member before the suffix.
       if (auto *rhsVar = dyn_cast<SimpleVariableAST>(callee->getRhs())) {
@@ -2308,12 +2737,75 @@ private:
     });
   }
 
+  /// If `callee` is an FB-method call `instance.method`, resolve the
+  /// qualified name "<FB>.<METHOD>" and the instance address.
+  std::optional<std::string> resolveMethodCallee(const ExpressionAST *callee,
+                                                 mlir::Value &instAddr) {
+    auto bin = dyn_cast<BinaryExpressionAST>(callee);
+    if (!bin || bin->getOp() != tok_dot)
+      return std::nullopt;
+    auto rhs = dyn_cast<SimpleVariableAST>(bin->getRhs());
+    if (!rhs)
+      return std::nullopt;
+    std::string fb;
+    mlir::Value addr;
+    if (auto *sv = dyn_cast<SimpleVariableAST>(bin->getLhs())) {
+      // NB: resolve without emitting errors — a plain name may be an FB
+      // name (`main."DB"()`) or a global DB, neither of which is a local
+      // variable.
+      auto sym = symbolTable.lookup(sv->getName());
+      if (auto f = fbInstanceOf(sv->getName()))
+        fb = *f;
+      if (sym.isAddress())
+        addr = sym.getValue();
+      else if (sym.isElement())
+        addr = mlirGenVariable(loc(callee->loc()), sv->getName());
+      else if (mlir::SymbolTable::lookupNearestSymbolFrom<DataBlockOp>(
+                   theModule, builder.getStringAttr(sv->getName())))
+        addr = mlirGen(bin->getLhs());
+      else
+        return std::nullopt;
+    } else {
+      addr = mlirGen(bin->getLhs());
+    }
+    if (!addr)
+      return std::nullopt;
+    if (fb.empty()) {
+      // global instance DB: the address element type is the IDB type
+      if (auto idb = addr.getType()
+                         .cast<AddressType>()
+                         .getElementType()
+                         .dyn_cast<InstanceDbType>())
+        fb = unquote(idb.getFbSymbol());
+    }
+    if (fb.empty()) {
+      auto it = byteViewTypes.find(addr);
+      if (it != byteViewTypes.end())
+        if (auto idb = it->second.dyn_cast<InstanceDbType>())
+          fb = unquote(idb.getFbSymbol());
+    }
+    if (fb.empty())
+      return std::nullopt;
+    std::string mname = fb + "." + rhs->getName().str();
+    for (auto &kv : functionResultTypes) {
+      if (kv.getKey().equals_insensitive(mname)) {
+        instAddr = addr;
+        return kv.getKey().str();
+      }
+    }
+    return std::nullopt;
+  }
+
   mlir::Value mlirGen(const FunctionCallAST *expr) {
     auto location = loc(expr->loc());
 
     // The function name is parsed as a variable
     auto callee = dyn_cast<SimpleVariableAST>(expr->getFunction());
     if (!callee) {
+      // `instance.method(...)` (IEC 61131-3 ed.3 METHOD call)
+      mlir::Value instAddr;
+      if (auto m = resolveMethodCallee(expr->getFunction(), instAddr))
+        return mlirGenFcCall(expr, *m, /*allowVoid=*/false, instAddr);
       emitError(location, "invalid callee in function call");
       return nullptr;
     }
@@ -3556,7 +4048,8 @@ private:
   }
 
   mlir::Value mlirGenFcCall(const FunctionCallAST *expr, StringRef callee,
-                            bool allowVoid = false) {
+                            bool allowVoid = false,
+                            mlir::Value selfAddr = nullptr) {
     auto location = loc(expr->loc());
     auto context = builder.getContext();
 
@@ -3810,6 +4303,14 @@ private:
       argNames = std::move(fullNames);
     }
 
+    // A METHOD call passes the instance-DB address as the first ($self)
+    // argument.
+    if (selfAddr) {
+      arguments.insert(arguments.begin(), selfAddr);
+      argNames.insert(argNames.begin(),
+                      mlir::StringAttr::get(context, "$self"));
+    }
+
     auto rtIt = functionResultTypes.find(callee);
     if (rtIt == functionResultTypes.end()) {
       // IEC conversion builtin (INT_TO_WORD, TIME_TO_DINT, ...)?
@@ -3983,7 +4484,14 @@ private:
           outBindings.push_back({elem, target, ty});
         }
     }
+    // The implicit EN input (IEC ed.3 6.6.2.2): captured here and used to
+    // gate the call below; ENO is stored after the call.
+    mlir::Value enVal;
     if (failed(mlirGenCallParameters(expr, [&] (StringRef name, mlir::Value value) {
+      if (name.equals_insensitive("EN")) {
+        enVal = value;
+        return mlir::success();
+      }
       auto elem = mlirGenElement(location, idbRef, name);
       if (!elem)
         return mlir::failure();
@@ -4034,14 +4542,84 @@ private:
       emitWarning(location) << "unknown FB '" << fb
                             << "' called as an empty stub";
     }
-    builder.create<CallFbOp>(location, unquote(fb), idbRef);
-    // Write back the `out => var` bindings: load the instance member, store
-    // it into the caller's variable.
-    for (auto &ob : outBindings) {
-      auto val = builder.create<LoadOp>(location, std::get<2>(ob), std::get<0>(ob));
-      builder.create<StoreOp>(location, std::get<1>(ob), val);
+    // The call plus the output write-backs, gated by EN when bound
+    // (IEC ed.3: with EN=FALSE the FB body is not executed).
+    auto emitCall = [&]() {
+      builder.create<CallFbOp>(location, unquote(fb), idbRef);
+      for (auto &ob : outBindings) {
+        auto val = builder.create<LoadOp>(location, std::get<2>(ob), std::get<0>(ob));
+        builder.create<StoreOp>(location, std::get<1>(ob), val);
+      }
+    };
+    if (enVal) {
+      auto cond = coerceToBool(location, enVal);
+      auto ifOp = builder.create<IfThenElseOp>(location, cond);
+      builder.createBlock(&ifOp.getThenBody());
+      emitCall();
+      createEndOp(location);
+      builder.createBlock(&ifOp.getElseBody());
+      createEndOp(location);
+      builder.setInsertionPointAfter(ifOp);
+    } else {
+      emitCall();
+    }
+    // ENO := EN (the body cannot fail); stored in a per-instance cell so a
+    // later `inst.ENO` read observes it.
+    {
+      auto eno = fbEnoCell(location, idbRef);
+      mlir::Value v = enVal ? coerceToBool(location, enVal)
+                            : builder.create<ConstantOp>(
+                                  location, getType(tok_bool),
+                                  builder.getIntegerAttr(builder.getI1Type(), 1));
+      builder.create<StoreOp>(location, eno, v);
     }
     return mlir::success();
+  }
+
+  /// Storage cell for the implicit ENO pin of an FB instance (keyed by the
+  /// instance address's defining op), initialized FALSE.
+  mlir::Value fbEnoCell(mlir::Location location, mlir::Value idbRef) {
+    // Stable per-instance key, resolved recursively through the address
+    // chain: a global DB by symbol name; a member access by the member name
+    // within its base; else the defining op.
+    std::function<std::string(mlir::Value)> keyOf = [&](mlir::Value v) {
+      std::string k;
+      if (auto *def = v.getDefiningOp()) {
+        if (auto gg = llvm::dyn_cast<GetGlobalOp>(def))
+          k = "db:" + gg.getName().str();
+        else if (auto gv = llvm::dyn_cast<GetVariableOp>(def))
+          k = keyOf(gv.getAddr()) + "." + gv.getSymName().str();
+        else if (auto ge = llvm::dyn_cast<GetElementOp>(def))
+          k = keyOf(ge.getAddr()) + "." + ge.getName().str();
+        else
+          k = "op:" + std::to_string((uintptr_t)def);
+      } else {
+        k = "arg:" + std::to_string((uintptr_t)v.getAsOpaquePointer());
+      }
+      return k;
+    };
+    std::string key = keyOf(idbRef);
+    auto it = enoCells.find(key);
+    if (it != enoCells.end())
+      return it->second;
+    auto boolTy = getType(tok_bool);
+    // Create the cell at the entry of the enclosing function so it dominates
+    // every use (call sites may be inside IF branches).
+    mlir::OpBuilder eb(builder);
+    if (auto *parent = builder.getInsertionBlock()->getParentOp()) {
+      if (auto fn = parent->getParentOfType<FunctionOp>())
+        eb.setInsertionPointToStart(&fn.getBody().front());
+      else if (auto fb = parent->getParentOfType<FunctionBlockOp>())
+        eb.setInsertionPointToStart(&fb.getBody().front());
+    }
+    auto cell = eb.create<TempVariableOp>(location, AddressType::get(boolTy),
+                                          eb.getStringAttr("ENO"));
+    eb.create<StoreOp>(
+        location, cell,
+        eb.create<ConstantOp>(location, boolTy,
+                              eb.getIntegerAttr(eb.getI1Type(), 0)));
+    enoCells[key] = cell;
+    return cell;
   }
 
   mlir::Type getType(Token token) {
@@ -4113,6 +4691,15 @@ private:
       return getType(tok_time);
     case ElementaryDataTypeAST::Type_TimeOfDay:
       return getType(tok_time_of_day);
+    // S5 TIMER / COUNTER variables are instances of the builtin TON / CTU —
+    // unless the project declares its own FB under that name (the soft
+    // keywords may also name user FBs, e.g. FUNCTION_BLOCK COUNTER).
+    case ElementaryDataTypeAST::Type_Timer:
+      return InstanceDbType::get(builder.getContext(),
+                                 fbNames.contains("TIMER") ? "TIMER" : "TON");
+    case ElementaryDataTypeAST::Type_Counter:
+      return InstanceDbType::get(builder.getContext(),
+                                 fbNames.contains("COUNTER") ? "COUNTER" : "CTU");
     // TODO: TBD more types
     default:
       emitError(loc(type->loc()))
@@ -4133,6 +4720,12 @@ private:
     if (auto *v = llvm::dyn_cast<SimpleVariableAST>(expr)) {
       auto sym = symbolTable.lookup(v->getName());
       if (!sym.isConst()) {
+        // enumerated value (CASE labels like `GREEN:`)?
+        auto it = enumConsts.find(llvm::StringRef(v->getName()).upper());
+        if (it != enumConsts.end()) {
+          value = it->second;
+          return mlir::success();
+        }
         // e.g. a TIA library constant like "FC_ID_CHECK_ARRAY" defined in a
         // global DB we do not have: warn and use a benign default
         emitWarning(loc(v->loc())) << "not a constant: " << v->getName()
@@ -4176,6 +4769,12 @@ private:
       auto constName = expr->getName();
       auto constSymbol = symbolTable.lookup(constName);
       if (!constSymbol.isConst()) {
+        // enumerated value (CASE labels like `GREEN:`)?
+        auto it = enumConsts.find(llvm::StringRef(constName).upper());
+        if (it != enumConsts.end()) {
+          value = (int)it->second;
+          return mlir::success();
+        }
         emitWarning(location) << "not a constant: " << constName
                               << ", assuming 1";
         value = 1;
@@ -4256,6 +4855,24 @@ private:
     return ArrayType::get(dims, charTy);
   }
 
+  /// Enumerated types are stored as INT (i16); the enumerated values are
+  /// registered as named constants (enumConsts, case-insensitive).
+  mlir::Type getType(const EnumDataTypeSpecAST *type) {
+    int64_t next = 0;
+    for (auto &v : type->getValues()) {
+      int64_t val = v.value.value_or(next);
+      next = val + 1;
+      enumConsts[llvm::StringRef(v.name).upper()] = val;
+    }
+    return getType(tok_int);
+  }
+
+  /// Subrange types use the storage of their base type; the range itself is
+  /// not enforced (out-of-range assignment is implementation-defined).
+  mlir::Type getType(const SubrangeDataTypeSpecAST *type) {
+    return getType(type->getBase());
+  }
+
   mlir::Type getType(const DataTypeSpecAST *type) {
     return TypeSwitch<const DataTypeSpecAST *, mlir::Type>(type)
         .Case<ElementaryDataTypeAST>([&](auto type) { return getType(type); })
@@ -4263,6 +4880,8 @@ private:
         .Case<ArrayDataTypeSpecAST>([&](auto type) { return getType(type); })
         .Case<StructDataTypeSpecAST>([&](auto type) { return getType(type); })
         .Case<UserDefinedTypeIdentifierAST>([&](auto type) { return getType(type); })
+        .Case<EnumDataTypeSpecAST>([&](auto type) { return getType(type); })
+        .Case<SubrangeDataTypeSpecAST>([&](auto type) { return getType(type); })
         .Default([&](auto type) {
           emitError(loc(type->loc()))
               << "MLIR codegen encountered an unhandled type kind '"

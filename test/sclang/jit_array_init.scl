@@ -1,0 +1,42 @@
+// RUN: sclang --opt --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// Array initializers: flat list, repetition factor n(v), 2-D flat literal,
+// nested literal for array-of-array, struct-element literals.
+// r = lst[1]+lst[2]+lst[3] + rep[0]+rep[3] + m[1,2] + a[1][2] + pts[2].x
+//   = 7+8+9 + 5+5 + 6 + 60 + 2 = 102 (pts[2].x = 2). Low byte at M[1].
+// CHECK: M:
+// CHECK: M[1]=102
+// CHECK: clock=0ms
+TYPE
+  ROW : ARRAY[0..2] OF INT;
+  POINT : STRUCT
+    x : INT;
+    y : INT;
+  END_STRUCT;
+END_TYPE
+function_block main
+var
+  lst : ARRAY[1..3] OF INT := [7, 8, 9];
+  rep : ARRAY[0..3] OF INT := [4(5)];
+  m : ARRAY[0..1, 0..2] OF INT := [1, 2, 3, 4, 5, 6];
+  a : ARRAY[0..1] OF ROW := [[10, 20, 30], [40, 50, 60]];
+  pts : ARRAY[1..3] OF POINT := [(x := 1, y := 10), (x := 2, y := 20), (x := 3, y := 30)];
+end_var
+var_output
+  r : INT;
+end_var
+begin
+  r := lst[1] + lst[2] + lst[3] + rep[0] + rep[3] + m[1, 2] + a[1][2] + pts[2].x;
+  %MW0 := r;
+end_function_block
+data_block inst
+  main
+end_data_block
+function OB1 : int
+begin
+  main."inst"();
+end_function
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

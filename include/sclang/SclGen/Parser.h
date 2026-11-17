@@ -61,6 +61,12 @@ public:
       if (!unit)
         return parseError<ModuleAST>("program unit", "on module level");
       units.push_back(std::move(unit));
+      // A TYPE block may declare several types; ParseUDType queues the
+      // additional ones here.
+      while (!pendingUnits.empty()) {
+        units.push_back(std::move(pendingUnits.front()));
+        pendingUnits.erase(pendingUnits.begin());
+      }
     }
 
     return std::make_unique<ModuleAST>(std::move(units));
@@ -68,6 +74,10 @@ public:
 
 private:
   Lexer &lexer;
+
+  /// Extra units produced while parsing one program unit (e.g. the 2nd..nth
+  /// type of a multi-declaration TYPE block), drained by ParseModule.
+  std::vector<std::unique_ptr<UnitAST>> pendingUnits;
 
   // Appendix B - Lexical Rules
   // MARK: B.1 Identifiers
@@ -85,7 +95,8 @@ private:
     case tok_counter:
     case tok_timer:
     case tok_ok:
-    case tok_en: {
+    case tok_en:
+    case tok_eno: {
       // NB: getIdentifier() asserts on non-identifier tokens; the lexer's
       // stringValue still holds the word for keyword tokens.
       std::string identifier(lexer.getStringValue());
@@ -244,6 +255,16 @@ private:
     auto attrs = ParseBlockAttributes();
     auto decls = ParseDeclarationSection();
 
+    // IEC 61131-3 ed.3 METHODs live between the declaration section and the
+    // FB body (or replace it).
+    std::vector<std::unique_ptr<MethodAST>> methods;
+    while (lexer.getCurToken() == tok_method) {
+      auto method = ParseMethod();
+      if (!method)
+        return nullptr;
+      methods.push_back(std::move(method));
+    }
+
     if (lexer.getCurToken() == tok_begin)
       lexer.consume(tok_begin);
     auto code = ParseCodeSection();
@@ -252,7 +273,7 @@ private:
 
     auto unit = std::make_unique<FunctionBlockAST>(
         std::move(identifier), std::move(loc), std::move(attrs),
-        std::move(decls), std::move(code));
+        std::move(decls), std::move(code), std::move(methods));
 
     if (lexer.getCurToken() != tok_end_function_block)
       return parseError<FunctionBlockAST>(tok_end_function_block,
@@ -260,6 +281,44 @@ private:
     lexer.consume(tok_end_function_block);
 
     return unit;
+  }
+
+  /// Parse a METHOD of a function block (IEC 61131-3 ed.3 6.6.3.5)
+  ///
+  /// Method ::= "METHOD" Identifier ":" Type Declaration Section
+  ///            [ "BEGIN" ] Code Section "END_METHOD"
+  std::unique_ptr<MethodAST> ParseMethod() {
+    auto loc = lexer.getLastLocation();
+    lexer.consume(tok_method);
+
+    auto identifier = ParseIdentifier();
+    if (identifier.empty())
+      return nullptr;
+    if (lexer.getCurToken() != tok_colon)
+      return parseError<MethodAST>(tok_colon, "for method return type");
+    lexer.consume(tok_colon);
+
+    auto type = ParseDataTypeSpec();
+    if (!type)
+      return nullptr;
+    auto attrs = ParseBlockAttributes();
+    auto decls = ParseDeclarationSection();
+    if (!decls)
+      return nullptr;
+
+    if (lexer.getCurToken() == tok_begin)
+      lexer.consume(tok_begin);
+    auto code = ParseCodeSection();
+    if (!code)
+      return parseError<MethodAST>("code block", "in method");
+
+    if (lexer.getCurToken() != tok_end_method)
+      return parseError<MethodAST>(tok_end_method, "to end method");
+    lexer.consume(tok_end_method);
+
+    return std::make_unique<MethodAST>(std::move(identifier), std::move(loc),
+                                       std::move(type), std::move(attrs),
+                                       std::move(decls), std::move(code));
   }
 
   /// Parse a Data Block
@@ -326,30 +385,46 @@ private:
     auto loc = lexer.getLastLocation();
     lexer.consume(tok_type);
 
-    auto identifier = ParseIdentifier();
-    if (identifier.empty())
-      return nullptr;
-    ParseBlockAttributes(); // TIA VERSION lines / braced attrs
-    // IEC 61131-3 ST writes `TYPE name : <type> END_TYPE`; TIA omits the
-    // colon (`TYPE "name" VERSION : 0.1 STRUCT ...`).
-    if (lexer.getCurToken() == tok_colon)
-      lexer.consume(tok_colon);
-    auto type = ParseDataTypeSpec(); // TODO: STRUCT
-    auto attrs = ParseBlockAttributes();
+    // IEC 61131-3 ed.3 allows several declarations in one TYPE block:
+    //   TYPE POINT : STRUCT ... END_STRUCT; RECT : STRUCT ... END_STRUCT;
+    //   END_TYPE
+    // TIA writes a single declaration, often without the colon:
+    //   TYPE "name" VERSION : 0.1 STRUCT ... END_STRUCT; END_TYPE
+    std::unique_ptr<UnitAST> first;
+    while (lexer.getCurToken() != tok_end_type &&
+           lexer.getCurToken() != tok_eof) {
+      auto dloc = lexer.getLastLocation();
+      auto identifier = ParseIdentifier();
+      if (identifier.empty())
+        return nullptr;
+      ParseBlockAttributes(); // TIA VERSION lines / braced attrs
+      // IEC 61131-3 ST writes `TYPE name : <type> END_TYPE`; TIA omits the
+      // colon (`TYPE "name" VERSION : 0.1 STRUCT ...`).
+      if (lexer.getCurToken() == tok_colon)
+        lexer.consume(tok_colon);
+      auto type = ParseDataTypeSpec();
+      if (!type)
+        return nullptr;
+      auto attrs = ParseBlockAttributes();
 
-    auto nodecls = NoDeclarationSection(loc);
-    auto block = std::make_unique<UserDefinedTypeAST>(
-        std::move(identifier), std::move(loc), std::move(attrs),
-        std::move(nodecls), std::move(type));
+      auto nodecls = NoDeclarationSection(dloc);
+      auto block = std::make_unique<UserDefinedTypeAST>(
+          std::move(identifier), std::move(dloc), std::move(attrs),
+          std::move(nodecls), std::move(type));
 
-    while (lexer.getCurToken() == tok_semicolon) // TIA writes END_STRUCT;
-      lexer.consume(tok_semicolon);
+      while (lexer.getCurToken() == tok_semicolon) // TIA writes END_STRUCT;
+        lexer.consume(tok_semicolon);
+      if (!first)
+        first = std::move(block);
+      else
+        pendingUnits.push_back(std::move(block));
+    }
     if (lexer.getCurToken() != tok_end_type)
       return parseError<UserDefinedTypeAST>(tok_end_type,
                                             "to end user defined type");
     lexer.consume(tok_end_type);
 
-    return block;
+    return first;
   }
 
   std::unique_ptr<AttributeAST> ParseAttributeValue(Token tok) {
@@ -830,6 +905,9 @@ private:
     case tok_identifier:
     case tok_symbol:
       return ParseUserDefinedDataType();
+    // enumerated type: `COLOR : (RED, GREEN, BLUE);`
+    case tok_parenthese_open:
+      return ParseEnumDataTypeSpec();
     // parameter types
     case tok_timer:
       elementaryType = ElementaryDataTypeAST::Type_Timer;
@@ -858,8 +936,73 @@ private:
     }
     lexer.getNextToken();
 
-    return std::make_unique<ElementaryDataTypeAST>(std::move(loc),
-                                                   elementaryType);
+    auto elementary =
+        std::make_unique<ElementaryDataTypeAST>(loc, elementaryType);
+    // IEC 61131-3 subrange: `SMALL : INT (5..10);` — the range is recorded,
+    // storage is the base type.
+    if (lexer.getCurToken() == tok_parenthese_open) {
+      lexer.consume(tok_parenthese_open);
+      auto min = ParseExpression();
+      if (!min)
+        return parseError<DataTypeSpecAST>("range start", "in subrange type");
+      if (lexer.getCurToken() != tok_range)
+        return parseError<DataTypeSpecAST>(tok_range, "in subrange type");
+      lexer.consume(tok_range);
+      auto max = ParseExpression();
+      if (!max)
+        return parseError<DataTypeSpecAST>("range end", "in subrange type");
+      if (lexer.getCurToken() != tok_parenthese_close)
+        return parseError<DataTypeSpecAST>(tok_parenthese_close,
+                                           "to end subrange type");
+      lexer.consume(tok_parenthese_close);
+      return std::make_unique<SubrangeDataTypeSpecAST>(
+          std::move(loc), std::move(elementary), std::move(min),
+          std::move(max));
+    }
+    return elementary;
+  }
+
+  /// Parse an enumerated data type specification
+  ///
+  /// Enumerated Type ::= "(" EnumValue { "," EnumValue } ")"
+  /// EnumValue ::= Identifier [ ":=" Integer ]
+  std::unique_ptr<EnumDataTypeSpecAST> ParseEnumDataTypeSpec() {
+    auto loc = lexer.getLastLocation();
+    lexer.consume(tok_parenthese_open);
+
+    std::vector<EnumDataTypeSpecAST::EnumValue> values;
+    int64_t next = 0;
+    bool another = lexer.getCurToken() != tok_parenthese_close;
+    while (another) {
+      auto name = ParseIdentifier();
+      if (name.empty())
+        return parseError<EnumDataTypeSpecAST>("enumerated value",
+                                               "in enum type");
+      std::optional<int64_t> val;
+      if (lexer.getCurToken() == tok_assignment) {
+        lexer.consume(tok_assignment);
+        auto v = ParseExpression();
+        if (!v || !llvm::isa<IntegerConstantAST>(v))
+          return parseError<EnumDataTypeSpecAST>("integer constant",
+                                                 "for enum value");
+        int64_t iv = llvm::cast<IntegerConstantAST>(v.get())->getValue();
+        val = iv;
+        next = iv + 1;
+      } else {
+        val = next++;
+      }
+      values.push_back({std::move(name), val});
+      if (lexer.getCurToken() == tok_comma)
+        lexer.consume(tok_comma);
+      else
+        another = false;
+    }
+    if (lexer.getCurToken() != tok_parenthese_close)
+      return parseError<EnumDataTypeSpecAST>(tok_parenthese_close,
+                                             "to end enum type");
+    lexer.consume(tok_parenthese_close);
+    return std::make_unique<EnumDataTypeSpecAST>(std::move(loc),
+                                                 std::move(values));
   }
 
   // MARK: C.3 Data Types in SCL
@@ -1047,6 +1190,7 @@ private:
     case tok_end_function_block:
     case tok_end_if:
     case tok_end_label:
+    case tok_end_method:
     case tok_end_type:
     case tok_end_organization_block:
     case tok_end_repeat:
@@ -1229,6 +1373,7 @@ private:
     case tok_timer:
     case tok_ok:
     case tok_en:
+    case tok_eno:
       return ParseIdentifierExpression();
     case tok_symbol:
       return ParseSymbolExpression();
@@ -1245,13 +1390,49 @@ private:
       return ParseStringLiteralExpression();
     case tok_time_literal:
       return ParseTimeLiteralExpression();
+    case tok_sbracket_open:
+      return ParseArrayLiteralExpression();
     }
   }
 
-  std::unique_ptr<ExpressionAST> ParseParenExpression() {
+  /// IEC 61131-3 array initialization value: `[e1, e2, ...]`, with nested
+  /// lists for multi-dimensional arrays, `n(v)` repetition factors and
+  /// `(member := v, ...)` structure element literals. Always produces an
+  /// ExpressionListAST so codegen can distinguish `[x]` from a bare `x`.
+  std::unique_ptr<ExpressionAST> ParseArrayLiteralExpression() {
+    auto loc = lexer.getLastLocation();
+    lexer.consume(tok_sbracket_open);
+
+    std::vector<std::unique_ptr<ExpressionAST>> elems;
+    bool another = lexer.getCurToken() != tok_sbracket_close;
+    while (another) {
+      // A parenthesized element may be a structure literal
+      // `(x := 1, y := 10)`: parse with list precedence so the comma
+      // separates members.
+      auto e = lexer.getCurToken() == tok_parenthese_open
+                   ? ParseParenExpression(pred_list)
+                   : ParseExpression();
+      if (!e)
+        return parseError<ExpressionAST>("array element",
+                                         "in array literal");
+      elems.push_back(std::move(e));
+      if (lexer.getCurToken() == tok_comma)
+        lexer.consume(tok_comma);
+      else
+        another = false;
+    }
+    if (lexer.getCurToken() != tok_sbracket_close)
+      return parseError<ExpressionAST>(tok_sbracket_close,
+                                       "to end array literal");
+    lexer.consume(tok_sbracket_close);
+    return std::make_unique<ExpressionListAST>(std::move(loc),
+                                               std::move(elems));
+  }
+
+  std::unique_ptr<ExpressionAST> ParseParenExpression(int pred = pred_default) {
     auto loc = lexer.getLastLocation();
     lexer.consume(tok_parenthese_open);
-    auto expr = ParseExpression();
+    auto expr = ParseExpression(pred);
     if (!expr)
       return nullptr;
 
@@ -1289,6 +1470,7 @@ private:
     case tok_timer:
     case tok_ok:
     case tok_en:
+    case tok_eno:
       variable = std::string(lexer.getStringValue());
       lexer.consume(lexer.getCurToken());
       break;
@@ -1686,6 +1868,7 @@ private:
 
     std::vector<std::unique_ptr<ExpressionAST>> list;
     list.reserve(2);
+    auto loc = first->loc(); // NB: before the move below
     list.push_back(std::move(first));
 
     while (lexer.getCurToken() == tok_comma) {
@@ -1697,7 +1880,7 @@ private:
 
       list.push_back(std::move(next));
     }
-    return std::make_unique<ExpressionListAST>(first->loc(), std::move(list));
+    return std::make_unique<ExpressionListAST>(std::move(loc), std::move(list));
   }
 
   std::unique_ptr<ExpressionAST>

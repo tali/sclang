@@ -173,7 +173,11 @@ static FbLayoutCache computeFbLayouts(ModuleOp module) {
         // Capture a constant initializer as a bit pattern; it is baked into
         // the instance DB global's initializer (cold start), NOT emitted in
         // the FB body (which would re-initialize on every call).
-        if (Value init = var.getInit()) {
+        // Array/struct literals arrive pre-folded as scl.init_bits (see
+        // MLIRGen foldConstCompositeAST).
+        if (auto ia = var->getAttrOfType<IntegerAttr>("scl.init_bits")) {
+          member.initBits = ia.getValue();
+        } else if (Value init = var.getInit()) {
           unsigned width = 64;
           if (auto it = var.getType().dyn_cast<scl::IntegerType>())
             width = it.getWidth();
@@ -1085,12 +1089,25 @@ struct TempVariableOpLowering
             op, memref, alloca, zero, ValueRange{n}, ValueRange{one});
         return success();
       }
-      // i8 address: rank-1 byte view holding a single byte.
-      auto plain = MemRefType::get({1}, memref.getElementType());
+      // i8 address: rank-1 byte view holding a single byte. An instance-DB
+      // address allocates the FB's whole instance buffer instead.
+      int64_t allocSize = 1;
+      if (auto idbTy = op.getResult().getType()
+                           .cast<scl::AddressType>()
+                           .getElementType()
+                           .dyn_cast<scl::InstanceDbType>()) {
+        auto &layouts =
+            static_cast<const SclTypeConverter *>(typeConverter)->fbLayouts;
+        auto it = layouts.find(idbTy.getFbSymbol());
+        if (it != layouts.end())
+          allocSize = it->second.size;
+      }
+      auto plain = MemRefType::get({allocSize}, memref.getElementType());
       auto alloca = rewriter.create<memref::AllocaOp>(loc, plain);
       auto one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+      auto n = rewriter.create<arith::ConstantIndexOp>(loc, allocSize);
       rewriter.replaceOpWithNewOp<memref::ReinterpretCastOp>(
-          op, memref, alloca, zero, ValueRange{one}, ValueRange{one});
+          op, memref, alloca, zero, ValueRange{n}, ValueRange{one});
       return success();
     }
     auto plain = MemRefType::get({}, memref.getElementType());
@@ -1220,10 +1237,19 @@ struct DataBlockOpLowering : public OpConversionPattern<scl::DataBlockOp> {
             if (m.initBits) {
               int64_t msize = byteSize(m.type, layouts);
               // big-endian (ADR 001): byte i of the member window holds
-              // bits 8*(msize-1-i).. of the value.
-              for (int64_t i = 0; i < msize; ++i)
-                buf[baseOff + m.offset + i] =
-                    (uint8_t)(m.initBits->getZExtValue() >> (8 * (msize - 1 - i)));
+              // bits 8*(msize-1-i).. of the value. Extract byte-wise from
+              // the raw words (the pattern may be wider than 64 bits for
+              // array/struct initializers).
+              auto words = m.initBits->getRawData();
+              unsigned nwords = m.initBits->getNumWords();
+              for (int64_t i = 0; i < msize; ++i) {
+                unsigned bitPos = (unsigned)(8 * (msize - 1 - i));
+                unsigned w = bitPos / 64, off = bitPos % 64;
+                uint64_t v = w < nwords ? (words[w] >> off) : 0;
+                if (off > 56 && w + 1 < nwords)
+                  v |= words[w + 1] << (64 - off);
+                buf[baseOff + m.offset + i] = (uint8_t)(v & 0xFF);
+              }
             } else if (m.initStr) {
               // String member (flat char array): store the literal chars,
               // zero-padded (the buffer starts zeroed).

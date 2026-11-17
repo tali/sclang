@@ -174,6 +174,9 @@ enum Token : int {
   tok_usint = -111,
   tok_uint = -112,
   tok_udint = -113,
+  // IEC 61131-3 ed.3 METHODs of a function block
+  tok_method = -114,
+  tok_end_method = -115,
 
   // errors
   tok_error_symbol = -901,
@@ -368,10 +371,6 @@ private:
         lastChar = Token(getNextChar());
       return tok_linecomment;
     }
-    // ENO (error-no-output flag): always false in the simulator.
-    if (lower == "eno")
-      return tok_false;
-
     if (lower == "and")
       return tok_and;
     if (lower == "any")
@@ -478,6 +477,10 @@ private:
       return tok_int;
     if (lower == "label")
       return tok_label;
+    if (lower == "method")
+      return tok_method;
+    if (lower == "end_method")
+      return tok_end_method;
     if (lower == "mod")
       return tok_mod;
     if (lower == "nil")

@@ -325,6 +325,8 @@ public:
     DataType_Array,
     DataType_Struct,
     DataType_UDT,
+    DataType_Enum,
+    DataType_Subrange,
     // Type_Parameter, // uses Type_Elementary
   };
 
@@ -480,6 +482,55 @@ public:
   /// LLVM style RTTI
   static bool classof(const DataTypeSpecAST *d) {
     return d->getKind() == DataType_Struct;
+  }
+};
+
+/// IEC 61131-3 enumerated type: `TYPE COLOR : (RED, GREEN := 5, BLUE); END_TYPE`.
+/// Values default to 0,1,2,... unless `name := value` is given.
+class EnumDataTypeSpecAST : public DataTypeSpecAST {
+public:
+  struct EnumValue {
+    std::string name;
+    std::optional<int64_t> value;
+  };
+
+private:
+  std::vector<EnumValue> values;
+
+public:
+  EnumDataTypeSpecAST(Location loc, std::vector<EnumValue> values)
+      : DataTypeSpecAST(std::move(loc), DataType_Enum),
+        values(std::move(values)) {}
+
+  llvm::ArrayRef<EnumValue> getValues() const { return values; }
+
+  static bool classof(const DataTypeSpecAST *d) {
+    return d->getKind() == DataType_Enum;
+  }
+};
+
+/// IEC 61131-3 subrange type: `SMALL : INT (5..10);`. The range is recorded
+/// for diagnostics; storage is the base type (out-of-range stores are
+/// implementation-defined and stored unchecked).
+class SubrangeDataTypeSpecAST : public DataTypeSpecAST {
+  std::unique_ptr<DataTypeSpecAST> base;
+  std::unique_ptr<ExpressionAST> min;
+  std::unique_ptr<ExpressionAST> max;
+
+public:
+  SubrangeDataTypeSpecAST(Location loc,
+                          std::unique_ptr<DataTypeSpecAST> base,
+                          std::unique_ptr<ExpressionAST> min,
+                          std::unique_ptr<ExpressionAST> max)
+      : DataTypeSpecAST(std::move(loc), DataType_Subrange),
+        base(std::move(base)), min(std::move(min)), max(std::move(max)) {}
+
+  const DataTypeSpecAST *getBase() const { return base.get(); }
+  const ExpressionAST *getMin() const { return min.get(); }
+  const ExpressionAST *getMax() const { return max.get(); }
+
+  static bool classof(const DataTypeSpecAST *d) {
+    return d->getKind() == DataType_Subrange;
   }
 };
 
@@ -1097,6 +1148,7 @@ public:
     Unit_FunctionBlock,
     Unit_DataBlock,
     Unit_UserDefinedDataType,
+    Unit_Method,
   };
 
   UnitAST(UnitASTKind kind, const std::string &identifier, Location location,
@@ -1171,19 +1223,51 @@ public:
   }
 };
 
+/// IEC 61131-3 ed.3 METHOD of a function block: like a function, but with
+/// access to the instance's variables through THIS/$self; called as
+/// `instance.method(...)`. Generated as a function named "<FB>.<METHOD>"
+/// whose first parameter is the instance-DB address.
+class MethodAST : public UnitAST {
+  std::unique_ptr<DataTypeSpecAST> type;
+  std::unique_ptr<CodeSectionAST> code;
+
+public:
+  MethodAST(const std::string &identifier, Location loc,
+            std::unique_ptr<DataTypeSpecAST> type,
+            std::vector<std::unique_ptr<AttributeAST>> attrs,
+            std::unique_ptr<DeclarationSectionAST> declarations,
+            std::unique_ptr<CodeSectionAST> code)
+      : UnitAST(Unit_Method, identifier, std::move(loc), std::move(attrs),
+                std::move(declarations)),
+        type(std::move(type)), code(std::move(code)) {}
+
+  const DataTypeSpecAST *getType() const { return type.get(); }
+  const CodeSectionAST *getCode() const { return code.get(); }
+
+  /// LLVM style RTTI
+  static bool classof(const UnitAST *u) {
+    return u->getKind() == Unit_Method;
+  }
+};
+
 class FunctionBlockAST : public UnitAST {
   std::unique_ptr<CodeSectionAST> code;
+  std::vector<std::unique_ptr<MethodAST>> methods;
 
 public:
   FunctionBlockAST(const std::string &identifier, Location loc,
                    std::vector<std::unique_ptr<AttributeAST>> attrs,
                    std::unique_ptr<DeclarationSectionAST> declarations,
-                   std::unique_ptr<CodeSectionAST> code)
+                   std::unique_ptr<CodeSectionAST> code,
+                   std::vector<std::unique_ptr<MethodAST>> methods = {})
       : UnitAST(Unit_FunctionBlock, identifier, loc, std::move(attrs),
                 std::move(declarations)),
-        code(std::move(code)) {}
+        code(std::move(code)), methods(std::move(methods)) {}
 
   const CodeSectionAST *getCode() const { return code.get(); }
+  llvm::ArrayRef<std::unique_ptr<MethodAST>> getMethods() const {
+    return methods;
+  }
 
   /// LLVM style RTTI
   static bool classof(const UnitAST *u) {

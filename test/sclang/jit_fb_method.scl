@@ -1,0 +1,39 @@
+// RUN: sclang --opt --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// IEC ed.3 METHOD: BUMP(5), BUMP(3) -> cv=8; CLEAR() -> cv=0; BUMP(1) -> cv=1.
+// %MW0 low byte = 1.
+// CHECK: M:
+// CHECK: M[1]=1
+// CHECK: clock=0ms
+function_block COUNTER
+var_output
+  cv : INT;
+end_var
+method BUMP : INT
+var_input
+  n : INT;
+end_var
+  cv := cv + n;
+  BUMP := cv;
+end_method
+method CLEAR : BOOL
+  cv := 0;
+  CLEAR := TRUE;
+end_method
+end_function_block
+function OB1 : int
+var_temp
+  c : COUNTER;
+  r : INT;
+end_var
+begin
+  r := c.BUMP(5);
+  r := c.BUMP(3);
+  r := c.CLEAR();
+  r := c.BUMP(1);
+  %MW0 := c.cv;
+end_function
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

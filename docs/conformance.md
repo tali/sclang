@@ -140,7 +140,7 @@ oracle-verified against awlsim above). Tests using constructs outside the
 supported subset (CONFIGURATION, LREAL, STRING/array/struct outputs, ...) are
 counted as "unsupported", not failures.
 
-Current: **62/75 pass (83%), 17 unsupported** (74 traces are `status:
+Current: **70/75 pass (93%), 17 unsupported** (74 traces are `status:
 conformant`, 18 `implementation-defined`). Builtin standard FBs (TON/TOF/TP,
 CTU/CTD/CTUD, R_TRIG/F_TRIG/SR/RS) are implemented: fixed instance layouts
 (forced in the lowering's FbLayoutCache, mirrored by scl_rt_timer_fb /
@@ -149,9 +149,11 @@ access via scl.getelement's fb attr. FC calling convention is complete:
 by-address VAR_IN_OUT/VAR_OUTPUT params, declared-order argument reordering
 with default fill, copy-in/copy-out write-backs for arbitrary lvalue targets
 (incl. `out => "DB".member.path`), single evaluation of argument expressions.
-Open clusters: array literals `[...]`, enum/subrange types, DATE/TOD/DT
-arithmetic, FUNCTION VAR retention, FB EN/ENO, evaluation order and
-short-circuit counting in undefined-behavior traces.
+Open clusters: DATE/TOD/DT arithmetic (literal encodings/units),
+FUNCTION VAR retention across calls, live-PT timer semantics
+(timer_pt_zero, ton_pt_change), FOR bound re-evaluation
+(for_bound_modified), evaluation order / short-circuit counting and
+division-by-zero sign in undefined-behavior traces.
 
 ## Remaining failures and known approximations
 

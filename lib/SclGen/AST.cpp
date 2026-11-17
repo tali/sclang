@@ -75,6 +75,9 @@ private:
   void dump(const ComponentDeclarationAST *node);
   void dump(const StructDataTypeSpecAST *node);
   void dump(const UserDefinedTypeIdentifierAST *node);
+  void dump(const EnumDataTypeSpecAST *node);
+  void dump(const SubrangeDataTypeSpecAST *node);
+  void dump(const MethodAST *node);
   // Code Section
   void dump(const CodeSectionAST *node);
   void dump(const InstructionAST *node);
@@ -151,6 +154,7 @@ void ASTDumper::dump(const UnitAST *unit) {
   dispatch(FunctionBlockAST);
   dispatch(DataBlockAST);
   dispatch(UserDefinedTypeAST);
+  dispatch(MethodAST);
 #undef dispatch
   // No match, fallback to a generic message
   INDENT();
@@ -198,6 +202,17 @@ void ASTDumper::dump(const FunctionBlockAST *unit) {
   outs << "FunctionBlock " << unit->getIdentifier() << "\n";
   dump(unit->getAttributes());
   dump(unit->getDeclarations());
+  dump(unit->getCode());
+  for (auto &m : unit->getMethods())
+    dump(m.get());
+}
+
+void ASTDumper::dump(const MethodAST *unit) {
+  INDENT();
+  outs << "Method " << unit->getIdentifier() << "\n";
+  dump(unit->getAttributes());
+  dump(unit->getDeclarations());
+  dump(unit->getType());
   dump(unit->getCode());
 }
 
@@ -318,6 +333,8 @@ void ASTDumper::dump(const DataTypeSpecAST *dataType) {
   dispatch(ArrayDataTypeSpecAST);
   dispatch(StructDataTypeSpecAST);
   dispatch(UserDefinedTypeIdentifierAST);
+  dispatch(EnumDataTypeSpecAST);
+  dispatch(SubrangeDataTypeSpecAST);
 #undef dispatch
   // No match, fallback to a generic message
   INDENT();
@@ -436,6 +453,26 @@ void ASTDumper::dump(const StructDataTypeSpecAST *node) {
 void ASTDumper::dump(const UserDefinedTypeIdentifierAST *node) {
   INDENT();
   outs << "UserDefinedTypeIdentifier " << node->getName() << "\n";
+}
+
+void ASTDumper::dump(const EnumDataTypeSpecAST *node) {
+  INDENT();
+  outs << "EnumDataTypeSpec\n";
+  for (auto &v : node->getValues()) {
+    INDENT();
+    outs << v.name;
+    if (v.value)
+      outs << " := " << *v.value;
+    outs << "\n";
+  }
+}
+
+void ASTDumper::dump(const SubrangeDataTypeSpecAST *node) {
+  INDENT();
+  outs << "SubrangeDataTypeSpec\n";
+  dump(node->getBase());
+  dump(node->getMin());
+  dump(node->getMax());
 }
 
 // MARK: C.3

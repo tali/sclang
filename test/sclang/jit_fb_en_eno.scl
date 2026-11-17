@@ -1,0 +1,51 @@
+// RUN: sclang --opt --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// EN/ENO: with EN=FALSE the body is skipped and ENO=FALSE; with EN=TRUE the
+// body runs and ENO=TRUE. total accumulates only while enabled; r = total
+// + done*100 with run_it=FALSE -> total stays 5, done=0 -> r=5.
+// CHECK: M:
+// CHECK: M[1]=5
+// CHECK: clock=0ms
+function_block COUNT
+var_input
+  inc : INT;
+end_var
+var_output
+  total : INT;
+end_var
+  total := total + inc;
+end_function_block
+function_block main
+var_input
+  run_it : BOOL;
+  inc : INT;
+end_var
+var_output
+  r : INT;
+end_var
+var
+  c : COUNT;
+end_var
+begin
+  c(EN := TRUE, inc := 5);
+  c(EN := run_it, inc := 100);
+  IF c.ENO THEN
+    r := c.total + 100;
+  ELSE
+    r := c.total;
+  END_IF;
+  %MW0 := r;
+end_function_block
+data_block inst
+  main
+end_data_block
+function OB1 : int
+begin
+  "inst".run_it := FALSE;
+  "inst".inc := 0;
+  main."inst"();
+end_function
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

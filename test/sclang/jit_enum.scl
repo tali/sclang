@@ -1,0 +1,55 @@
+// RUN: sclang --opt --emit=jit --dump-areas %s 2>&1 | FileCheck %s
+// CHECK-NOT: failed
+// Enum type: values as constants, assignment, comparison, CASE on enum.
+// r = code + is_green*10 + same*100 with pick=1 (GREEN), c starts RED=0:
+// CASE pick -> c=GREEN=1; CASE c -> code=2; is_green = (1==1)=1; same=(1==0)=0
+// r = 2 + 10 + 100 = 112 (c=GREEN differs from prev=RED). Low byte at M[1].
+// CHECK: M:
+// CHECK: M[1]=112
+// CHECK: clock=0ms
+TYPE
+  COLOR : (RED, GREEN, BLUE);
+END_TYPE
+function_block main
+var_input
+  pick : INT;
+end_var
+var_output
+  r : INT;
+end_var
+var
+  c : COLOR;
+  prev : COLOR;
+end_var
+begin
+  prev := c;
+  CASE pick OF
+    0: c := RED;
+    1: c := GREEN;
+    2: c := BLUE;
+  END_CASE;
+  CASE c OF
+    RED:   r := 1;
+    GREEN: r := 2;
+    BLUE:  r := 3;
+  END_CASE;
+  IF c = GREEN THEN
+    r := r + 10;
+  END_IF;
+  IF c <> prev THEN
+    r := r + 100;
+  END_IF;
+  %MW0 := r;
+end_function_block
+data_block inst
+  main
+end_data_block
+function OB1 : int
+begin
+  "inst".pick := 1;
+  main."inst"();
+end_function
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

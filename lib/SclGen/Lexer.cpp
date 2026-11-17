@@ -187,6 +187,10 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &s, Token token) {
     return s << "VAR_OUTPUT";
   case tok_var_temp:
     return s << "VAR_TEMP";
+  case tok_method:
+    return s << "METHOD";
+  case tok_end_method:
+    return s << "END_METHOD";
   case tok_while:
     return s << "WHILE";
   case tok_word:

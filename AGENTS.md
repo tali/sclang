@@ -152,7 +152,21 @@ has no `\b` — use python3 for regex edits.
   compares per-scan outputs (PROGRAM rewritten to FB + instance DB + OB1
   wrapper; driver flags --scan-io/--scan-inputs feed M-area slots per scan,
   see test/sclang/jit_scan_io.scl; --cross diffs SCL->JIT vs SCL->AWL->JIT).
-  Current: 62/75 pass (83%), 17 unsupported (CONFIGURATION/LREAL/STRING/...).
+  Current: 70/75 pass (93%), 17 unsupported (CONFIGURATION/LREAL/STRING/...).
+  Frontend additions (committed): enum types (`TYPE C : (RED, GREEN);` ->
+  INT storage + named constants resolved in codegen incl. CASE labels),
+  subrange types (`INT (5..10)` -> base type, unchecked), multi-declaration
+  TYPE blocks, array literals `[...]` incl. `n(v)` repetition, nested/2-D and
+  struct-element `(x := 1, ...)` literals (FB members folded to a big-endian
+  `scl.init_bits` cold-start attr consumed by the lowering's byte-exact
+  baking; temp/local vars get per-element stores), IEC ed.3 METHODs
+  (`instance.method(...)` -> FunctionOp `<FB>.<METHOD>` with $self first
+  arg), implicit FB EN/ENO (EN gates the call, ENO stored in a per-instance
+  cell hoisted to the function entry so `inst.ENO` / bare `ENO` in an FB
+  read it back; outside FBs ENO reads FALSE as before). ENO is no longer
+  lexed as a false literal. TIMER/COUNTER map to builtin TON/CTU unless the
+  project declares its own FB under that name. bool<->int assignment now
+  converts (zext/trunc). sclang-gen prints diagnostics (registered handler).
   FC calling convention (committed): VAR_IN_OUT/VAR_OUTPUT of FCs are
   by-address args; call sites reorder args into declared order, fill omitted
   inputs from declared defaults (zero if none), stage by-ref params through
