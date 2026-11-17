@@ -80,6 +80,7 @@ struct SimState {
   struct TimerFbState {
     bool prevIn = false;
     bool running = false;
+    bool finished = false; // TOF: PT expired while IN = FALSE (ET holds PT)
     uint64_t startMs = 0;
   };
   std::map<uint64_t, TimerFbState> timerFbs;
@@ -883,6 +884,13 @@ void scl_rt_counter_op(uint32_t c, uint8_t op, uint64_t value, uint8_t in) {
 // PT @ bytes 4..7 (i32 preset ms), Q @ byte 8 (i8), ET @ bytes 12..15 (i32 ms).
 static uint8_t fbReadByte(uint8_t *p, uint64_t off) { return p[off]; }
 static void fbWriteByte(uint8_t *p, uint64_t off, uint8_t v) { p[off] = v; }
+static int16_t fbReadI16(uint8_t *p, uint64_t off) {
+  return (int16_t)((uint16_t)p[off] << 8 | (uint16_t)p[off + 1]);
+}
+static void fbWriteI16(uint8_t *p, uint64_t off, int16_t v) {
+  p[off] = (uint8_t)((uint16_t)v >> 8);
+  p[off + 1] = (uint8_t)(uint16_t)v;
+}
 static int32_t fbReadI32(uint8_t *p, uint64_t off) {
   return (int32_t)((uint32_t)p[off] << 24 | (uint32_t)p[off + 1] << 16 |
                    (uint32_t)p[off + 2] << 8 | (uint32_t)p[off + 3]);
@@ -927,32 +935,142 @@ void scl_rt_timer_fb(uint8_t mode, uint64_t idbPtr) {
     q = st.running && elapsed >= (uint64_t)pt;
     et = st.running ? (int32_t)std::min<uint64_t>(elapsed, (uint64_t)pt) : 0;
     break;
-  case 1: // TOF: off-delay
-    if (!in && st.prevIn) {
-      st.running = true;
-      st.startMs = now;
-      elapsed = 0;
-    }
-    if (in)
+  case 1: // TOF: off-delay (IEC ed.3 fig. 17 c): Q follows IN up at once;
+    // on the falling edge of IN timing starts; Q stays TRUE until elapsed
+    // reaches PT, then falls and ET holds PT while IN stays FALSE.
+    if (in) {
       st.running = false;
-    q = st.running && elapsed < (uint64_t)pt;
-    et = st.running ? (int32_t)std::min<uint64_t>(elapsed, (uint64_t)pt) : 0;
+      st.finished = false;
+      q = true;
+      et = 0;
+    } else {
+      if (st.prevIn) { // falling edge
+        st.running = true;
+        st.startMs = now;
+        st.finished = false;
+        elapsed = 0;
+      }
+      if (st.running && elapsed >= (uint64_t)pt) {
+        st.running = false;
+        st.finished = true;
+      }
+      q = st.running;
+      et = st.running ? (int32_t)std::min<uint64_t>(elapsed, (uint64_t)pt)
+                      : (st.finished ? pt : 0);
+    }
     break;
-  default: // TP: pulse
-    if (in && !st.prevIn) {
+  default: // TP: pulse (IEC ed.3 fig. 17 a): on the rising edge of IN a
+    // pulse of length PT starts (Q = TRUE, ET counts up regardless of IN);
+    // after PT, Q = FALSE and ET holds PT while IN stays TRUE, else 0.
+    // A rising edge of IN during a running pulse is ignored (IEC fig. 17 a).
+    if (in && !st.prevIn && !st.running) {
       st.running = true;
       st.startMs = now;
+      st.finished = false;
       elapsed = 0;
     }
-    if (st.running && elapsed >= (uint64_t)pt)
+    if (st.running && elapsed >= (uint64_t)pt) {
       st.running = false;
+      st.finished = true;
+    }
     q = st.running && elapsed < (uint64_t)pt;
-    et = in && st.running ? (int32_t)std::min<uint64_t>(elapsed, (uint64_t)pt) : 0;
+    et = st.running ? (int32_t)std::min<uint64_t>(elapsed, (uint64_t)pt)
+                    : (st.finished && in ? pt : 0);
     break;
   }
   st.prevIn = in;
   fbWriteByte(p, 8, q ? 1 : 0);
   fbWriteI32(p, 12, et);
+}
+
+// Builtin counter FBs CTU/CTD/CTUD (awlsim system_sfb_0/1/2 semantics, but
+// with the SCL builtin layout: bool members occupy a full byte, ints are
+// big-endian i16). See Runtime.h for the layouts.
+void scl_rt_counter_fb(uint8_t mode, uint64_t idbPtr) {
+  auto &s = state();
+  if (s.vtable && s.vtable->counter_fb) {
+    s.vtable->counter_fb(mode, idbPtr);
+    return;
+  }
+  auto *p = reinterpret_cast<uint8_t *>(idbPtr);
+  if (mode == 0) { // CTU: CU @0, R @1, PV @2, Q @4, CV @6, CU_OLD @8
+    bool cu = fbReadByte(p, 0) != 0, r = fbReadByte(p, 1) != 0;
+    bool cuo = fbReadByte(p, 8) != 0;
+    fbWriteByte(p, 8, cu ? 1 : 0);
+    int cv = fbReadI16(p, 6);
+    int pv = fbReadI16(p, 2);
+    if (r)
+      cv = 0;
+    else if (cu && !cuo && cv < 32767)
+      cv++;
+    fbWriteI16(p, 6, (int16_t)cv);
+    fbWriteByte(p, 4, cv >= pv ? 1 : 0);
+  } else if (mode == 1) { // CTD: CD @0, LD @1, PV @2, Q @4, CV @6, CD_OLD @8
+    bool cd = fbReadByte(p, 0) != 0, ld = fbReadByte(p, 1) != 0;
+    bool cdo = fbReadByte(p, 8) != 0;
+    fbWriteByte(p, 8, cd ? 1 : 0);
+    int cv = fbReadI16(p, 6);
+    int pv = fbReadI16(p, 2);
+    if (ld)
+      cv = pv; // LOAD is level-triggered (awlsim sfb_1)
+    else if (cd && !cdo && cv > -32768)
+      cv--;
+    fbWriteI16(p, 6, (int16_t)cv);
+    fbWriteByte(p, 4, cv <= 0 ? 1 : 0);
+  } else { // CTUD: CU @0, CD @1, R @2, LD @3, PV @4, QU @6, QD @7, CV @8
+    bool cu = fbReadByte(p, 0) != 0, cd = fbReadByte(p, 1) != 0;
+    bool r = fbReadByte(p, 2) != 0, ld = fbReadByte(p, 3) != 0;
+    bool cuo = fbReadByte(p, 10) != 0, cdo = fbReadByte(p, 11) != 0;
+    bool eu = cu && !cuo, ed = cd && !cdo;
+    fbWriteByte(p, 10, cu ? 1 : 0);
+    fbWriteByte(p, 11, cd ? 1 : 0);
+    int cv = fbReadI16(p, 8);
+    int pv = fbReadI16(p, 4);
+    if (r)
+      cv = 0;
+    else if (ld)
+      cv = pv;
+    else if (eu && !ed && cv < 32767)
+      cv++;
+    else if (ed && !eu && cv > -32768)
+      cv--;
+    fbWriteI16(p, 8, (int16_t)cv);
+    fbWriteByte(p, 6, cv >= pv ? 1 : 0);
+    fbWriteByte(p, 7, cv <= 0 ? 1 : 0);
+  }
+}
+
+// Builtin edge/memory FBs R_TRIG/F_TRIG/SR/RS (IEC 61131-3 ed.3 table 30).
+void scl_rt_edge_fb(uint8_t mode, uint64_t idbPtr) {
+  auto &s = state();
+  if (s.vtable && s.vtable->edge_fb) {
+    s.vtable->edge_fb(mode, idbPtr);
+    return;
+  }
+  auto *p = reinterpret_cast<uint8_t *>(idbPtr);
+  if (mode <= 1) { // R_TRIG / F_TRIG: CLK @0, Q @1, CLK_OLD @2
+    bool clk = fbReadByte(p, 0) != 0;
+    bool old = fbReadByte(p, 2) != 0;
+    bool q = mode == 0 ? (clk && !old) : (!clk && old);
+    fbWriteByte(p, 2, clk ? 1 : 0);
+    fbWriteByte(p, 1, q ? 1 : 0);
+  } else if (mode == 2) { // SR: S @0, R @1, Q @2 (S dominates)
+    bool sv = fbReadByte(p, 0) != 0, rv = fbReadByte(p, 1) != 0;
+    bool q = fbReadByte(p, 2) != 0;
+    if (sv)
+      q = true;
+    else if (rv)
+      q = false;
+    fbWriteByte(p, 2, q ? 1 : 0);
+  } else { // RS: R @0, S @1, Q @2 (R dominates)
+    bool rv = fbReadByte(p, 0) != 0, sv = fbReadByte(p, 1) != 0;
+    bool q = fbReadByte(p, 2) != 0;
+    if (rv)
+      q = false;
+    else if (sv)
+      q = true;
+    fbWriteByte(p, 2, q ? 1 : 0);
+  }
 }
 
 void scl_rt_register(const SclRtVTable *vtable) { state().vtable = vtable; }

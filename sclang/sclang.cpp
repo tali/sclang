@@ -468,6 +468,8 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_ob_start", (void *)&scl_rt_ob_start);
     add("scl_rt_feature", (void *)&scl_rt_feature);
     add("scl_rt_timer_fb", (void *)&scl_rt_timer_fb);
+    add("scl_rt_counter_fb", (void *)&scl_rt_counter_fb);
+    add("scl_rt_edge_fb", (void *)&scl_rt_edge_fb);
     add("scl_rt_assert_cmp", (void *)&scl_rt_assert_cmp);
     add("scl_rt_assert_cmp_r", (void *)&scl_rt_assert_cmp_r);
     // ABI v5: DB register / address registers / indirect access

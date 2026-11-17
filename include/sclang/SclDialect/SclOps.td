@@ -318,7 +318,12 @@ def GetElementOp : SclOp<"getelement",
     StrAttr:$name,
     // Declared struct type of the base when the base is itself a byte view
     // (nested struct member); not set for plain struct addresses.
-    OptionalAttr<TypeAttr>:$baseType
+    OptionalAttr<TypeAttr>:$baseType,
+    // Declared FB of the base when the base is a byte view of an instance DB
+    // (FB-typed member of another FB); the member offset is then taken from
+    // the FB's layout (works for builtin standard FBs, which have no
+    // FunctionBlockOp and no struct type).
+    OptionalAttr<FlatSymbolRefAttr>:$fb
   );
   let results = (outs Scl_AddressType:$element);
   let assemblyFormat = "attr-dict $name `from` $addr `:` type($addr) `->` type($element)";

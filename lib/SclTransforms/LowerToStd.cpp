@@ -144,11 +144,18 @@ static std::optional<llvm::APInt> foldConstBits(Value v, unsigned width) {
 }
 
 /// Compute the layouts of all function blocks in the module.
+static void forceBuiltinFbLayouts(ModuleOp module, FbLayoutCache &layouts);
+
 static FbLayoutCache computeFbLayouts(ModuleOp module) {
   FbLayoutCache layouts;
+  forceBuiltinFbLayouts(module, layouts);
   // Two passes so that FBs referencing other FBs work regardless of order.
+  // Builtin standard FBs are already present (forced) and not overridden —
+  // even if the frontend emitted an empty stub op for them.
   for (unsigned pass = 0; pass < 2; ++pass) {
     for (auto fb : module.getOps<scl::FunctionBlockOp>()) {
+      if (layouts.contains(fb.getName()))
+        continue; // builtin standard FB: keep the forced layout
       FbLayout layout;
       for (auto var : fb.getBody().getOps<scl::VariableOp>()) {
         int64_t size = byteSize(var.getType(), layouts);
@@ -183,28 +190,54 @@ static FbLayoutCache computeFbLayouts(ModuleOp module) {
       layouts[fb.getName()] = layout;
     }
   }
-  // Builtin timer FBs TON/TOF/TP (lowered to @scl_rt_timer_fb, not func.call):
-  // fixed aligned layout IN @0 (bool), PT @4 (time/i32 ms), Q @8 (bool),
-  // ET @12 (time/i32 ms), 16 bytes total. Forced even if user-declared, so
-  // the runtime's interpretation matches.
-  for (const char *name : {"TON", "TOF", "TP"}) {
-    if (layouts.find(name) != layouts.end())
-      continue;
-    FbLayout layout;
-    auto mk = [&](const char *n, int64_t off, Type t, int64_t size) {
-      FbMemberLayout m{n, off, t, std::nullopt};
-      layout.members.push_back(m);
-      (void)size;
-    };
-    auto ctx = module.getContext();
-    mk("IN", 0, scl::LogicalType::get(ctx, 1), 1);
-    mk("PT", 4, scl::TimeType::get(ctx), 4);
-    mk("Q", 8, scl::LogicalType::get(ctx, 1), 1);
-    mk("ET", 12, scl::TimeType::get(ctx), 4);
-    layout.size = 16;
-    layouts[name] = layout;
-  }
   return layouts;
+}
+
+/// Fixed layouts of the builtin standard FBs (lowered to runtime calls on
+/// the instance DB buffer, not func.call), forced even if user-declared (or
+/// stub-declared by the frontend), so the runtime's interpretation matches
+/// (see Runtime.h scl_rt_*_fb). Bool members occupy a full byte; ints are
+/// big-endian; timers use IN @0, PT @4 (i32 ms), Q @8, ET @12 (i32 ms).
+static void forceBuiltinFbLayouts(ModuleOp module, FbLayoutCache &layouts) {
+  auto ctx = module.getContext();
+  auto boolTy = scl::LogicalType::get(ctx, 1);
+  auto intTy = scl::IntegerType::get(ctx, 16);
+  auto timeTy = scl::TimeType::get(ctx);
+  struct BuiltinMember {
+    const char *name;
+    int64_t off;
+    Type ty;
+    std::optional<llvm::APInt> initBits = std::nullopt;
+  };
+  struct BuiltinFb { const char *name; std::initializer_list<BuiltinMember> members; int64_t size; };
+  const BuiltinFb builtins[] = {
+      {"TON", {{"IN", 0, boolTy}, {"PT", 4, timeTy}, {"Q", 8, boolTy}, {"ET", 12, timeTy}}, 16},
+      {"TOF", {{"IN", 0, boolTy}, {"PT", 4, timeTy}, {"Q", 8, boolTy}, {"ET", 12, timeTy}}, 16},
+      {"TP", {{"IN", 0, boolTy}, {"PT", 4, timeTy}, {"Q", 8, boolTy}, {"ET", 12, timeTy}}, 16},
+      // CTU: CU @0, R @1, PV @2, Q @4, CV @6, CU_OLD @8
+      {"CTU", {{"CU", 0, boolTy}, {"R", 1, boolTy}, {"PV", 2, intTy}, {"Q", 4, boolTy}, {"CV", 6, intTy}, {"CU_OLD", 8, boolTy}}, 10},
+      // CTD: CD @0, LD @1, PV @2, Q @4, CV @6, CD_OLD @8
+      {"CTD", {{"CD", 0, boolTy}, {"LD", 1, boolTy}, {"PV", 2, intTy}, {"Q", 4, boolTy}, {"CV", 6, intTy}, {"CD_OLD", 8, boolTy}}, 10},
+      // CTUD: CU @0, CD @1, R @2, LD @3, PV @4, QU @6, QD @7, CV @8, CU_OLD @10, CD_OLD @11
+      {"CTUD", {{"CU", 0, boolTy}, {"CD", 1, boolTy}, {"R", 2, boolTy}, {"LD", 3, boolTy}, {"PV", 4, intTy}, {"QU", 6, boolTy}, {"QD", 7, boolTy}, {"CV", 8, intTy}, {"CU_OLD", 10, boolTy}, {"CD_OLD", 11, boolTy}}, 12},
+      // R_TRIG / F_TRIG: CLK @0, Q @1, CLK_OLD @2
+      {"R_TRIG", {{"CLK", 0, boolTy}, {"Q", 1, boolTy}, {"CLK_OLD", 2, boolTy}}, 4},
+      // F_TRIG's edge memory starts TRUE (IEC ed.3 table 45 NOTE), so a
+      // CLK=FALSE first scan already yields Q=TRUE; baked as cold-start bit.
+      {"F_TRIG", {{"CLK", 0, boolTy}, {"Q", 1, boolTy}, {"CLK_OLD", 2, boolTy, llvm::APInt(1, 1)}}, 4},
+      // SR: S @0, R @1, Q @2; RS: R @0, S @1, Q @2 (IEC also spells the
+      // inputs S1/R1 and the output Q1 — aliased to the same offsets)
+      {"SR", {{"S", 0, boolTy}, {"S1", 0, boolTy}, {"R", 1, boolTy}, {"Q", 2, boolTy}, {"Q1", 2, boolTy}}, 4},
+      {"RS", {{"R", 0, boolTy}, {"R1", 0, boolTy}, {"S", 1, boolTy}, {"Q", 2, boolTy}, {"Q1", 2, boolTy}}, 4},
+  };
+  for (const auto &b : builtins) {
+    FbLayout layout;
+    for (const auto &m : b.members)
+      layout.members.push_back(
+          FbMemberLayout{m.name, m.off, m.ty, m.initBits});
+    layout.size = b.size;
+    layouts[b.name] = layout;
+  }
 }
 
 // MARK: SclTypeConverter
@@ -1122,29 +1155,41 @@ struct DataBlockOpLowering : public OpConversionPattern<scl::DataBlockOp> {
         SmallVector<Attribute, 8> bytes;
         bytes.reserve(layout.size);
         std::vector<uint8_t> buf(layout.size, 0);
-        for (auto &m : layout.members) {
-          if (m.initBits) {
-            int64_t msize = byteSize(m.type, layouts);
-            // big-endian (ADR 001): byte i of the member window holds bits
-            // 8*(msize-1-i).. of the value.
-            for (int64_t i = 0; i < msize; ++i)
-              buf[m.offset + i] = (uint8_t)(m.initBits->getZExtValue() >>
-                                            (8 * (msize - 1 - i)));
-          } else if (m.initStr) {
-            // String member (flat char array): store the literal chars,
-            // zero-padded (the buffer starts zeroed).
-            if (auto arrTy = m.type.dyn_cast<scl::ArrayType>())
-              if (arrTy.getElementType().isa<scl::IntegerType>() &&
-                  arrTy.getElementType().cast<scl::IntegerType>().getWidth() == 8) {
-                int64_t count = 1;
-                for (auto &dim : arrTy.getDimensions())
-                  count *= dim.second - dim.first + 1;
-                for (int64_t i = 0;
-                     i < count && i < (int64_t)m.initStr->size(); ++i)
-                  buf[m.offset + i] = (uint8_t)(*m.initStr)[i];
-              }
+        // Bake cold-start initializers into the byte buffer, recursing into
+        // FB-typed members (their builtin/user layouts may carry their own
+        // initializers, e.g. F_TRIG's edge memory starts TRUE).
+        std::function<void(const FbLayout &, int64_t)> bake =
+            [&](const FbLayout &lay, int64_t baseOff) {
+          for (auto &m : lay.members) {
+            if (auto idbM = m.type.dyn_cast<scl::InstanceDbType>()) {
+              auto it = layouts.find(idbM.getFbSymbol());
+              if (it != layouts.end())
+                bake(it->second, baseOff + m.offset);
+            }
+            if (m.initBits) {
+              int64_t msize = byteSize(m.type, layouts);
+              // big-endian (ADR 001): byte i of the member window holds
+              // bits 8*(msize-1-i).. of the value.
+              for (int64_t i = 0; i < msize; ++i)
+                buf[baseOff + m.offset + i] =
+                    (uint8_t)(m.initBits->getZExtValue() >> (8 * (msize - 1 - i)));
+            } else if (m.initStr) {
+              // String member (flat char array): store the literal chars,
+              // zero-padded (the buffer starts zeroed).
+              if (auto arrTy = m.type.dyn_cast<scl::ArrayType>())
+                if (arrTy.getElementType().isa<scl::IntegerType>() &&
+                    arrTy.getElementType().cast<scl::IntegerType>().getWidth() == 8) {
+                  int64_t count = 1;
+                  for (auto &dim : arrTy.getDimensions())
+                    count *= dim.second - dim.first + 1;
+                  for (int64_t i = 0;
+                       i < count && i < (int64_t)m.initStr->size(); ++i)
+                    buf[baseOff + m.offset + i] = (uint8_t)(*m.initStr)[i];
+                }
+            }
           }
-        }
+        };
+        bake(layout, 0);
         // DB-level initial values (scl.db `init` attr) override the FB
         // members' cold-start values.
         if (auto initOpt = op.getInit()) {
@@ -1982,31 +2027,45 @@ struct GetElementOpLowering : public OpConversionPattern<scl::GetElementOp> {
     auto addrTy = op.getAddr().getType().cast<scl::AddressType>();
     auto &layouts =
         static_cast<const SclTypeConverter *>(typeConverter)->fbLayouts;
-    // The declared struct type of the base: from the address element type
-    // for plain struct addresses, from the baseType attr when the base is
-    // itself a byte view (nested struct member).
-    scl::StructType structTy;
-    if (auto st = addrTy.getElementType().dyn_cast<scl::StructType>())
-      structTy = st;
-    else if (op.getBaseType().has_value())
-      structTy = op.getBaseType()->cast<scl::StructType>();
-    if (!structTy)
-      return failure();
-
-    // byte offset of the member within the struct
+    // Byte offset and declared type of the member: from the FB's layout when
+    // the base is a byte view of an instance DB (fb attr; also covers builtin
+    // standard FBs), otherwise from the declared struct type of the base.
     int64_t offset = 0;
     Type memberTy;
-    for (auto [name, elem] :
-         llvm::zip(structTy.getElementNames(), structTy.getElementTypes())) {
-      // IEC 61131-3 identifiers are case-insensitive
-      if (name.getValue().equals_insensitive(op.getName()))
-        memberTy = elem;
-      if (memberTy)
-        break;
-      offset += byteSize(elem, layouts);
+    if (op.getFb().has_value()) {
+      auto it = layouts.find(*op.getFb());
+      if (it == layouts.end())
+        return failure();
+      for (auto &m : it->second.members) {
+        // IEC 61131-3 identifiers are case-insensitive
+        if (llvm::StringRef(m.name).equals_insensitive(op.getName())) {
+          offset = m.offset;
+          memberTy = m.type;
+          break;
+        }
+      }
+      if (!memberTy)
+        return failure();
+    } else {
+      scl::StructType structTy;
+      if (auto st = addrTy.getElementType().dyn_cast<scl::StructType>())
+        structTy = st;
+      else if (op.getBaseType().has_value())
+        structTy = op.getBaseType()->cast<scl::StructType>();
+      if (!structTy)
+        return failure();
+      for (auto [name, elem] :
+           llvm::zip(structTy.getElementNames(), structTy.getElementTypes())) {
+        // IEC 61131-3 identifiers are case-insensitive
+        if (name.getValue().equals_insensitive(op.getName()))
+          memberTy = elem;
+        if (memberTy)
+          break;
+        offset += byteSize(elem, layouts);
+      }
+      if (!memberTy)
+        return failure();
     }
-    if (!memberTy)
-      return failure();
     auto ctx = op.getContext();
     // The address of a struct is the struct buffer memref itself (or a byte
     // view into a composite buffer for nested members).
@@ -2030,24 +2089,39 @@ struct CallFbOpLowering : public OpConversionPattern<scl::CallFbOp> {
   LogicalResult
   matchAndRewrite(scl::CallFbOp op, scl::CallFbOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Builtin timer FBs TON/TOF/TP lower to a runtime call on the instance
-    // DB buffer, not a func.call (no FunctionBlockOp needed).
+    // Builtin standard FBs (timers TON/TOF/TP, counters CTU/CTD/CTUD, edges
+    // R_TRIG/F_TRIG/SR/RS) lower to a runtime call on the instance DB
+    // buffer, not a func.call (no FunctionBlockOp needed; fixed layouts in
+    // the FbLayoutCache match the runtime's interpretation).
     std::string fbUp = llvm::StringRef(op.getFb()).upper();
+    const char *rtName = nullptr;
     int mode = -1;
-    if (fbUp == "TON") mode = 0;
-    else if (fbUp == "TOF") mode = 1;
-    else if (fbUp == "TP") mode = 2;
-    if (mode >= 0) {
+    if (fbUp == "TON") { rtName = "scl_rt_timer_fb"; mode = 0;
+    } else if (fbUp == "TOF") { rtName = "scl_rt_timer_fb"; mode = 1;
+    } else if (fbUp == "TP") { rtName = "scl_rt_timer_fb"; mode = 2;
+    } else if (fbUp == "CTU") { rtName = "scl_rt_counter_fb"; mode = 0;
+    } else if (fbUp == "CTD") { rtName = "scl_rt_counter_fb"; mode = 1;
+    } else if (fbUp == "CTUD") { rtName = "scl_rt_counter_fb"; mode = 2;
+    } else if (fbUp == "R_TRIG") { rtName = "scl_rt_edge_fb"; mode = 0;
+    } else if (fbUp == "F_TRIG") { rtName = "scl_rt_edge_fb"; mode = 1;
+    } else if (fbUp == "SR") { rtName = "scl_rt_edge_fb"; mode = 2;
+    } else if (fbUp == "RS") { rtName = "scl_rt_edge_fb"; mode = 3;
+    }
+    if (rtName) {
       auto loc = op.getLoc();
       ModuleOp module = op->template getParentOfType<ModuleOp>();
       auto i8 = rewriter.getI8Type();
       auto i64 = rewriter.getI64Type();
       auto fnTy = rewriter.getFunctionType({i8, i64}, {});
-      auto rtFn = getOrInsertRtFunc(rewriter, module, "scl_rt_timer_fb", fnTy);
-      // memref -> data pointer as i64
+      auto rtFn = getOrInsertRtFunc(rewriter, module, rtName, fnTy);
+      // The instance view's data pointer as i64: aligned base pointer plus
+      // the view's own offset (nonzero for local FB-typed members).
       Value idb = adaptor.getIdb();
-      Value ptrIdx = rewriter.create<memref::ExtractAlignedPointerAsIndexOp>(
-          loc, idb);
+      auto meta = rewriter.create<memref::ExtractStridedMetadataOp>(loc, idb);
+      Value basePtr = rewriter.create<memref::ExtractAlignedPointerAsIndexOp>(
+          loc, meta.getBaseBuffer());
+      Value ptrIdx =
+          rewriter.create<arith::AddIOp>(loc, basePtr, meta.getOffset());
       Value ptr = rewriter.create<arith::IndexCastOp>(loc, i64, ptrIdx);
       Value modeC = rewriter.create<arith::ConstantOp>(
           loc, i8, rewriter.getI8IntegerAttr((int8_t)mode));

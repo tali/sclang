@@ -133,22 +133,22 @@ plus the lit tests under `test/` and the external corpus tests listed in
 | AWL | Siemens AWL manual indirect addressing [ARn, P#x.y] -> awl.indirect (AR + bit offset) | full | [include/sclang/AwlDialect/AwlOps.td:540](../include/sclang/AwlDialect/AwlOps.td#L540) |
 | AWL | Siemens AWL manual indirect load (L B/W/D [ARn, P#x.y]) -> awl.load_indirect | full | [include/sclang/AwlDialect/AwlOps.td:549](../include/sclang/AwlDialect/AwlOps.td#L549) |
 | AWL | Siemens AWL manual indirect store (T B/W/D [ARn, P#x.y]) -> awl.store_indirect | full | [include/sclang/AwlDialect/AwlOps.td:558](../include/sclang/AwlDialect/AwlOps.td#L558) |
-| SCL | IEC 61131-3 ST VAR string initializer (VAR s : STRING := | full | [lib/SclGen/MLIRGen.cpp:373](../lib/SclGen/MLIRGen.cpp#L373) |
-| SCL | IEC 61131-3 ST organization block (OB) -> void function with scan-cycle hooks (ADR 002) | full | [lib/SclGen/MLIRGen.cpp:491](../lib/SclGen/MLIRGen.cpp#L491) |
-| SCL | IEC 61131-3 ST statement list: assignment, call, IF/ELSIF/ELSE, | full | [lib/SclGen/MLIRGen.cpp:813](../lib/SclGen/MLIRGen.cpp#L813) |
-| SCL | IEC 61131-3 ST assignment (:=), incl. string/array copies -> see mlirGenStringAssignment and the array-copy path below | full | [lib/SclGen/MLIRGen.cpp:1147](../lib/SclGen/MLIRGen.cpp#L1147) |
-| SCL | IEC 61131-3 ST type conversions (INT_TO_WORD, CHAR_TO_INT, ...) -> mlirGenBuiltinConversion; string functions (LEN/CONCAT/...) -> mlirGenStringBuiltin | full | [lib/SclGen/MLIRGen.cpp:2369](../lib/SclGen/MLIRGen.cpp#L2369) |
-| SCL | IEC 61131-3 ST string functions LEN/LEFT/RIGHT/MID/FIND/CONCAT/DELETE/INSERT/REPLACE and <type>_TO_STRING/STRING_TO_<type> -> mlirGenStringBuiltin (approx: flat zero-padded buffers with C-string length; STRING_TO_REAL/REAL_TO_STRING/VAL_STRG remain external stubs) | approx | [lib/SclGen/MLIRGen.cpp:2471](../lib/SclGen/MLIRGen.cpp#L2471) |
-| SCL | IEC 61131-3 ST standard functions (ed.3 table 32/33): | full | [lib/SclGen/MLIRGen.cpp:3028](../lib/SclGen/MLIRGen.cpp#L3028) |
-| SCL | Test-support builtins (awlsim-style oracles in SCL form, | full | [lib/SclGen/MLIRGen.cpp:3201](../lib/SclGen/MLIRGen.cpp#L3201) |
-| AWL | IEC 61131-3 STL memory areas (P/Q/M/DB/DI/L/T/C, big-endian S7 storage — docs/decisions/001) -> scl_rt_read/read_bit (C ABI, docs/decisions/002) | full | [lib/Runtime/SimRuntime.cpp:260](../lib/Runtime/SimRuntime.cpp#L260) |
-| AWL | IEC 61131-3 STL memory areas, stores -> scl_rt_write/write_bit (C ABI) | full | [lib/Runtime/SimRuntime.cpp:310](../lib/Runtime/SimRuntime.cpp#L310) |
-| AWL | Siemens AWL manual local data stack (L/VL frames per block call, incl. FC param area and 256-depth guard) -> scl_rt_l_push/l_pop/param_in/param_out | full | [lib/Runtime/SimRuntime.cpp:564](../lib/Runtime/SimRuntime.cpp#L564) |
-| AWL | Siemens AWL manual address registers AR1/AR2 -> scl_rt_ar_get/ar_set/ar_add/ar_raw (packed internal form) | full | [lib/Runtime/SimRuntime.cpp:1055](../lib/Runtime/SimRuntime.cpp#L1055) |
-| AWL | Siemens AWL manual indirect addressing -> scl_rt_read_indirect/write_indirect (raw S7 <-> packed decode) | full | [lib/Runtime/SimRuntime.cpp:1117](../lib/Runtime/SimRuntime.cpp#L1117) |
-| AWL | Siemens AWL manual system functions SFC/SFB -> scl_rt_sfc/scl_rt_sfb (runtime-staged params in the marker area) | full | [lib/Runtime/SimRuntime.cpp:1157](../lib/Runtime/SimRuntime.cpp#L1157) |
-| AWL | Siemens AWL manual status word (STW) cleared at OB entry (awlsim statusWord.reset) -> scl_rt_ob_start | full | [lib/Runtime/SimRuntime.cpp:1898](../lib/Runtime/SimRuntime.cpp#L1898) |
-| AWL | awlsim __FEATURE t [, v] -> scl_rt_feature (nrAccus, OB-temp presets) | full | [lib/Runtime/SimRuntime.cpp:1937](../lib/Runtime/SimRuntime.cpp#L1937) |
+| SCL | IEC 61131-3 ST VAR string initializer (VAR s : STRING := | full | [lib/SclGen/MLIRGen.cpp:386](../lib/SclGen/MLIRGen.cpp#L386) |
+| SCL | IEC 61131-3 ST organization block (OB) -> void function with scan-cycle hooks (ADR 002) | full | [lib/SclGen/MLIRGen.cpp:504](../lib/SclGen/MLIRGen.cpp#L504) |
+| SCL | IEC 61131-3 ST statement list: assignment, call, IF/ELSIF/ELSE, | full | [lib/SclGen/MLIRGen.cpp:826](../lib/SclGen/MLIRGen.cpp#L826) |
+| SCL | IEC 61131-3 ST assignment (:=), incl. string/array copies -> see mlirGenStringAssignment and the array-copy path below | full | [lib/SclGen/MLIRGen.cpp:1160](../lib/SclGen/MLIRGen.cpp#L1160) |
+| SCL | IEC 61131-3 ST type conversions (INT_TO_WORD, CHAR_TO_INT, ...) -> mlirGenBuiltinConversion; string functions (LEN/CONCAT/...) -> mlirGenStringBuiltin | full | [lib/SclGen/MLIRGen.cpp:2402](../lib/SclGen/MLIRGen.cpp#L2402) |
+| SCL | IEC 61131-3 ST string functions LEN/LEFT/RIGHT/MID/FIND/CONCAT/DELETE/INSERT/REPLACE and <type>_TO_STRING/STRING_TO_<type> -> mlirGenStringBuiltin (approx: flat zero-padded buffers with C-string length; STRING_TO_REAL/REAL_TO_STRING/VAL_STRG remain external stubs) | approx | [lib/SclGen/MLIRGen.cpp:2504](../lib/SclGen/MLIRGen.cpp#L2504) |
+| SCL | IEC 61131-3 ST standard functions (ed.3 table 32/33): | full | [lib/SclGen/MLIRGen.cpp:3061](../lib/SclGen/MLIRGen.cpp#L3061) |
+| SCL | Test-support builtins (awlsim-style oracles in SCL form, | full | [lib/SclGen/MLIRGen.cpp:3234](../lib/SclGen/MLIRGen.cpp#L3234) |
+| AWL | IEC 61131-3 STL memory areas (P/Q/M/DB/DI/L/T/C, big-endian S7 storage — docs/decisions/001) -> scl_rt_read/read_bit (C ABI, docs/decisions/002) | full | [lib/Runtime/SimRuntime.cpp:261](../lib/Runtime/SimRuntime.cpp#L261) |
+| AWL | IEC 61131-3 STL memory areas, stores -> scl_rt_write/write_bit (C ABI) | full | [lib/Runtime/SimRuntime.cpp:311](../lib/Runtime/SimRuntime.cpp#L311) |
+| AWL | Siemens AWL manual local data stack (L/VL frames per block call, incl. FC param area and 256-depth guard) -> scl_rt_l_push/l_pop/param_in/param_out | full | [lib/Runtime/SimRuntime.cpp:565](../lib/Runtime/SimRuntime.cpp#L565) |
+| AWL | Siemens AWL manual address registers AR1/AR2 -> scl_rt_ar_get/ar_set/ar_add/ar_raw (packed internal form) | full | [lib/Runtime/SimRuntime.cpp:1173](../lib/Runtime/SimRuntime.cpp#L1173) |
+| AWL | Siemens AWL manual indirect addressing -> scl_rt_read_indirect/write_indirect (raw S7 <-> packed decode) | full | [lib/Runtime/SimRuntime.cpp:1235](../lib/Runtime/SimRuntime.cpp#L1235) |
+| AWL | Siemens AWL manual system functions SFC/SFB -> scl_rt_sfc/scl_rt_sfb (runtime-staged params in the marker area) | full | [lib/Runtime/SimRuntime.cpp:1275](../lib/Runtime/SimRuntime.cpp#L1275) |
+| AWL | Siemens AWL manual status word (STW) cleared at OB entry (awlsim statusWord.reset) -> scl_rt_ob_start | full | [lib/Runtime/SimRuntime.cpp:2016](../lib/Runtime/SimRuntime.cpp#L2016) |
+| AWL | awlsim __FEATURE t [, v] -> scl_rt_feature (nrAccus, OB-temp presets) | full | [lib/Runtime/SimRuntime.cpp:2055](../lib/Runtime/SimRuntime.cpp#L2055) |
 | AWL | IEC 61131-3 STL memory areas P/Q/M/DB/DI/L/T/C and direct operands | full | [test/AwlGen/areas.awl:2](../test/AwlGen/areas.awl#L2) |
 | AWL | awlsim __ASSERT oracle directives -> awl.assert -> scl_rt_assert_cmp | full | [test/AwlGen/assert.awl:2](../test/AwlGen/assert.awl#L2) |
 | AWL | IEC 61131-3 STL block calls incl. FB instance DBs and parameter passing | full | [test/AwlGen/call_fb.awl:2](../test/AwlGen/call_fb.awl#L2) |

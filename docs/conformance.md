@@ -140,13 +140,15 @@ oracle-verified against awlsim above). Tests using constructs outside the
 supported subset (CONFIGURATION, LREAL, STRING/array/struct outputs, ...) are
 counted as "unsupported", not failures.
 
-Current: **26/75 pass (35%), 17 unsupported** (74 traces are `status:
-conformant`, 18 `implementation-defined`). Open clusters: standard FBs
-(CTU/CTD/CTUD/R_TRIG/F_TRIG/SR/RS as real implementations, not stubs), array
-literals `[...]`, enum types, SHL/SHR/ROL/ROR, unsigned-source conversions
-(UINT->DINT zero-extend), DATE/TOD/DT arithmetic, FUNCTION VAR retention,
-FB EN/ENO, named-vs-positional call binding, REAL output observation via
-__BITS.
+Current: **40/75 pass (53%), 17 unsupported** (74 traces are `status:
+conformant`, 18 `implementation-defined`). Builtin standard FBs (TON/TOF/TP,
+CTU/CTD/CTUD, R_TRIG/F_TRIG/SR/RS) are implemented: fixed instance layouts
+(forced in the lowering's FbLayoutCache, mirrored by scl_rt_timer_fb /
+scl_rt_counter_fb / scl_rt_edge_fb in the runtime, ABI v11) with member
+access via scl.getelement's fb attr. Open clusters: array literals `[...]`,
+enum types, SHL/SHR/ROL/ROR, unsigned-source conversions (UINT->DINT
+zero-extend), DATE/TOD/DT arithmetic, FUNCTION VAR retention, FB EN/ENO,
+named-vs-positional call binding, REAL output observation via __BITS.
 
 ## Remaining failures and known approximations
 

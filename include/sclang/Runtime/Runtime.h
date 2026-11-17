@@ -120,6 +120,16 @@ int64_t scl_rt_db_info(uint32_t kind, uint32_t db);
 /// instance DB buffer with the builtin layout (IN @0, PT @4 i32 BE ms,
 /// Q @8, ET @12 i32 BE ms).
 void scl_rt_timer_fb(uint8_t mode, uint64_t idbPtr);
+/// Builtin counter function blocks CTU/CTD/CTUD (mode 0/1/2) operating on
+/// an instance DB buffer with the builtin layout (bool = 1 byte, ints
+/// big-endian): CTU: CU @0, R @1, PV @2 i16, Q @4, CV @6 i16, CU_OLD @8;
+/// CTD: CD @0, LD @1, PV @2, Q @4, CV @6, CD_OLD @8; CTUD: CU @0, CD @1,
+/// R @2, LD @3, PV @4 i16, QU @6, QD @7, CV @8 i16, CU_OLD @10, CD_OLD @11.
+void scl_rt_counter_fb(uint8_t mode, uint64_t idbPtr);
+/// Builtin edge/memory function blocks R_TRIG/F_TRIG/SR/RS (mode 0/1/2/3).
+/// R_TRIG/F_TRIG: CLK @0, Q @1, CLK_OLD @2. SR: S @0, R @1, Q @2.
+/// RS: R @0, S @1, Q @2.
+void scl_rt_edge_fb(uint8_t mode, uint64_t idbPtr);
 
 /// Timer/counter semantics (simulation, awlsim-compatible): reads of the
 /// `T` area return the remaining time in units of the active time base
@@ -211,6 +221,12 @@ typedef struct SclRtVTable {
   void (*stw_div_i)(int64_t divisor, int64_t result, int32_t range); // div by 0: UO+OV+OS; OV/OS if quo out of +-range
   void (*stw_div_f)(double divisor, double result);
   int64_t (*f2i)(double value, int64_t orig, uint8_t mode); // TRUNC/RND/..: OV/OS + keep orig if out of range
+  /* Appended for builtin counter/edge FBs (v11). May be NULL in older
+     host runtimes; the sim then handles them itself. mode: counter_fb
+     0=CTU 1=CTD 2=CTUD; edge_fb 0=R_TRIG 1=F_TRIG 2=SR 3=RS. idbPtr is the
+     instance DB buffer (see the builtin layouts in the scl_rt_*_fb docs). */
+  void (*counter_fb)(uint8_t mode, uint64_t idbPtr);
+  void (*edge_fb)(uint8_t mode, uint64_t idbPtr);
 } SclRtVTable;
 
 /// Register a host vtable; all subsequent ABI calls forward through it.

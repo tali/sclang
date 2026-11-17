@@ -246,6 +246,19 @@ private:
   /// Names of all function blocks in the module (for type resolution).
   llvm::StringMap<bool> fbNames;
   // strip the surrounding quotes of a quoted TIA symbol name ("TON" -> TON)
+  /// Normalized (uppercase, unquoted, _TIME-stripped) name if `name` is a
+  /// builtin standard FB (TON/TOF/TP, CTU/CTD/CTUD, R_TRIG/F_TRIG/SR/RS);
+  /// empty otherwise. These lower to runtime calls, not FunctionBlockOps.
+  static std::string builtinStandardFb(llvm::StringRef name) {
+    std::string up = llvm::StringRef(unquote(name).c_str()).upper();
+    if (llvm::StringRef(up).ends_with("_TIME"))
+      up = up.substr(0, up.size() - 5);
+    static const std::set<std::string> names = {
+        "TON", "TOF", "TP", "CTU", "CTD", "CTUD",
+        "R_TRIG", "F_TRIG", "SR", "RS"};
+    return names.count(up) ? up : std::string();
+  }
+
   static std::string unquote(llvm::StringRef s) {
     if (s.size() >= 2 && s.front() == '"' && s.back() == '"')
       return s.substr(1, s.size() - 2).str();
@@ -1715,18 +1728,27 @@ private:
     // through a byte view (FB-typed member of another FB/struct).
     auto genIdbMember = [&](InstanceDbType idbType) -> mlir::Value {
       auto fbName = builder.getStringAttr(idbType.getFbSymbol());
-      auto fb = mlir::SymbolTable::lookupNearestSymbolFrom<FunctionBlockOp>(
-        theModule, fbName);
-      // Builtin timer FBs have no FunctionBlockOp; their member types are
-      // fixed (IN/Q: bool, PT/ET: time).
-      std::string fbUp = llvm::StringRef(unquote(fbName.getValue()).c_str()).upper();
-      if (llvm::StringRef(fbUp).ends_with("_TIME"))
-        fbUp = fbUp.substr(0, fbUp.size() - 5);
-      if (!fb && (fbUp == "TON" || fbUp == "TOF" || fbUp == "TP")) {
-        mlir::Type t;
+      // Builtin standard FBs (TON/TOF/TP, CTU/CTD/CTUD, R_TRIG/F_TRIG/SR/RS)
+      // are recognized by name first — the frontend may have emitted an
+      // empty stub FunctionBlockOp for them, which must not shadow the
+      // builtin. Their fixed layouts are known to the lowering
+      // (FbLayoutCache), so address members via scl.getelement with the fb
+      // attr (a GetVariableOp on the byte view cannot be lowered).
+      std::string fbUp = builtinStandardFb(fbName.getValue());
+      auto fb = fbUp.empty()
+                    ? mlir::SymbolTable::lookupNearestSymbolFrom<FunctionBlockOp>(
+                          theModule, fbName)
+                    : nullptr;
+      if (!fbUp.empty()) {
         std::string mUp = std::string(llvm::StringRef(name).upper());
-        if (mUp == "IN" || mUp == "Q")
+        mlir::Type t;
+        if (mUp == "IN" || mUp == "Q" || mUp == "Q1" || mUp == "CU" ||
+            mUp == "CD" || mUp == "R" || mUp == "R1" || mUp == "LD" ||
+            mUp == "S" || mUp == "S1" || mUp == "CLK" ||
+            mUp == "QU" || mUp == "QD")
           t = getType(tok_bool);
+        else if (mUp == "PV" || mUp == "CV")
+          t = getType(tok_int);
         else if (mUp == "PT" || mUp == "ET")
           t = getType(tok_time);
         if (!t) {
@@ -1734,8 +1756,17 @@ private:
                               << "' in builtin FB '" << fbName << "'";
           return nullptr;
         }
-        auto result = builder.create<GetVariableOp>(location, resultType,
-                                                    address, name);
+        auto addrElem = address.getType().cast<AddressType>().getElementType();
+        mlir::Value result;
+        if (addrElem == idbType) {
+          // Direct instance-DB address: GetVariableOp can be lowered.
+          result = builder.create<GetVariableOp>(location, resultType, address,
+                                                 name);
+        } else {
+          result = builder.create<GetElementOp>(
+              location, resultType, address, name, mlir::TypeAttr(),
+              mlir::FlatSymbolRefAttr::get(fbName));
+        }
         byteViewTypes[result] = t;
         return result;
       }
@@ -1782,9 +1813,9 @@ private:
         types.push_back(v.getType());
       }
       auto st = StructType::get(names, types);
-      auto result = builder.create<GetElementOp>(location, resultType, address,
-                                                 var.getSymName(),
-                                                 mlir::TypeAttr::get(st));
+      auto result = builder.create<GetElementOp>(
+          location, resultType, address, var.getSymName(),
+          mlir::TypeAttr::get(st), mlir::FlatSymbolRefAttr::get(fbName));
       byteViewTypes[result] = var.getType();
       return result;
     };
@@ -1800,7 +1831,8 @@ private:
         return nullptr;
       }
       auto result = builder.create<GetElementOp>(location, resultType, address,
-                                                 name, mlir::TypeAttr());
+                                                 name, mlir::TypeAttr(),
+                                                 mlir::FlatSymbolRefAttr());
       byteViewTypes[result] = memberTy;
       return result;
     })
@@ -1835,7 +1867,8 @@ private:
       }
       auto baseAttr = mlir::TypeAttr::get(structType);
       auto result = builder.create<GetElementOp>(location, resultType, address,
-                                                 name, baseAttr);
+                                                 name, baseAttr,
+                                                 mlir::FlatSymbolRefAttr());
       byteViewTypes[result] = memberTy;
       return result;
     })
@@ -3430,12 +3463,10 @@ private:
 
     // Unknown FB (TIA library FB): declare an empty stub so the symbolic
     // call verifies and lowers to a no-op (like the awl.call stubs).
-    // Builtin timer FBs are exempt: they lower to scl_rt_timer_fb.
-    std::string fbUp = llvm::StringRef(unquote(fb).c_str()).upper();
-    if (llvm::StringRef(fbUp).ends_with("_TIME"))
-      fbUp = fbUp.substr(0, fbUp.size() - 5);
-    bool builtinTimer = fbUp == "TON" || fbUp == "TOF" || fbUp == "TP";
-    if (!builtinTimer &&
+    // Builtin standard FBs are exempt: they lower to scl_rt_*_fb runtime
+    // calls (no stub op, so the forced layout is not shadowed).
+    bool builtin = !builtinStandardFb(fb).empty();
+    if (!builtin &&
         !mlir::SymbolTable::lookupNearestSymbolFrom<FunctionBlockOp>(
             theModule, builder.getStringAttr(unquote(fb)))) {
       mlir::OpBuilder b(theModule.getBody(), theModule.getBody()->begin());
@@ -3642,12 +3673,10 @@ private:
     if (fbNames.contains(type->getName()))
       return InstanceDbType::get(builder.getContext(), type->getName());
     // Builtin timer FBs (lowered to @scl_rt_timer_fb, no source definition);
-    // TIA also names the timer types TON_TIME/TOF_TIME/TP_TIME
-    std::string up = llvm::StringRef(unquote(type->getName()).c_str()).upper();
-    if (llvm::StringRef(up).ends_with("_TIME"))
-      up = up.substr(0, up.size() - 5);
-    if (up == "TON" || up == "TOF" || up == "TP")
-      return InstanceDbType::get(builder.getContext(), up);
+    // Builtin standard FBs (also TIA's *_TIME spellings) are instance DBs
+    // with a fixed builtin layout (see the lowering's FbLayoutCache).
+    if (std::string b = builtinStandardFb(type->getName()); !b.empty())
+      return InstanceDbType::get(builder.getContext(), b);
     // Unknown type (TIA library type, or a type defined in another file of
     // a multi-file project): warn and model it as an instance DB, like the
     // builtin timer FBs — brace initializers and instance calls then work.
