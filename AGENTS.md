@@ -189,7 +189,21 @@ has no `\b` — use python3 for regex edits.
   wrapper; driver flags --scan-io/--scan-inputs feed M-area slots per scan,
   see test/sclang/jit_scan_io.scl; --cross diffs SCL->JIT vs SCL->AWL->JIT).
   Current: 92/92 pass (100%), 0 unsupported (3 implementation-defined
-  traces diverge and are counted as pass-with-DIFF).
+  traces diverge and are counted as pass-with-DIFF). With --cross (now the
+  default in run_conformance.py) each wrapper is additionally lowered
+  SCL->AWL->JIT and must produce identical scan lines: cross-skips (not
+  failures) when the AWL backend cannot represent the construct (marked
+  'unsupported'/'not representable'/'unknown FB member' in the gen output,
+  implementation-defined traces, VAR declaration initializers — the AWL
+  backend drops DB cold-start values), and the cross run uses a full-size
+  M area (M=65536) because the AWL backend parks the FC param window at
+  M byte 65280. The AWL backend models the S7 accumulator stack exactly
+  (T does not pop; arith consumes the top two; only top-2 slots are
+  usable), so LowerToAWL spills all computed values to M-area temps and
+  loads arith/cmp operands adjacently from temps; signed INT widening uses
+  SLD 16/SRD 16 because L zero-extends words like awlsim. See
+  test/conformance/fuzz_st.py for the differential fuzzer (random seeded
+  inputs, SCL->JIT vs SCL->AWL->JIT must agree).
   Frontend additions (committed): enum types (`TYPE C : (RED, GREEN);` ->
   INT storage + named constants resolved in codegen incl. CASE labels),
   subrange types (`INT (5..10)` -> base type, unchecked), multi-declaration
@@ -239,6 +253,10 @@ has no `\b` — use python3 for regex edits.
   timers/tof). run_st_traces.py counts `status: implementation-defined`
   mismatches as pass-with-DIFF-note, not failures (the behavior is
   non-normative by definition).
+  run_conformance.py also has a std-lowering tier (--emit=mlir-std on every
+  corpus file that compiles; floor 0.90, current 122/131 — known gaps:
+  AWL files with unresolved jump labels, SCL files with non-trivial DB
+  initializers / unknown library types like Variant).
   The ST tier is wired into run_conformance.py as a tier with floor 0.95
   (FLOOR_ST_TRACES; prints `ST traces (JIT)` and propagates FAIL/DIFF lines).
   --cross mode runs each passing wrapper SCL->AWL->JIT and requires identical

@@ -139,6 +139,14 @@ check of the SCL and AWL lowering paths; the AWL path itself is
 oracle-verified against awlsim above). Tests using constructs outside the
 supported subset are counted as "unsupported", not failures.
 
+With `--cross` (the default in run_conformance.py), each wrapper is also
+lowered SCL->AWL->JIT and must produce identical scan lines — a
+differential check of the two lowering paths. Constructs the AWL backend
+cannot represent (FB builtins like CTU, LREAL, strings, date/time, VAR
+declaration initializers, ...) are cross-skips, not failures, as are
+implementation-defined traces. `test/conformance/fuzz_st.py` goes further:
+seeded random per-scan inputs, SCL->JIT vs SCL->AWL->JIT must agree.
+
 Current: **92/92 pass (100%), 0 unsupported** (74 traces are
 `status: conformant`, 18 `implementation-defined`; 3 implementation-defined
 traces diverge from the reference and are counted as pass-with-DIFF).
@@ -185,7 +193,10 @@ expressions, struct copies in expressions), listed in AGENTS.md.
 ## Remaining failures and known approximations
 
 All compile tiers pass 100% (AWL 116/116, SCL single 15/15, SCL projects
-17/17) and the JIT smoke tier passes 103/105. The oracle tier is 70/71 —
+17/17), the std-lowering tier (--emit=mlir-std on every compilable file)
+passes 122/131 = 93% (known gaps: AWL files with unresolved jump labels,
+SCL files with non-trivial DB initializers or unknown library types), and
+the JIT smoke tier passes 103/105. The oracle tier is 70/71 —
 see the list above; accumulator registers are now modeled at runtime
 (awl.accu_get/accu_set), so values persist across labels and calls.
 The former LogMsg flake (~4% of runs) is fixed; see AGENTS.md for the two

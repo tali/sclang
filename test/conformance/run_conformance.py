@@ -45,6 +45,8 @@ FLOOR_SCL_SINGLE = 0.55
 FLOOR_SCL_PROJECT = 0.60
 FLOOR_JIT = 0.85
 FLOOR_ORACLE = 0.15
+FLOOR_STD = 0.90  # 122/131 today; known gaps: AWL files with unresolved
+# labels (JC to missing labels), SCL files with non-trivial DB initializers
 FLOOR_ST_TRACES = 0.95
 
 TIMEOUT_S = 20
@@ -183,10 +185,29 @@ def main():
 
     # --- compile tier, SCL single files ---
     scl_ok = 0
+    compile_ok_files = []
     for p in scl_files:
         rc, err = run_one(args.sclang, p, '-x=scl')
         scl_ok += record(rc == 0, p, '-x=scl', err)
+        if rc == 0:
+            compile_ok_files.append((p, '-x=scl'))
     scl_total = len(scl_files)
+
+    # --- std-lowering tier: full LowerToStd (--emit=mlir-std) on every file
+    # that passes the compile tier; catches lowering gaps even in files
+    # without an OB 1 (not JIT-run below) ---
+    std_ok = 0
+    std_total = 0
+    for p in awl_files:
+        xflag = sniff(read_text(p))
+        rc0, _ = run_one(args.sclang, p, xflag)
+        if rc0 != 0:
+            continue
+        compile_ok_files.append((p, xflag))
+    for p, xflag in compile_ok_files:
+        std_total += 1
+        rc, err = run_one(args.sclang, p, xflag, emit='mlir-std')
+        std_ok += record(rc == 0, p, xflag + ' mlir-std', err)
 
     # --- JIT smoke tier: full pipeline (lowering + ExecutionEngine) on
     # files that define OB 1; smoke test (no crash, no missing symbol),
@@ -249,7 +270,7 @@ def main():
         try:
             p = subprocess.run(
                 [sys.executable, st_script, '--sclang', args.sclang,
-                 '--corpora', args.corpora, '--floor', '0'],
+                 '--corpora', args.corpora, '--floor', '0', '--cross'],
                 capture_output=True, text=True, timeout=900)
             m = re.search(r'ST traces\s+: (\d+)/(\d+) pass', p.stdout)
             if m:
@@ -271,6 +292,8 @@ def main():
           (proj_ok, proj_total, 100 * rate(proj_ok, proj_total)))
     print('JIT (OB1 files): %d/%d pass (%.0f%%)' %
           (jit_ok, jit_total, 100 * rate(jit_ok, jit_total)))
+    print('std lowering  : %d/%d pass (%.0f%%)' %
+          (std_ok, std_total, 100 * rate(std_ok, std_total)))
     print('Oracle (__ASSERT): %d/%d pass (%.0f%%)' %
           (oracle_ok, oracle_total, 100 * rate(oracle_ok, oracle_total)))
     print('ST traces (JIT) : %d/%d pass (%.0f%%)' %
@@ -288,17 +311,19 @@ def main():
            rate(proj_ok, proj_total) < FLOOR_SCL_PROJECT or
            rate(jit_ok, jit_total) < FLOOR_JIT or
            rate(oracle_ok, oracle_total) < FLOOR_ORACLE or
+           rate(std_ok, std_total) < FLOOR_STD or
            rate(st_ok, st_total) < FLOOR_ST_TRACES)
     if bad:
         print('REGRESSION: pass rate below floor '
-              '(awl>=%.2f scl>=%.2f proj>=%.2f jit>=%.2f oracle>=%.2f st>=%.2f)'
+              '(awl>=%.2f scl>=%.2f proj>=%.2f jit>=%.2f oracle>=%.2f '
+              'std>=%.2f st>=%.2f)'
               % (FLOOR_AWL, FLOOR_SCL_SINGLE, FLOOR_SCL_PROJECT, FLOOR_JIT,
-                 FLOOR_ORACLE, FLOOR_ST_TRACES))
+                 FLOOR_ORACLE, FLOOR_STD, FLOOR_ST_TRACES))
         return 1
     print('OK (floors: awl>=%.2f scl>=%.2f proj>=%.2f jit>=%.2f oracle>=%.2f '
-          'st>=%.2f)' %
+          'std>=%.2f st>=%.2f)' %
           (FLOOR_AWL, FLOOR_SCL_SINGLE, FLOOR_SCL_PROJECT, FLOOR_JIT,
-           FLOOR_ORACLE, FLOOR_ST_TRACES))
+           FLOOR_ORACLE, FLOOR_STD, FLOOR_ST_TRACES))
     return 0
 
 

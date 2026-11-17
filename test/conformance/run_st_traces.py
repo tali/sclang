@@ -435,6 +435,17 @@ def alloc_slots(names, kinds, start, strlens=None):
     return slots, byte
 
 
+def has_var_initializers(raw):
+    """True if any VAR section declares an initializer (VAR x : INT := 5;).
+    The AWL backend drops instance-DB cold-start values, so differential
+    cross-checking is meaningless for those."""
+    for m in re.finditer(r'\bVAR[A-Z_]*\b(.*?)\bEND_VAR\b', raw,
+                         re.S | re.I):
+        if ':=' in m.group(1):
+            return True
+    return False
+
+
 def gen_wrapper(raw, prog, in_slots, out_slots):
     lines = [transform_to_scl(raw, prog)]
     lines.append('DATA_BLOCK inst\n  %s\nEND_DATA_BLOCK\n' % prog)
@@ -730,7 +741,10 @@ def run_one(args, st_path, trace, tmpdir, cross):
     observed = parse_scan_lines(out)
     errs = compare_scans(trace, observed, out_slots)
     cross_note = ''
-    if cross and not errs:
+    # implementation-defined behavior (IEC 61131-3) may legitimately differ
+    # between the two lowering paths — no differential check there
+    if cross and not errs and trace.get('status') != 'implementation-defined' \
+            and not has_var_initializers(raw):
         awl = wpath + '.awl'
         # The AWL backend names blocks OBn/FBn/FCn and DBs DBn, so rename the
         # wrapper's program FB and instance DB (and any non-FCn FUNCTIONs).
@@ -740,16 +754,19 @@ def run_one(args, st_path, trace, tmpdir, cross):
             f.write(cross_src)
         rcg, outg = run_sclang(args.sclang_gen,
                                ['-x=st', '--emit=awl', cwpath])
-        if rcg != 0:
-            # constructs the AWL backend cannot represent (date/time, ...)
-            # are skipped, not failed: the differential check only applies
-            # where both paths run
+        if rcg != 0 or 'unsupported' in outg or 'not supported' in outg \
+                or 'not representable' in outg or 'unknown FB member' in outg:
+            # constructs the AWL backend cannot represent (date/time, FB
+            # builtins, LREAL, strings, ...) are skipped, not failed: the
+            # differential check only applies where both paths run
             return 'pass', 'ok (cross-skip: %s)' % outg[-120:].replace('\n', ' ')
         with open(awl, 'w') as f:
             f.write(outg)
+        # the AWL backend parks the FC param window at M byte 65280, so the
+        # cross run needs a full-size M area
         base_awl = ['-x=awl', '--emit=jit', '--jit-cycles', str(nscans),
                     '--cycle-ms', str(trace['period_ms']),
-                    '--area-size', 'M=8192', '--area-size', 'DB1=8192']
+                    '--area-size', 'M=65536', '--area-size', 'DB1=8192']
         base_awl += io_args + ['--scan-inputs', infile, awl]
         rc2, out2 = run_sclang(args.sclang, base_awl)
         if rc2 not in (0, 2):
