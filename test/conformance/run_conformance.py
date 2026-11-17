@@ -12,7 +12,7 @@
 # below (a regression), so the lit test catches regressions when the
 # corpora are present.
 #
-# Three tiers:
+# Tiers:
 #  - compile tier: --emit=mlir (frontend + MLIR verifier) on every file;
 #  - JIT smoke tier: --emit=jit --jit-cycles=2 (full lowering +
 #    ExecutionEngine run) on files defining OB 1 — checks the code also
@@ -22,6 +22,9 @@
 #  - oracle tier: --emit=jit --jit-cycles=1 --cycle-ms=0 on files defining OB 1 that
 #    contain awlsim __ASSERT directives — pass iff exit code is 0, i.e.
 #    every executed __ASSERT oracle held. This checks computed values.
+#  - ST trace tier: the s-celles IEC 61131-3 .st/.trace corpus run through the
+#    SCL JIT engine (run_st_traces.py), comparing per-scan outputs; checks
+#    computed values of ST programs against recorded traces.
 
 import argparse
 import os
@@ -42,6 +45,7 @@ FLOOR_SCL_SINGLE = 0.55
 FLOOR_SCL_PROJECT = 0.60
 FLOOR_JIT = 0.85
 FLOOR_ORACLE = 0.15
+FLOOR_ST_TRACES = 0.95
 
 TIMEOUT_S = 20
 
@@ -237,6 +241,28 @@ def main():
     def rate(ok, total):
         return ok / total if total else 1.0
 
+    # --- ST trace tier (s-celles IEC 61131-3 .st/.trace via the SCL JIT) ---
+    st_ok = st_total = 0
+    st_script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             'run_st_traces.py')
+    if os.path.isfile(st_script):
+        try:
+            p = subprocess.run(
+                [sys.executable, st_script, '--sclang', args.sclang,
+                 '--corpora', args.corpora, '--floor', '0'],
+                capture_output=True, text=True, timeout=900)
+            m = re.search(r'ST traces\s+: (\d+)/(\d+) pass', p.stdout)
+            if m:
+                st_ok, st_total = int(m.group(1)), int(m.group(2))
+            for l in p.stdout.splitlines():
+                if l.startswith(('FAIL', 'DIFF')):
+                    lines.append('ST ' + l)
+            if p.returncode != 0 and not m:
+                lines.append('FAIL(st) run_st_traces rc=%d %s'
+                             % (p.returncode, p.stdout[-150:]))
+        except subprocess.TimeoutExpired:
+            lines.append('FAIL(st) run_st_traces TIMEOUT')
+
     print('AWL            : %d/%d pass (%.0f%%)' %
           (awl_ok, awl_total, 100 * rate(awl_ok, awl_total)))
     print('SCL single     : %d/%d pass (%.0f%%)' %
@@ -247,6 +273,8 @@ def main():
           (jit_ok, jit_total, 100 * rate(jit_ok, jit_total)))
     print('Oracle (__ASSERT): %d/%d pass (%.0f%%)' %
           (oracle_ok, oracle_total, 100 * rate(oracle_ok, oracle_total)))
+    print('ST traces (JIT) : %d/%d pass (%.0f%%)' %
+          (st_ok, st_total, 100 * rate(st_ok, st_total)))
     if lines:
         print('--- failures ---')
         for l in lines:
@@ -259,16 +287,18 @@ def main():
            rate(scl_ok, scl_total) < FLOOR_SCL_SINGLE or
            rate(proj_ok, proj_total) < FLOOR_SCL_PROJECT or
            rate(jit_ok, jit_total) < FLOOR_JIT or
-           rate(oracle_ok, oracle_total) < FLOOR_ORACLE)
+           rate(oracle_ok, oracle_total) < FLOOR_ORACLE or
+           rate(st_ok, st_total) < FLOOR_ST_TRACES)
     if bad:
         print('REGRESSION: pass rate below floor '
-              '(awl>=%.2f scl>=%.2f proj>=%.2f jit>=%.2f oracle>=%.2f)' %
-              (FLOOR_AWL, FLOOR_SCL_SINGLE, FLOOR_SCL_PROJECT, FLOOR_JIT,
-               FLOOR_ORACLE))
+              '(awl>=%.2f scl>=%.2f proj>=%.2f jit>=%.2f oracle>=%.2f st>=%.2f)'
+              % (FLOOR_AWL, FLOOR_SCL_SINGLE, FLOOR_SCL_PROJECT, FLOOR_JIT,
+                 FLOOR_ORACLE, FLOOR_ST_TRACES))
         return 1
-    print('OK (floors: awl>=%.2f scl>=%.2f proj>=%.2f jit>=%.2f oracle>=%.2f)' %
+    print('OK (floors: awl>=%.2f scl>=%.2f proj>=%.2f jit>=%.2f oracle>=%.2f '
+          'st>=%.2f)' %
           (FLOOR_AWL, FLOOR_SCL_SINGLE, FLOOR_SCL_PROJECT, FLOOR_JIT,
-           FLOOR_ORACLE))
+           FLOOR_ORACLE, FLOOR_ST_TRACES))
     return 0
 
 

@@ -685,10 +685,61 @@ struct FuncConverter {
     return rloOr(t1, dt2);
   }
 
+  /// Recursively copy a composite (struct/array) value field by field:
+  /// AWL text has no block-copy instruction, so emit per-scalar loads/stores.
+  void emitCompositeCopy(scl::DirectType dst, scl::DirectType src, Type ty) {
+    auto sub = [](scl::DirectType base, int64_t offBytes, int wBits) {
+      return scl::DirectType::get(base.getContext(), base.getArea(),
+                                  base.getDb(), base.getByte() + (int32_t)offBytes,
+                                  0, wBits);
+    };
+    if (auto st = ty.dyn_cast<scl::StructType>()) {
+      int64_t off = 0;
+      for (auto [fname, fty] :
+           llvm::zip(st.getElementNames(), st.getElementTypes())) {
+        int w = widthOf(fty);
+        if (w <= 0)
+          break;
+        emitCompositeCopy(sub(dst, off, w), sub(src, off, w), fty);
+        off += (w + 7) / 8;
+      }
+      return;
+    }
+    if (auto at = ty.dyn_cast<scl::ArrayType>()) {
+      int ew = widthOf(at.getElementType());
+      if (ew <= 0)
+        return;
+      int64_t count = 1;
+      for (auto &dim : at.getDimensions())
+        count *= dim.second - dim.first + 1;
+      for (int64_t i = 0; i < count; ++i)
+        emitCompositeCopy(sub(dst, i * (ew / 8), ew), sub(src, i * (ew / 8), ew),
+                          at.getElementType());
+      return;
+    }
+    int w = widthOf(ty);
+    if (w < 8)
+      return; // bit fields: not copied (no RLO copy emitted)
+    Value v = b.create<awl::LoadOp>(loc, awlDirectValueType(ctx, src),
+                                    directValue(src));
+    b.create<awl::StoreOp>(loc, v, directValue(dst));
+  }
+
   void emitStore(Value addr, Value val) {
     scl::DirectType dt = directOf(addr);
     if (!dt)
       return;
+    // whole struct/array assignment: copy field by field
+    if (auto ld = val.getDefiningOp<scl::LoadOp>()) {
+      Type sty = declaredTypeOf(ld.getAddress());
+      if (sty.isa<scl::StructType>() || sty.isa<scl::ArrayType>()) {
+        scl::DirectType srcDt = directOf(ld.getAddress());
+        if (srcDt) {
+          emitCompositeCopy(dt, srcDt, sty);
+          return;
+        }
+      }
+    }
     if (dt.getWidth() == 1) {
       Value r = materialize(val);
       if (!r)
@@ -992,18 +1043,48 @@ struct FuncConverter {
     emitStore(f.getVar(), f.getInit());
     std::string condL = newLabel("FOR"), bodyL = newLabel("BODY"),
                 stepL = newLabel("STEP"), endL = newLabel("END");
-    emitLabel(condL);
-    // cond: var <= to  (assumes positive step); `to` is a cell address that
-    // is reloaded here on every iteration (the body may have re-stored it)
     Type vt = awlDirectValueType(ctx, dt);
+    // The step goes into a cell so it can be re-loaded at each use — AWL is
+    // accumulator-based, so an `L` emitted once before the loop label would
+    // be consumed by the wrong comparison.
+    scl::DirectType stepDt = allocDirect(declaredTypeOf(f.getVar()));
+    if (!stepDt)
+      return failure();
+    {
+      Value by0 = f.getBy() ? materialize(f.getBy()) : nullptr;
+      if (!by0)
+        by0 = constI(APInt(vt.getIntOrFloatBitWidth(), 1), vt);
+      b.create<awl::StoreOp>(loc, castTo(by0, vt), directValue(stepDt));
+    }
+    auto byVal = [&]() -> Value {
+      return b.create<awl::LoadOp>(loc, vt, directValue(stepDt));
+    };
+    emitLabel(condL);
+    // cond: step > 0 ? var <= to : var >= to; `to` is a cell address that is
+    // reloaded here on every iteration (the body may have re-stored it).
+    // Built with conditional jumps (AWL text has no i1 logic ops).
     scl::DirectType toDt = directOf(f.getTo());
     if (!toDt)
       return failure();
-    Value v = b.create<awl::LoadOp>(loc, vt, directValue(dt));
-    Value t = b.create<awl::LoadOp>(loc, vt, directValue(toDt));
-    Value c = b.create<awl::CmpLeOp>(loc, IntegerType::get(ctx, 1),
-                                     castTo(v, vt), castTo(t, vt));
-    emitJumpIfNot(c, endL);
+    auto i1 = IntegerType::get(ctx, 1);
+    std::string posL = newLabel("FORPOS");
+    Value byC = byVal();
+    Value zero = constI(APInt(vt.getIntOrFloatBitWidth(), 0), vt);
+    Value pos = b.create<awl::CmpGtOp>(loc, i1, byC, zero);
+    emitJumpIf(pos, posL);
+    // step <= 0: continue while var >= to
+    Value vN = b.create<awl::LoadOp>(loc, vt, directValue(dt));
+    Value tN = b.create<awl::LoadOp>(loc, vt, directValue(toDt));
+    emitJumpIf(b.create<awl::CmpGeOp>(loc, i1, castTo(vN, vt), castTo(tN, vt)),
+               bodyL);
+    emitJump(endL);
+    emitLabel(posL);
+    // step > 0: continue while var <= to
+    Value vP = b.create<awl::LoadOp>(loc, vt, directValue(dt));
+    Value tP = b.create<awl::LoadOp>(loc, vt, directValue(toDt));
+    emitJumpIf(b.create<awl::CmpLeOp>(loc, i1, castTo(vP, vt), castTo(tP, vt)),
+               bodyL);
+    emitJump(endL);
     emitLabel(bodyL);
     loops.push_back({stepL, endL});
     if (failed(emitRegion(f.getDoBody(), blockLabels)))
@@ -1011,11 +1092,8 @@ struct FuncConverter {
     loops.pop_back();
     emitLabel(stepL);
     // var := var + by
-    Value by = f.getBy() ? materialize(f.getBy()) : nullptr;
-    if (!by)
-      by = constI(APInt(vt.getIntOrFloatBitWidth(), 1), vt);
     Value v2 = b.create<awl::LoadOp>(loc, vt, directValue(dt));
-    Value nv = b.create<awl::AddOp>(loc, vt, castTo(v2, vt), castTo(by, vt));
+    Value nv = b.create<awl::AddOp>(loc, vt, v2, byVal());
     b.create<awl::StoreOp>(loc, nv, directValue(dt));
     emitJump(condL);
     emitLabel(endL);
