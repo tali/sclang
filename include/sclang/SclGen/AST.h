@@ -1094,7 +1094,15 @@ public:
 
 class VariableDeclarationSubsectionAST : public DeclarationSubsectionAST {
 public:
-  enum Var_Kind { Var, VarTemp, VarInput, VarOutput, VarInOut };
+  enum Var_Kind {
+    Var,
+    VarTemp,
+    VarInput,
+    VarOutput,
+    VarInOut,
+    VarExternal, // IEC VAR_EXTERNAL (globals of the CONFIGURATION, ADR 004)
+    VarGlobal,   // IEC VAR_GLOBAL inside a CONFIGURATION
+  };
 
 private:
   Var_Kind kind;
@@ -1149,6 +1157,7 @@ public:
     Unit_DataBlock,
     Unit_UserDefinedDataType,
     Unit_Method,
+    Unit_Configuration, // IEC CONFIGURATION (ADR 004)
   };
 
   UnitAST(UnitASTKind kind, const std::string &identifier, Location location,
@@ -1295,6 +1304,35 @@ public:
   /// LLVM style RTTI
   static bool classof(const UnitAST *u) {
     return u->getKind() == Unit_DataBlock;
+  }
+};
+
+/// IEC 61131-3 CONFIGURATION (ADR 004): VAR_GLOBAL declarations become a
+/// global data block named after the configuration; RESOURCE/TASK/PROGRAM
+/// bindings are kept as metadata strings (emitted as a `scl.config` op).
+class ConfigurationAST : public UnitAST {
+  std::unique_ptr<DeclarationSectionAST> globals;
+  std::vector<std::string> tasks;    // "name priority=<p> interval_ms=<i> single=<s>"
+  std::vector<std::string> programs; // "<instance> <task> <program>"
+
+public:
+  ConfigurationAST(const std::string &identifier, Location loc,
+                   std::vector<std::unique_ptr<AttributeAST>> attrs,
+                   std::unique_ptr<DeclarationSectionAST> globals,
+                   std::vector<std::string> tasks,
+                   std::vector<std::string> programs)
+      : UnitAST(Unit_Configuration, identifier, loc, std::move(attrs),
+                nullptr),
+        globals(std::move(globals)), tasks(std::move(tasks)),
+        programs(std::move(programs)) {}
+
+  const DeclarationSectionAST *getGlobals() const { return globals.get(); }
+  llvm::ArrayRef<std::string> getTasks() const { return tasks; }
+  llvm::ArrayRef<std::string> getPrograms() const { return programs; }
+
+  /// LLVM style RTTI
+  static bool classof(const UnitAST *u) {
+    return u->getKind() == Unit_Configuration;
   }
 };
 

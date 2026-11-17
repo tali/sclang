@@ -183,7 +183,7 @@ def parse_trace(path):
 
 # ------------------------------------------------------------------ .st file
 SEC_RE = re.compile(
-    r'\b(VAR_INPUT|VAR_OUTPUT|VAR_IN_OUT|VAR_TEMP|VAR_RETAIN|VAR)\b(.*?)'
+    r'\b(VAR_INPUT|VAR_OUTPUT|VAR_IN_OUT|VAR_TEMP|VAR_RETAIN|VAR_EXTERNAL|VAR_GLOBAL|VAR)\b(.*?)'
     r'END_VAR\b', re.S | re.I)
 
 
@@ -247,6 +247,139 @@ def transform_to_scl(raw, prog):
     out = re.sub(r'\bPROGRAM\b', 'FUNCTION_BLOCK', raw)
     out = re.sub(r'\bEND_PROGRAM\b', 'END_FUNCTION_BLOCK', out)
     return out
+
+
+# ------------------------------------------------------- CONFIGURATION files
+def parse_decls(text):
+    """Parse `name[, name...] : TYPE [ := init];` lines into [(name, type)]."""
+    out = []
+    for decl in text.split(';'):
+        decl = decl.strip()
+        if not decl or ':' not in decl:
+            continue
+        names, _, rest = decl.partition(':')
+        ty = rest.split(':=')[0].strip().upper()
+        ty = re.sub(r'\s+', ' ', ty)
+        for n in names.split(','):
+            n = n.strip()
+            if n:
+                out.append((n, ty))
+    return out
+
+
+def parse_config_file(path):
+    """Parse a multi-PROGRAM .st file with a CONFIGURATION (IEC ed.3 6.8).
+
+    Returns dict(name, globals, tasks, progs, programs, raw) or None.
+    tasks: [{name, interval_ms|None, prio, single|None, order}]
+    progs: [{inst, task, prog}]
+    programs: {prog_name: {section: [(name, type)]}}
+    """
+    raw = read_text(path)
+    text = strip_comments(raw)
+    cm = re.search(r'\bCONFIGURATION\s+([A-Za-z_]\w*)(.*?)\bEND_CONFIGURATION\b',
+                   text, re.S | re.I)
+    if not cm:
+        return None
+    conf_name, conf_body = cm.group(1), cm.group(2)
+    globals_ = {}
+    gm = re.search(r'\bVAR_GLOBAL\b(.*?)\bEND_VAR\b', conf_body, re.S | re.I)
+    if gm:
+        globals_ = dict(parse_decls(gm.group(1)))
+    tasks, progs = [], []
+    for rm in re.finditer(r'\bRESOURCE\b(.*?)\bEND_RESOURCE\b', conf_body,
+                          re.S | re.I):
+        body = rm.group(1)
+        for tm in re.finditer(r'\bTASK\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*;',
+                              body, re.I):
+            interval, prio, single = None, 0, None
+            for pm in re.finditer(r'([A-Za-z_]\w*)\s*:=\s*([^,]+)', tm.group(2)):
+                k, v = pm.group(1).upper(), pm.group(2).strip()
+                if k == 'INTERVAL':
+                    interval = parse_time_ms(v)
+                elif k == 'PRIORITY':
+                    prio = int(v, 10)
+                elif k == 'SINGLE':
+                    single = v
+            tasks.append(dict(name=tm.group(1), interval=interval, prio=prio,
+                              single=single, order=len(tasks)))
+        for pm in re.finditer(
+                r'\bPROGRAM\s+([A-Za-z_]\w*)\s+WITH\s+([A-Za-z_]\w*)\s*:\s*([A-Za-z_]\w*)\s*;',
+                body, re.I):
+            progs.append(dict(inst=pm.group(1), task=pm.group(2),
+                              prog=pm.group(3)))
+    programs = {}
+    for pm in re.finditer(r'\bPROGRAM\s+([A-Za-z_]\w*)(?!\s+WITH\b)(.*?)\bEND_PROGRAM\b',
+                          text, re.S | re.I):
+        decls = {}
+        for sm in SEC_RE.finditer(pm.group(2)):
+            decls.setdefault(sm.group(1).upper(), []).extend(
+                parse_decls(sm.group(2)))
+        programs[pm.group(1)] = decls
+    if not programs or not progs:
+        return None
+    return dict(name=conf_name, globals=globals_, tasks=tasks, progs=progs,
+                programs=programs, raw=raw)
+
+
+def gen_config_wrapper(cfg, trace, in_slots, out_slots, out_src):
+    """Build the executable wrapper for a CONFIGURATION test: the .st file
+    (PROGRAMs -> FUNCTION_BLOCKs, CONFIGURATION kept) plus one instance DB per
+    PROGRAM binding and an OB1 that runs the tasks per their INTERVAL/PRIORITY/
+    SINGLE schedule (ed.3 6.8.2), copying scan inputs into the globals and the
+    outputs back to M slots."""
+    raw = cfg['raw']
+    out = re.sub(r'\bPROGRAM\s+([A-Za-z_]\w*)(?!\s+WITH\b)', r'FUNCTION_BLOCK \1',
+                 raw)
+    out = re.sub(r'\bEND_PROGRAM\b', 'END_FUNCTION_BLOCK', out)
+    lines = [out]
+    conf = cfg['name']
+    for p in cfg['progs']:
+        lines.append('DATA_BLOCK db_%s\n  %s\nEND_DATA_BLOCK' % (p['inst'],
+                                                                    p['prog']))
+    lines.append('FUNCTION OB1 : int')
+    lines.append('BEGIN')
+    lines.append('  %MD996 := %MD996 + 1;')  # scan counter (0-based: -1)
+    # scan inputs -> globals
+    for s in in_slots:
+        lines.append('  "%s".%s := %s;' % (conf, s.name, s.direct()))
+    # schedule: tasks in priority order (lower PRIORITY number first)
+    prev_bit = 990  # M bytes 990.. hold SINGLE edge memories
+    tasks = sorted(cfg['tasks'], key=lambda t: (t['prio'], t['order']))
+    for t in tasks:
+        calls = ['    %s."db_%s"();' % (p['prog'], p['inst'])
+                 for p in cfg['progs'] if p['task'] == t['name']]
+        if not calls:
+            continue
+        if t['single'] is not None:
+            cond = '"%s".%s AND NOT %%M%d.0' % (conf, t['single'], prev_bit)
+            lines.append('  IF %s THEN' % cond)
+            lines.extend(calls)
+            lines.append('  END_IF;')
+            lines.append('  %%M%d.0 := "%s".%s;' % (prev_bit, conf, t['single']))
+            prev_bit += 1
+        else:
+            interval = t['interval'] or trace['period_ms']
+            cond = '((%%MD996 - 1) * %d) MOD %d = 0' % (trace['period_ms'],
+                                                        interval)
+            lines.append('  IF %s THEN' % cond)
+            lines.extend(calls)
+            lines.append('  END_IF;')
+    # outputs -> M slots
+    for s in out_slots:
+        src = out_src[s.name]
+        if s.kind == 'float':
+            lines.append('  %s := __BITS(%s);' % (s.direct(), src))
+        elif s.kind == 'str':
+            lines.append('  __STRTO_M(%d, %d, %s);' % (s.byte, s.maxlen, src))
+        else:
+            lines.append('  %s := %s;' % (s.direct(), src))
+    lines.append('END_FUNCTION')
+    lines.append('FUNCTION _mlir_ciface_OB1 : void')
+    lines.append('BEGIN')
+    lines.append('  OB1();')
+    lines.append('END_FUNCTION')
+    return '\n'.join(lines)
 
 
 # ------------------------------------------------------------------ wrapper
@@ -380,7 +513,7 @@ def compare_scans(trace, observed, out_slots):
                         % (idx, sorted(observed)))
             continue
         for name, tok in expected.items():
-            if '.' in name or name not in kind_of:
+            if name not in kind_of:
                 continue  # struct member output: not observed
             kind = kind_of[name]
             exp = parse_value(tok, kind)
@@ -435,11 +568,87 @@ def awl_compat(wrapper, prog):
     return out
 
 
+def run_config(args, st_path, trace, tmpdir, cross, cfg):
+    """Run one CONFIGURATION-based .st/.trace pair (multi-PROGRAM file with
+    VAR_GLOBAL/VAR_EXTERNAL and a RESOURCE task schedule)."""
+    conf = cfg['name']
+    inst_of = {p['inst']: p['prog'] for p in cfg['progs']}
+    # output name -> (kind, source expression); dotted names are
+    # instance-qualified members (p_cons.ack), bare names are globals
+    out_src, out_kinds = {}, {}
+    for name in trace['outputs']:
+        if '.' in name:
+            inst, member = name.split('.', 1)
+            if inst not in inst_of:
+                return 'unsupported', 'unknown instance %s' % inst
+            prog = inst_of[inst]
+            decls = dict(cfg['programs'][prog].get('VAR_OUTPUT', []))
+            k = decls.get(member)
+            out_src[name] = '"db_%s".%s' % (inst, member)
+        elif name in cfg['globals']:
+            k = cfg['globals'][name]
+            out_src[name] = '"%s".%s' % (conf, name)
+        else:
+            return 'unsupported', 'output %s is neither global nor instance-qualified' % name
+        if k is None:
+            return 'unsupported', 'output %s has no declaration' % name
+        k = re.sub(r'^STRING\s*(\[[^]]*\])?$', 'STRING', k)
+        if k not in TYPE_MAP:
+            return 'unsupported', 'type %s of %s not supported' % (k, name)
+        out_kinds[name] = k
+    in_kinds = {}
+    for name in trace['inputs']:
+        k = cfg['globals'].get(name)
+        if k is None:
+            return 'unsupported', 'input %s is not a VAR_GLOBAL' % name
+        k = re.sub(r'^STRING\s*(\[[^]]*\])?$', 'STRING', k)
+        if k not in TYPE_MAP:
+            return 'unsupported', 'type %s of input %s not supported' % (k, name)
+        in_kinds[name] = k
+    in_slots, nxt = alloc_slots(trace['inputs'], in_kinds, M_BASE)
+    out_slots, _ = alloc_slots(trace['outputs'], out_kinds, nxt or M_BASE + 64)
+    if in_slots is None or out_slots is None:
+        return 'unsupported', 'slot allocation failed'
+    wrapper = gen_config_wrapper(cfg, trace, in_slots, out_slots, out_src)
+    wpath = os.path.join(tmpdir, os.path.basename(st_path) + '.cfgwrap.scl')
+    with open(wpath, 'w') as f:
+        f.write(wrapper)
+    infile = os.path.join(tmpdir, os.path.basename(st_path) + '.inputs')
+    content = gen_inputs_file(trace, in_slots)
+    if content is None:
+        return 'unsupported', 'unparseable input value'
+    with open(infile, 'w') as f:
+        f.write(content)
+    nscans = len(trace['scans']) or 1
+    io_args = [s.scan_io_arg('in') for s in in_slots]
+    io_args += [s.scan_io_arg('out') for s in out_slots]
+    base = ['-x=st', '--emit=jit', '--jit-cycles', str(nscans),
+            '--cycle-ms', str(trace['period_ms']), '--area-size', 'M=8192']
+    base += io_args + ['--scan-inputs', infile, wpath]
+    rc, out = run_sclang(args.sclang, base)
+    if rc == -1:
+        return 'fail', 'TIMEOUT'
+    if rc not in (0, 2):
+        err = [l for l in out.splitlines() if 'error' in l.lower()
+               or 'failed' in l.lower()]
+        return 'fail', 'rc=%d %s' % (rc, err[0] if err else out[-200:])
+    observed = parse_scan_lines(out)
+    errs = compare_scans(trace, observed, out_slots)
+    if errs:
+        if trace.get('status') == 'implementation-defined':
+            return 'pass', 'impl-defined diverges: %s' % '; '.join(errs[:3])
+        return 'fail', '; '.join(errs[:3])
+    return 'pass', 'ok (config)'
+
+
 def run_one(args, st_path, trace, tmpdir, cross):
     """Run one .st/.trace pair; returns (status, detail) with status in
     pass/fail/unsupported."""
     parsed = parse_program(st_path)
     if parsed is None:
+        cfg = parse_config_file(st_path)
+        if cfg is not None:
+            return run_config(args, st_path, trace, tmpdir, cross, cfg)
         return 'unsupported', 'CONFIGURATION or no top-level PROGRAM'
     prog, decls, raw, strlens = parsed
     in_decls = decls.get('VAR_INPUT', [])

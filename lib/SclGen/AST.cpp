@@ -57,6 +57,7 @@ private:
   void dump(const FunctionBlockAST *node);
   void dump(const DataBlockAST *node);
   void dump(const UserDefinedTypeAST *node);
+  void dump(const ConfigurationAST *node);
   // Structure of Declaration Sections
   void dump(const DeclarationSectionAST *node);
   void dump(const DeclarationSubsectionAST *node);
@@ -155,6 +156,7 @@ void ASTDumper::dump(const UnitAST *unit) {
   dispatch(DataBlockAST);
   dispatch(UserDefinedTypeAST);
   dispatch(MethodAST);
+  dispatch(ConfigurationAST);
 #undef dispatch
   // No match, fallback to a generic message
   INDENT();
@@ -222,6 +224,15 @@ void ASTDumper::dump(const DataBlockAST *unit) {
   dump(unit->getAttributes());
   dump(unit->getType());
   dump(unit->getAssignments());
+}
+
+void ASTDumper::dump(const ConfigurationAST *unit) {
+  INDENT();
+  outs << "Configuration " << unit->getIdentifier() << "\n";
+  for (auto &t : unit->getTasks())
+    outs << "  task " << t << "\n";
+  for (auto &p : unit->getPrograms())
+    outs << "  program " << p << "\n";
 }
 
 void ASTDumper::dump(const UserDefinedTypeAST *unit) {

@@ -47,6 +47,24 @@ def DataBlockOp : TopLevelOp<"db", [Symbol]> {
   let assemblyFormat = "attr-dict $sym_name `:` $type";
 }
 
+// IEC 61131-3 CONFIGURATION metadata (ADR 004): emitted for a parsed
+// CONFIGURATION block; carries the RESOURCE/TASK and PROGRAM...WITH bindings
+// as plain strings. Erased by LowerToStd — execution scheduling is a
+// runtime/driver concern, not a codegen one.
+def ConfigOp : TopLevelOp<"config", []> {
+  let summary = "IEC 61131-3 CONFIGURATION metadata (ADR 004)";
+
+  let arguments = (ins
+    StrAttr:$config_name,
+    StrArrayAttr:$tasks,    // "name priority=<p> interval_ms=<i> single=<s>"
+    StrArrayAttr:$programs  // "<instance> <task> <program>"
+  );
+
+  let results = (outs);
+
+  let assemblyFormat = "attr-dict $config_name `,` $tasks `,` $programs";
+}
+
 //
 // MARK: functions / function blocks
 //

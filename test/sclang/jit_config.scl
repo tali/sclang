@@ -1,0 +1,54 @@
+// RUN: printf '0 g_in=5\n1 g_in=2\n2 g_in=-3\n' > %t.in && sclang -x=st --emit=jit --jit-cycles=3 --cycle-ms=100 --area-size M=8192 --scan-io=in:g_in=M/0/2 --scan-io=out:g_cnt=M/2/2 --scan-io=out:g_sum=M/4/4 --scan-io=out:n=M/8/2 --scan-inputs=%t.in %s 2>&1 | FileCheck %s
+// IEC 61131-3 CONFIGURATION (ADR 004, -x=st): VAR_GLOBAL becomes the global
+// DB "conf" (with initial values), VAR_EXTERNAL resolves into it, and the
+// harness-generated OB1 runs the PROGRAM instance per its TASK schedule.
+// g_sum starts at 1000 and accumulates g_in each scan: 1005, 1007, 1004.
+// CHECK: scan 0: g_cnt=1 g_sum=1005 n=1
+// CHECK: scan 1: g_cnt=2 g_sum=1007 n=2
+// CHECK: scan 2: g_cnt=3 g_sum=1004 n=3
+PROGRAM counter
+  VAR_EXTERNAL
+    g_in  : INT;
+    g_cnt : INT;
+    g_sum : DINT;
+  END_VAR
+  VAR_OUTPUT
+    n : INT;
+  END_VAR
+  n := n + 1;
+  g_cnt := g_cnt + 1;
+  g_sum := g_sum + INT_TO_DINT(g_in);
+END_PROGRAM
+
+CONFIGURATION conf
+  VAR_GLOBAL
+    g_in  : INT;
+    g_cnt : INT;
+    g_sum : DINT := 1000;
+  END_VAR
+  RESOURCE res0 ON PLC
+    TASK t0(INTERVAL := T#100ms, PRIORITY := 0);
+    PROGRAM p0 WITH t0 : counter;
+  END_RESOURCE
+END_CONFIGURATION
+
+DATA_BLOCK db_p0
+  counter
+END_DATA_BLOCK
+
+FUNCTION OB1 : int
+BEGIN
+  %MD996 := %MD996 + 1;
+  "conf".g_in := %MW0;
+  IF ((%MD996 - 1) * 100) MOD 100 = 0 THEN
+    counter."db_p0"();
+  END_IF;
+  %MW2 := "conf".g_cnt;
+  %MD4 := "conf".g_sum;
+  %MW8 := "db_p0".n;
+END_FUNCTION
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

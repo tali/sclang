@@ -128,13 +128,47 @@ public:
         if (failed(mlirGen(udt)))
           return nullptr;
       } else if (auto *fb = llvm::dyn_cast<FunctionBlockAST>(unit.get())) {
-        fbNames[fb->getIdentifier()] = true;
+        // stored upper-cased: IEC identifiers are case-insensitive
+        fbNames[llvm::StringRef(fb->getIdentifier()).upper()] = true;
+        fbNameOrig[llvm::StringRef(fb->getIdentifier()).upper()] =
+            std::string(fb->getIdentifier());
       }
     }
     // Second pre-pass: collect function result types and the declared types
     // of all variables per callable, so that call arguments (incl. string
     // literals) can be typed even before the callee is generated.
     for (const auto &unit : *moduleAST) {
+      // IEC CONFIGURATION (ADR 004): register the VAR_GLOBAL names as
+      // externals resolving into the configuration's global DB.
+      if (auto *cfg = llvm::dyn_cast<ConfigurationAST>(unit.get())) {
+        // Emit the configuration's global DB + scl.config op now (detached),
+        // so VAR_EXTERNAL references resolve while POUs are codegen'd below.
+        builder.clearInsertionPoint();
+        if (mlir::Operation *cfgOp = mlirGen(cfg)) {
+          theModule.push_back(cfgOp);
+          for (auto *e : extraOps)
+            theModule.push_back(e);
+          extraOps.clear();
+        }
+        if (errorOccurred)
+          return nullptr;
+        if (cfg->getGlobals())
+          for (const auto &sub : cfg->getGlobals()->getDecls()) {
+            if (sub->getKind() !=
+                DeclarationSubsectionAST::DeclarationASTKind::Decl_Variable)
+              continue;
+            auto &vardecls =
+                llvm::cast<VariableDeclarationSubsectionAST>(*sub);
+            for (const auto &value : vardecls.getValues()) {
+              auto t = getType(value->getDataType());
+              if (!t)
+                return nullptr;
+              for (const auto &v : value->getVars())
+                externalVars[llvm::StringRef(v->getIdentifier()).upper()] = {
+                    std::string(cfg->getIdentifier()), t};
+            }
+          }
+      }
       if (auto *fn = llvm::dyn_cast<FunctionAST>(unit.get())) {
         functionResultTypes[fn->getIdentifier()] = getType(fn->getType());
         collectVarTypes(fn->getDeclarations(),
@@ -184,6 +218,8 @@ public:
           return nullptr;
         continue;
       }
+      if (unit->getKind() == UnitAST::Unit_Configuration)
+        continue; // emitted in the pre-pass (global DB must exist early)
       auto func = mlirGen(unit.get());
       if (!func || errorOccurred)
         return nullptr;
@@ -313,6 +349,10 @@ private:
       // Only inputs and in/outs are call arguments (outputs are written
       // back via `=>`, not passed as values), so the declared-order list
       // used for argument padding covers just those.
+      if (vardecls.getKind() ==
+              VariableDeclarationSubsectionAST::VarExternal ||
+          vardecls.getKind() == VariableDeclarationSubsectionAST::VarGlobal)
+        continue; // IEC externals/globals are not locals (ADR 004)
       bool isCallArg = vardecls.getKind() ==
                            VariableDeclarationSubsectionAST::VarInput ||
                        vardecls.getKind() ==
@@ -346,6 +386,13 @@ private:
   }
   /// Names of all function blocks in the module (for type resolution).
   llvm::StringMap<bool> fbNames;
+  /// upper-cased FB name -> original spelling (MLIR symbols are
+  /// case-sensitive; IEC identifiers are not).
+  llvm::StringMap<std::string> fbNameOrig;
+  /// IEC VAR_EXTERNAL names (uppercased) -> (configuration's global DB name,
+  /// declared type). Resolved in mlirGenVariable to members of that DB
+  /// (ADR 004).
+  llvm::StringMap<std::pair<std::string, mlir::Type>> externalVars;
   // strip the surrounding quotes of a quoted TIA symbol name ("TON" -> TON)
   /// Normalized (uppercase, unquoted, _TIME-stripped) name if `name` is a
   /// builtin standard FB (TON/TOF/TP, CTU/CTD/CTUD, R_TRIG/F_TRIG/SR/RS);
@@ -438,6 +485,7 @@ private:
         .Case<FunctionAST>([&](auto function) { return mlirGen(function); })
         .Case<FunctionBlockAST>([&](auto fb) { return mlirGen(fb); })
         .Case<OrganizationBlockAST>([&](auto ob) { return mlirGen(ob); })
+        .Case<ConfigurationAST>([&](auto cfg) { return mlirGen(cfg); })
         .Default([&](auto unit) {
           emitError(loc(unit->loc()))
               << "MLIR codegen encountered an unhandled unit kind '"
@@ -936,6 +984,11 @@ private:
         return mlirGen(decl, /*isInput=*/false, /*isOutput=*/false);
       case VariableDeclarationSubsectionAST::VarTemp:
         return mlirGenTempVar(decl);
+      case VariableDeclarationSubsectionAST::VarExternal:
+      case VariableDeclarationSubsectionAST::VarGlobal:
+        // IEC VAR_EXTERNAL/VAR_GLOBAL: no local symbol — names resolve into
+        // the configuration's global DB via externalVars (ADR 004).
+        return mlir::success();
       }
       assert(false);
     })
@@ -1046,6 +1099,9 @@ private:
         case VariableDeclarationSubsectionAST::VarTemp:
           tempvar.push_back({&vardecls, /*isVar=*/false});
           break;
+        case VariableDeclarationSubsectionAST::VarExternal:
+        case VariableDeclarationSubsectionAST::VarGlobal:
+          break; // resolved via externalVars, no local symbol (ADR 004)
         }
       }
     }
@@ -1208,6 +1264,63 @@ private:
       pendingMethods.push_back({function, m.get()});
 
     return function;
+  }
+
+  // SPEC[ST] IEC 61131-3 CONFIGURATION (ed.3 6.8): VAR_GLOBAL becomes a
+  // global data block named after the configuration; RESOURCE/TASK/PROGRAM
+  // bindings are kept as a scl.config metadata op (ADR 004). VAR_EXTERNAL
+  // members of POUs resolve into that DB (see externalVars).
+  mlir::Operation *mlirGen(const ConfigurationAST *cfg) {
+    auto location = loc(cfg->loc());
+    auto context = builder.getContext();
+    StringRef name = cfg->getIdentifier();
+    mlir::Type type;
+    llvm::SmallVector<mlir::StringAttr, 4> names;
+    llvm::SmallVector<mlir::Type, 4> types;
+    llvm::SmallVector<mlir::NamedAttribute, 4> initEntries;
+    if (auto *globals = cfg->getGlobals()) {
+      for (const auto &sub : globals->getDecls()) {
+        if (sub->getKind() !=
+            DeclarationSubsectionAST::DeclarationASTKind::Decl_Variable)
+          continue;
+        auto &vardecls = llvm::cast<VariableDeclarationSubsectionAST>(*sub);
+        for (const auto &value : vardecls.getValues()) {
+          auto t = getType(value->getDataType());
+          if (!t)
+            return nullptr;
+          for (const auto &var : value->getVars()) {
+            names.push_back(builder.getStringAttr(var->getIdentifier()));
+            types.push_back(t);
+            if (value->getInitializer()) {
+              int64_t iv = 0;
+              if (mlir::succeeded(
+                      foldConstIntAST(value->getInitializer().value(), iv)))
+                initEntries.push_back(builder.getNamedAttr(
+                    var->getIdentifier(),
+                    builder.getIntegerAttr(builder.getI64Type(), iv)));
+            }
+          }
+        }
+      }
+    }
+    type = StructType::get(names, types);
+    auto db = builder.create<DataBlockOp>(
+        location, mlir::TypeAttr::get(type),
+        mlir::StringAttr::get(context, name),
+        initEntries.empty() ? mlir::DictionaryAttr()
+                            : mlir::DictionaryAttr::get(context, initEntries));
+    // Metadata op with the RESOURCE/TASK/PROGRAM bindings.
+    llvm::SmallVector<mlir::Attribute, 4> taskAttrs, progAttrs;
+    for (auto &t : cfg->getTasks())
+      taskAttrs.push_back(builder.getStringAttr(t));
+    for (auto &p : cfg->getPrograms())
+      progAttrs.push_back(builder.getStringAttr(p));
+    auto configOp = builder.create<ConfigOp>(
+        location, mlir::StringAttr::get(context, (name + "_config").str()),
+        mlir::ArrayAttr::get(context, taskAttrs),
+        mlir::ArrayAttr::get(context, progAttrs));
+    extraOps.push_back(configOp);
+    return db;
   }
 
   DataBlockOp mlirGen(const DataBlockAST *db) {
@@ -1913,6 +2026,15 @@ private:
             return nullptr;
           return builder.create<LoadOp>(loc(expr->loc()), sym.getType(), addr);
         }
+        // IEC VAR_EXTERNAL: load with the declared type (ADR 004).
+        auto eit = externalVars.find(llvm::StringRef(var->getName()).upper());
+        if (eit != externalVars.end()) {
+          auto addr = mlirGen(var);
+          if (!addr)
+            return nullptr;
+          return builder.create<LoadOp>(loc(expr->loc()), eit->second.second,
+                                         addr);
+        }
       }
     }
     if (auto *bin = llvm::dyn_cast<BinaryExpressionAST>(expr)) {
@@ -2193,6 +2315,22 @@ private:
                                                    it->second));
       }
     }
+    // IEC VAR_EXTERNAL (ADR 004): a member of the configuration's global DB.
+    {
+      auto eit = externalVars.find(llvm::StringRef(name).upper());
+      if (eit != externalVars.end()) {
+        auto dbOp = mlir::cast<DataBlockOp>(
+            mlir::SymbolTable::lookupNearestSymbolFrom<DataBlockOp>(
+                theModule, builder.getStringAttr(eit->second.first)));
+        auto dbAddrTy = AddressType::get(dbOp.getType());
+        auto dbAddr =
+            builder.create<GetGlobalOp>(location, dbAddrTy, eit->second.first);
+        auto elem = mlirGenElement(location, dbAddr, name);
+        if (elem)
+          byteViewTypes[elem] = eit->second.second;
+        return elem;
+      }
+    }
     emitError(location) << "unknown variable '" << name << "'";
     return nullptr;
   }
@@ -2296,11 +2434,17 @@ private:
       // builtin. Their fixed layouts are known to the lowering
       // (FbLayoutCache), so address members via scl.getelement with the fb
       // attr (a GetVariableOp on the byte view cannot be lowered).
-      std::string fbUp = builtinStandardFb(fbName.getValue());
-      auto fb = fbUp.empty()
-                    ? mlir::SymbolTable::lookupNearestSymbolFrom<FunctionBlockOp>(
-                          theModule, fbName)
-                    : nullptr;
+      // A user-defined FB with the same name wins over the TIMER/COUNTER
+      // builtin aliases (e.g. an IEC PROGRAM named "counter"): only treat the
+      // name as a builtin when no FunctionBlockOp is defined for it.
+      auto fb = mlir::SymbolTable::lookupNearestSymbolFrom<FunctionBlockOp>(
+          theModule, fbName);
+      std::string fbUp =
+          (fb && !stubFbNames.count(fb.getName().str()))
+              ? ""
+              : builtinStandardFb(fbName.getValue());
+      if (fb && fbUp.empty() && stubFbNames.count(fb.getName().str()))
+        fb = nullptr;
       if (!fbUp.empty()) {
         std::string mUp = std::string(llvm::StringRef(name).upper());
         mlir::Type t;
@@ -2815,7 +2959,8 @@ private:
       std::string fbUp = llvm::StringRef(unquote(fbVar->getName()).c_str()).upper();
       if (llvm::StringRef(fbUp).ends_with("_TIME"))
         fbUp = fbUp.substr(0, fbUp.size() - 5);
-      if (fbNames.contains(fbVar->getName()) || fbUp == "TON" ||
+      if (fbNames.contains(llvm::StringRef(fbVar->getName()).upper()) ||
+          fbUp == "TON" ||
           fbUp == "TOF" || fbUp == "TP") {
         if (failed(mlirGenFbCall(expr, idbVar->getName(), fbVar->getName()))) {
           emitError(location, "invalid FB call");
@@ -5044,7 +5189,10 @@ private:
     // call verifies and lowers to a no-op (like the awl.call stubs).
     // Builtin standard FBs are exempt: they lower to scl_rt_*_fb runtime
     // calls (no stub op, so the forced layout is not shadowed).
-    bool builtin = !builtinStandardFb(fb).empty();
+    // A user-defined FB with the same name wins over the TIMER/COUNTER
+    // builtin aliases (e.g. an IEC PROGRAM named "counter").
+    bool builtin = !builtinStandardFb(fb).empty() &&
+                   !fbNames.count(llvm::StringRef(unquote(fb)).upper());
     if (!builtin &&
         !mlir::SymbolTable::lookupNearestSymbolFrom<FunctionBlockOp>(
             theModule, builder.getStringAttr(unquote(fb)))) {
@@ -5210,11 +5358,13 @@ private:
     // unless the project declares its own FB under that name (the soft
     // keywords may also name user FBs, e.g. FUNCTION_BLOCK COUNTER).
     case ElementaryDataTypeAST::Type_Timer:
-      return InstanceDbType::get(builder.getContext(),
-                                 fbNames.contains("TIMER") ? "TIMER" : "TON");
+      return InstanceDbType::get(
+          builder.getContext(),
+          fbNameOrig.count("TIMER") ? fbNameOrig["TIMER"] : "TON");
     case ElementaryDataTypeAST::Type_Counter:
-      return InstanceDbType::get(builder.getContext(),
-                                 fbNames.contains("COUNTER") ? "COUNTER" : "CTU");
+      return InstanceDbType::get(
+          builder.getContext(),
+          fbNameOrig.count("COUNTER") ? fbNameOrig["COUNTER"] : "CTU");
     // TODO: TBD more types
     default:
       emitError(loc(type->loc()))
@@ -5346,7 +5496,7 @@ private:
     if (it != udtTypes.end())
       return it->second;
     // A reference to a function block type is an instance DB.
-    if (fbNames.contains(type->getName()))
+    if (fbNames.contains(llvm::StringRef(type->getName()).upper()))
       return InstanceDbType::get(builder.getContext(), type->getName());
     // Builtin timer FBs (lowered to @scl_rt_timer_fb, no source definition);
     // Builtin standard FBs (also TIA's *_TIME spellings) are instance DBs

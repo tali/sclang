@@ -179,6 +179,17 @@ enum Token : int {
   // IEC 61131-3 ed.3 METHODs of a function block
   tok_method = -114,
   tok_end_method = -115,
+  // IEC 61131-3 ST surface (ADR 004, only lexed as keywords in IEC mode):
+  // CONFIGURATION/RESOURCE/TASK declarations and VAR_GLOBAL/VAR_EXTERNAL/
+  // VAR_CONFIG sections; PROGRAM/END_PROGRAM alias FUNCTION_BLOCK there.
+  tok_configuration = -116,
+  tok_end_configuration = -117,
+  tok_resource = -118,
+  tok_end_resource = -119,
+  tok_task = -120,
+  tok_var_global = -121,
+  tok_var_external = -122,
+  tok_var_config = -123,
 
   // errors
   tok_error_symbol = -901,
@@ -554,6 +565,30 @@ private:
       return tok_var_output;
     if (lower == "var_temp")
       return tok_var_temp;
+    if (iecMode()) {
+      // IEC 61131-3 ST constructs (ADR 004); in S7 mode these stay
+      // plain identifiers.
+      if (lower == "program")
+        return tok_function_block;
+      if (lower == "end_program")
+        return tok_end_function_block;
+      if (lower == "configuration")
+        return tok_configuration;
+      if (lower == "end_configuration")
+        return tok_end_configuration;
+      if (lower == "resource")
+        return tok_resource;
+      if (lower == "end_resource")
+        return tok_end_resource;
+      if (lower == "task")
+        return tok_task;
+      if (lower == "var_global")
+        return tok_var_global;
+      if (lower == "var_external")
+        return tok_var_external;
+      if (lower == "var_config")
+        return tok_var_config;
+    }
     if (lower == "usint")
       return tok_usint;
     if (lower == "uint")

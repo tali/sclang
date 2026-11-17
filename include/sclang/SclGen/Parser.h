@@ -159,7 +159,127 @@ private:
       return ParseDataBlock();
     case tok_type:
       return ParseUDType();
+    case tok_configuration:
+      return ParseConfiguration();
     }
+  }
+
+  /// Parse an IEC 61131-3 CONFIGURATION (ADR 004, IEC mode only):
+  ///
+  /// CONFIGURATION name
+  ///   [ VAR_GLOBAL { Variable Declaration } END_VAR ]
+  ///   [ VAR_CONFIG ... END_VAR ]   (parsed, kept as metadata only)
+  ///   { RESOURCE name ON plc
+  ///       { TASK name ( params ) ; }
+  ///       { PROGRAM inst WITH task : prog ; }
+  ///     END_RESOURCE }
+  /// END_CONFIGURATION
+  std::unique_ptr<UnitAST> ParseConfiguration() {
+    auto loc = lexer.getLastLocation();
+    if (!iecMode())
+      return parseError<UnitAST>("--std=iec", "for CONFIGURATION (IEC only)");
+    lexer.consume(tok_configuration);
+    auto identifier = ParseIdentifier();
+    if (identifier.empty())
+      return parseError<UnitAST>(tok_identifier, "as configuration name");
+    std::unique_ptr<DeclarationSectionAST> globals;
+    std::vector<std::string> tasks, programs;
+    while (lexer.getCurToken() != tok_end_configuration) {
+      if (lexer.getCurToken() == tok_var_global ||
+          lexer.getCurToken() == tok_var_config) {
+        auto sub = ParseVariableSubsection();
+        if (!sub)
+          return nullptr;
+        // VAR_GLOBAL becomes the configuration's global data block;
+        // VAR_CONFIG (location mappings) is parsed but only kept as
+        // metadata — the location is applied by the harness/driver.
+        if (sub->getKind() == VariableDeclarationSubsectionAST::VarGlobal &&
+            !globals) {
+          std::vector<std::unique_ptr<DeclarationSubsectionAST>> subs;
+          subs.push_back(std::move(sub));
+          globals = std::make_unique<DeclarationSectionAST>(loc,
+                                                             std::move(subs));
+        }
+        continue;
+      }
+      if (lexer.getCurToken() == tok_resource) {
+        lexer.consume(tok_resource);
+        ParseIdentifier(); // resource name
+        if (lexer.getCurToken() == tok_identifier &&
+            lexer.getIdentifierLower() == "on") {
+          lexer.consume(tok_identifier);
+          lexer.consume(lexer.getCurToken()); // the PLC name
+        }
+        while (lexer.getCurToken() != tok_end_resource) {
+          if (lexer.getCurToken() == tok_task) {
+            lexer.consume(tok_task);
+            auto tname = ParseIdentifier();
+            int64_t prio = -1, intervalMs = -1;
+            std::string single;
+            if (lexer.getCurToken() == tok_parenthese_open) {
+              lexer.consume(tok_parenthese_open);
+              while (lexer.getCurToken() != tok_parenthese_close) {
+                auto pname = ParseIdentifier();
+                if (lexer.getCurToken() == tok_assignment)
+                  lexer.consume(tok_assignment);
+                auto e = ParseExpression();
+                std::string up = llvm::StringRef(pname).upper();
+                if (up == "PRIORITY") {
+                  if (auto *ic = llvm::dyn_cast_or_null<IntegerConstantAST>(
+                          e.get()))
+                    prio = ic->getValue();
+                } else if (up == "INTERVAL") {
+                  if (auto *tc =
+                          llvm::dyn_cast_or_null<TimeConstantAST>(e.get()))
+                    intervalMs = (((int64_t)tc->getDay() * 24 +
+                                   tc->getHour()) * 60 + tc->getMinute()) *
+                                     60000 +
+                                 tc->getSec() * 1000 + tc->getMSec();
+                } else if (up == "SINGLE") {
+                  if (auto *sv = llvm::dyn_cast_or_null<SimpleVariableAST>(
+                          e.get()))
+                    single = sv->getName();
+                }
+                if (lexer.getCurToken() == tok_comma)
+                  lexer.consume(tok_comma);
+              }
+              lexer.consume(tok_parenthese_close);
+            }
+            if (lexer.getCurToken() == tok_semicolon)
+              lexer.consume(tok_semicolon);
+            tasks.push_back(tname + " priority=" + std::to_string(prio) +
+                            " interval_ms=" + std::to_string(intervalMs) +
+                            (single.empty() ? "" : " single=" + single));
+            continue;
+          }
+          if (lexer.getCurToken() == tok_function_block) {
+            // PROGRAM inst WITH task : prog ;
+            lexer.consume(tok_function_block);
+            auto inst = ParseIdentifier();
+            if (lexer.getCurToken() == tok_identifier &&
+                lexer.getIdentifierLower() == "with")
+              lexer.consume(tok_identifier);
+            auto task = ParseIdentifier();
+            if (lexer.getCurToken() == tok_colon)
+              lexer.consume(tok_colon);
+            auto prog = ParseIdentifier();
+            if (lexer.getCurToken() == tok_semicolon)
+              lexer.consume(tok_semicolon);
+            programs.push_back(inst + " " + task + " " + prog);
+            continue;
+          }
+          return parseError<UnitAST>("TASK or PROGRAM", "in RESOURCE");
+        }
+        lexer.consume(tok_end_resource);
+        continue;
+      }
+      return parseError<UnitAST>("VAR_GLOBAL or RESOURCE",
+                                 "in CONFIGURATION");
+    }
+    lexer.consume(tok_end_configuration);
+    return std::make_unique<ConfigurationAST>(
+        identifier, loc, std::vector<std::unique_ptr<AttributeAST>>(),
+        std::move(globals), std::move(tasks), std::move(programs));
   }
 
   /// Parse an Organization Block
@@ -590,6 +710,9 @@ private:
     case tok_var_input:
     case tok_var_output:
     case tok_var_in_out:
+    case tok_var_external:
+    case tok_var_global:
+    case tok_var_config:
       return ParseVariableSubsection();
       break;
     }
@@ -737,6 +860,23 @@ private:
     case tok_var_in_out:
       kind = VariableDeclarationSubsectionAST::VarInOut;
       lexer.consume(tok_var_in_out);
+      break;
+    case tok_var_external:
+      if (!iecMode())
+        return parseError<VariableDeclarationSubsectionAST>(
+            "--std=iec", "for VAR_EXTERNAL (IEC only)");
+      kind = VariableDeclarationSubsectionAST::VarExternal;
+      lexer.consume(tok_var_external);
+      break;
+    case tok_var_global:
+    case tok_var_config:
+      if (!iecMode())
+        return parseError<VariableDeclarationSubsectionAST>(
+            "--std=iec", "for VAR_GLOBAL/VAR_CONFIG (IEC only)");
+      kind = lexer.getCurToken() == tok_var_global
+                 ? VariableDeclarationSubsectionAST::VarGlobal
+                 : VariableDeclarationSubsectionAST::Var;
+      lexer.consume(lexer.getCurToken());
       break;
     }
 

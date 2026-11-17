@@ -45,9 +45,21 @@ one-line pointer here.
   `sclang` and `sclang-gen`, or `-x=st` (= `-x=scl --std=iec`). The mode is a
   `LangMode` (include/sclang/SclGen/LangMode.h) carried by the Lexer into the
   Parser and the ModuleAST, read by MLIRGen; the scl dialect stays
-  mode-agnostic. IEC mode so far: bare `STRING` = `STRING[254]` (more
-  IEC-only constructs land with their features; S7-only constructs are
-  diagnosed in IEC mode).
+  mode-agnostic. IEC mode so far: PROGRAM aliases FUNCTION_BLOCK, bare
+  `STRING` = `STRING[254]`, CONFIGURATION/RESOURCE/TASK + VAR_GLOBAL/
+  VAR_EXTERNAL (VAR_GLOBAL -> global `scl.db` named after the configuration
+  with init values baked big-endian; bindings kept as a `scl.config` metadata
+  op, erased by LowerToStd; VAR_EXTERNAL resolves via `externalVars` into
+  that DB — load with the declared type in mlirGenRValue, NOT the address
+  element type). IEC keywords are only keywords in IEC mode. S7-only
+  constructs are diagnosed in IEC mode and vice versa. fbNames is keyed
+  UPPER-CASE (fbNameOrig keeps the original spelling; MLIR symbols are
+  case-sensitive) — a user FB named e.g. "counter" wins over the
+  TIMER/COUNTER builtin aliases in MLIRGen AND in LowerToStd's CallFbOp.
+  INSERT semantics differ: IEC inserts AFTER 1-based P, S7 AT P (mode-gated
+  in mlirGenStringBuiltin). The ST trace harness runs .st with -x=st and
+  generates the task schedule (INTERVAL/PRIORITY/SINGLE) into the OB1
+  wrapper for CONFIGURATION tests.
 - `sclang --emit=jit` runs the full pipeline and JIT-executes. The JIT entry point is
   the `_mlir_ciface_OB1` wrapper (`engine->invoke("OB1")` resolves
   `_mlir_ciface_OB1`), which calls `function OB1` (see test/sclang/jit.scl) —

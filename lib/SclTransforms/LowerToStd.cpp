@@ -1188,6 +1188,21 @@ struct UnaryNotOpLowering : public OpConversionPattern<scl::UnaryNotOp> {
 };
 
 
+// MARK: ConfigOpLowering (IEC CONFIGURATION metadata, ADR 004)
+
+/// Erased: the CONFIGURATION's VAR_GLOBAL already became a global DataBlockOp
+/// and the TASK/PROGRAM bindings are metadata only (the driver/harness reads
+/// them for scheduling).
+struct ConfigOpLowering : public OpConversionPattern<scl::ConfigOp> {
+  using OpConversionPattern<scl::ConfigOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(scl::ConfigOp op, scl::ConfigOp::Adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 // MARK: DataBlockOpLowering
 
 struct DataBlockOpLowering : public OpConversionPattern<scl::DataBlockOp> {
@@ -1310,6 +1325,36 @@ struct DataBlockOpLowering : public OpConversionPattern<scl::DataBlockOp> {
       } else {
         initValue = DenseElementsAttr::get(
             tensorTy, rewriter.getZeroAttr(memref.getElementType()));
+        // A struct-typed DB (e.g. an IEC CONFIGURATION's VAR_GLOBAL block,
+        // ADR 004) can carry `init` entries too: bake them big-endian into
+        // the zero-filled byte buffer at the members' struct offsets.
+        if (auto initOpt = op.getInit())
+          if (auto st = op.getType().dyn_cast<scl::StructType>())
+            if (auto initDict = initOpt->dyn_cast<mlir::DictionaryAttr>()) {
+              SmallVector<Attribute, 8> bytes;
+              int64_t total = memref.getShape().empty() ? 0 : memref.getShape()[0];
+              std::vector<uint8_t> buf((size_t)total, 0);
+              int64_t off = 0;
+              for (auto [mname, mty] :
+                   llvm::zip(st.getElementNames(), st.getElementTypes())) {
+                int64_t msize = byteSize(mty, layouts);
+                for (auto na : initDict.getValue()) {
+                  if (na.getName().str() != mname.str())
+                    continue;
+                  auto ia = na.getValue().dyn_cast<IntegerAttr>();
+                  if (!ia)
+                    continue;
+                  uint64_t v = ia.getValue().getZExtValue();
+                  for (int64_t i = 0; i < msize; ++i)
+                    buf[off + i] = (uint8_t)(v >> (8 * (msize - 1 - i)));
+                }
+                off += msize;
+              }
+              auto i8 = memref.getElementType();
+              for (uint8_t byte : buf)
+                bytes.push_back(rewriter.getIntegerAttr(i8, byte));
+              initValue = DenseElementsAttr::get(tensorTy, bytes);
+            }
       }
     }
     rewriter.replaceOpWithNewOp<memref::GlobalOp>(
@@ -2188,8 +2233,13 @@ struct CallFbOpLowering : public OpConversionPattern<scl::CallFbOp> {
     // Builtin standard FBs (timers TON/TOF/TP, counters CTU/CTD/CTUD, edges
     // R_TRIG/F_TRIG/SR/RS) lower to a runtime call on the instance DB
     // buffer, not a func.call (no FunctionBlockOp needed; fixed layouts in
-    // the FbLayoutCache match the runtime's interpretation).
+    // the FbLayoutCache match the runtime's interpretation). A user-defined
+    // FunctionBlockOp with the same name wins (e.g. an IEC PROGRAM named
+    // "counter" — the TIMER/COUNTER aliases are an S7-ism).
     std::string fbUp = llvm::StringRef(op.getFb()).upper();
+    if (op->getParentOfType<ModuleOp>().lookupSymbol<scl::FunctionBlockOp>(
+            op.getFb()))
+      fbUp = "";
     const char *rtName = nullptr;
     int mode = -1;
     if (fbUp == "TON") { rtName = "scl_rt_timer_fb"; mode = 0;
@@ -4314,7 +4364,8 @@ void SclToStdLoweringPass::runOnOperation() {
       CallFcOpLowering, CaseOpLowering, ConditionOpLowering,
       ConstantDateAndTimeOpLowering, ConstantDateOpLowering,
       ConstantOpLowering, ConstantS5TimeOpLowering, ConstantTimeOfDayOpLowering,
-      ConstantTimeOpLowering, DataBlockOpLowering, DialectCastOpLowering,
+      ConfigOpLowering, ConstantTimeOpLowering, DataBlockOpLowering,
+      DialectCastOpLowering,
       DivOpLowering, EndOpLowering, EqualLowering, ExpOpLowering,
       FunctionBlockOpLowering, FunctionOpLowering,
       GetDirectOpLowering, GetElementOpLowering, GetGlobalOpLowering,
