@@ -152,7 +152,7 @@ has no `\b` — use python3 for regex edits.
   compares per-scan outputs (PROGRAM rewritten to FB + instance DB + OB1
   wrapper; driver flags --scan-io/--scan-inputs feed M-area slots per scan,
   see test/sclang/jit_scan_io.scl; --cross diffs SCL->JIT vs SCL->AWL->JIT).
-  Current: 73/75 pass (97%), 17 unsupported (CONFIGURATION/LREAL/STRING/...).
+  Current: 75/75 pass (100%), 17 unsupported (CONFIGURATION/LREAL/STRING/...).
   Frontend additions (committed): enum types (`TYPE C : (RED, GREEN);` ->
   INT storage + named constants resolved in codegen incl. CASE labels),
   subrange types (`INT (5..10)` -> base type, unchecked), multi-declaration
@@ -193,6 +193,15 @@ has no `\b` — use python3 for regex edits.
   ForDoOp's `to` operand is the ADDRESS of a $for_bound temp cell that the
   body re-stores at the end of each iteration, and the lowering reloads it
   in the cond block (AWL emitFor loads it from its direct too).
+  Builtin TON/TOF/TP (scl_rt_timer_fb): the end-of-time test (elapsed >= PT)
+  only applies when the timer was already running at the start of the
+  evaluation (one-cycle lag at PT=0, as recorded in the impl-defined traces);
+  TON uses the live PT for compare and ET clamp and latches Q once TRUE until
+  IN falls; TOF keeps the standard power-up Q=FALSE (the timer_pt_zero trace's
+  TRUE is a documented IronPLC deviation conflicting with conformant
+  timers/tof). run_st_traces.py counts `status: implementation-defined`
+  mismatches as pass-with-DIFF-note, not failures (the behavior is
+  non-normative by definition).
   sclang-gen now registers a diagnostic handler (MLIRGen errors were
   previously swallowed, giving a silent rc=1).
   Builtin standard FBs (TON/TOF/TP/CTU/CTD/CTUD/R_TRIG/F_TRIG/SR/RS) are

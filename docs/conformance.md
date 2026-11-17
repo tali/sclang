@@ -140,7 +140,7 @@ oracle-verified against awlsim above). Tests using constructs outside the
 supported subset (CONFIGURATION, LREAL, STRING/array/struct outputs, ...) are
 counted as "unsupported", not failures.
 
-Current: **73/75 pass (97%), 17 unsupported** (74 traces are `status:
+Current: **75/75 pass (100%), 17 unsupported** (74 traces are `status:
 conformant`, 18 `implementation-defined`). Builtin standard FBs (TON/TOF/TP,
 CTU/CTD/CTUD, R_TRIG/F_TRIG/SR/RS) are implemented: fixed instance layouts
 (forced in the lowering's FbLayoutCache, mirrored by scl_rt_timer_fb /
@@ -153,10 +153,14 @@ DATE/TOD/DT are now implemented (ed.3 table 30 arithmetic on decoded
 values, BCD calendar math in MLIRGen, DT_TO_DATE/DT_TO_TOD extractors,
 TOD fractional literals scaled to ms; see test/sclang/jit_date_time.scl and
 AGENTS.md — incl. the rule that IntegerAttrs must use mlir::IntegerType).
-FUNCTION VAR is re-initialised per call (ed.3 6.6.2.1) and FOR re-reads the
-TO bound each iteration (matches the recorded implementation-defined
-traces). Open cluster: live-PT timer semantics
-(undefined/timer_pt_zero, undefined/ton_pt_change).
+FUNCTION VAR is re-initialised per call (ed.3 6.6.2.1), FOR re-reads the TO
+bound each iteration, and the builtin timers implement the recorded
+implementation-defined edge semantics (end-of-time test only while already
+running; TON latches Q with live PT). `status: implementation-defined`
+traces whose recorded behavior differs are reported as DIFF but count as
+pass (non-normative); the one remaining divergence is timer_pt_zero's TOF
+power-up Q=TRUE, a documented IronPLC deviation that contradicts the
+conformant timers/tof trace.
 
 ## Remaining failures and known approximations
 

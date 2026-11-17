@@ -81,6 +81,7 @@ struct SimState {
     bool prevIn = false;
     bool running = false;
     bool finished = false; // TOF: PT expired while IN = FALSE (ET holds PT)
+    bool qLatch = false;   // TON: Q rose once and stays TRUE until IN falls
     uint64_t startMs = 0;
   };
   std::map<uint64_t, TimerFbState> timerFbs;
@@ -920,21 +921,31 @@ void scl_rt_timer_fb(uint8_t mode, uint64_t idbPtr) {
   if (pt < 0)
     pt = 0;
   uint64_t now = s.clockMs;
-  uint64_t elapsed = st.running ? now - st.startMs : 0;
+  // The end-of-time test (elapsed >= PT) is only applied while the timer was
+  // already running at the start of this evaluation, not on the cycle of the
+  // edge that starts it (IronPLC behavior recorded in the implementation-
+  // defined traces: with PT = 0 the outputs switch one cycle after the edge).
+  bool wasRunning = st.running;
   bool q = false;
   int32_t et = 0;
   switch (mode) {
-  case 0: // TON: on-delay
+  case 0: { // TON: on-delay. The live PT is used for the comparison and for
+    // clamping ET; once Q is TRUE it stays TRUE until IN falls (latched).
     if (in && !st.prevIn) {
       st.running = true;
       st.startMs = now;
-      elapsed = 0;
     }
-    if (!in)
+    if (!in) {
       st.running = false;
-    q = st.running && elapsed >= (uint64_t)pt;
+      st.qLatch = false;
+    }
+    uint64_t elapsed = st.running ? now - st.startMs : 0;
+    if (st.running && wasRunning && elapsed >= (uint64_t)pt)
+      st.qLatch = true;
+    q = st.running && st.qLatch;
     et = st.running ? (int32_t)std::min<uint64_t>(elapsed, (uint64_t)pt) : 0;
     break;
+  }
   case 1: // TOF: off-delay (IEC ed.3 fig. 17 c): Q follows IN up at once;
     // on the falling edge of IN timing starts; Q stays TRUE until elapsed
     // reaches PT, then falls and ET holds PT while IN stays FALSE.
@@ -948,18 +959,21 @@ void scl_rt_timer_fb(uint8_t mode, uint64_t idbPtr) {
         st.running = true;
         st.startMs = now;
         st.finished = false;
-        elapsed = 0;
       }
-      if (st.running && elapsed >= (uint64_t)pt) {
+      uint64_t elapsed = st.running ? now - st.startMs : 0;
+      if (st.running && wasRunning && elapsed >= (uint64_t)pt) {
         st.running = false;
         st.finished = true;
       }
+      // Q = FALSE at power-up (standard default initial value; the
+      // implementation-defined timer_pt_zero trace records IronPLC's
+      // deviating TRUE here — see run_st_traces.py's impl-defined handling)
       q = st.running;
       et = st.running ? (int32_t)std::min<uint64_t>(elapsed, (uint64_t)pt)
                       : (st.finished ? pt : 0);
     }
     break;
-  default: // TP: pulse (IEC ed.3 fig. 17 a): on the rising edge of IN a
+  default: { // TP: pulse (IEC ed.3 fig. 17 a): on the rising edge of IN a
     // pulse of length PT starts (Q = TRUE, ET counts up regardless of IN);
     // after PT, Q = FALSE and ET holds PT while IN stays TRUE, else 0.
     // A rising edge of IN during a running pulse is ignored (IEC fig. 17 a).
@@ -967,16 +981,17 @@ void scl_rt_timer_fb(uint8_t mode, uint64_t idbPtr) {
       st.running = true;
       st.startMs = now;
       st.finished = false;
-      elapsed = 0;
     }
-    if (st.running && elapsed >= (uint64_t)pt) {
+    uint64_t elapsed = st.running ? now - st.startMs : 0;
+    if (st.running && wasRunning && elapsed >= (uint64_t)pt) {
       st.running = false;
       st.finished = true;
     }
-    q = st.running && elapsed < (uint64_t)pt;
+    q = st.running;
     et = st.running ? (int32_t)std::min<uint64_t>(elapsed, (uint64_t)pt)
                     : (st.finished && in ? pt : 0);
     break;
+  }
   }
   st.prevIn = in;
   fbWriteByte(p, 8, q ? 1 : 0);

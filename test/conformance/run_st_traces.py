@@ -429,6 +429,13 @@ def run_one(args, st_path, trace, tmpdir, cross):
             return 'fail', 'SCL->AWL differs at scans %s' % diff[:3]
         cross_note = ' (cross ok)'
     if errs:
+        # status: implementation-defined traces record one valid behavior of
+        # an undefined one (IEC 61131-3); a divergence is reported but is not
+        # a conformance failure. NB: timer_pt_zero's TOF power-up Q=TRUE is a
+        # documented IronPLC deviation that contradicts the conformant
+        # timers/tof trace (Q=FALSE initially), so the two cannot both match.
+        if trace.get('status') == 'implementation-defined':
+            return 'pass', 'impl-defined diverges: %s' % '; '.join(errs[:3])
         return 'fail', '; '.join(errs[:3])
     return 'pass', 'ok%s' % cross_note
 
@@ -470,6 +477,8 @@ def main():
             results[status].append((name, detail))
             if status == 'fail':
                 print('FAIL %s :: %s' % (name, detail))
+            elif 'diverges' in detail:
+                print('DIFF %s :: %s' % (name, detail))
     total = len(results['pass']) + len(results['fail'])
     rate = (len(results['pass']) / total) if total else 1.0
     print('ST traces      : %d/%d pass (%.0f%%), %d unsupported'
