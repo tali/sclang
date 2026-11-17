@@ -76,8 +76,14 @@ static int widthOf(Type t) {
     return lt.getWidth(); // bool = 1, byte = 8
   if (auto it = dyn_cast<scl::IntegerType>(t))
     return it.getWidth();
+  if (auto it = dyn_cast<IntegerType>(t))
+    return it.getWidth(); // builtin iN (awl value types)
+  if (auto ft = dyn_cast<FloatType>(t))
+    return ft.getWidth();
   if (isa<scl::RealType>(t))
     return 32;
+  if (isa<scl::LrealType>(t))
+    return 64;
   // composites occupy their flat byte size
   if (auto at = dyn_cast<scl::ArrayType>(t)) {
     int64_t count = 1;
@@ -120,6 +126,11 @@ struct FuncConverter {
   const llvm::StringMap<AwlFbLayout> *fbLayouts = nullptr;
   Value currentFbArg; // block arg holding the instance DB of the current FB
   DenseMap<Value, Value> materialized;        // scl value -> awl value
+  // scl values used more than once are spilled to an M-area temp; every
+  // materialize() call then returns a fresh load of the spill, because each
+  // AWL arithmetic/compare op consumes its accumulator operands (a value on
+  // the ACC stack can only be consumed once).
+  DenseMap<Value, scl::DirectType> spillTemps;
   // FC name (uppercased) -> input parameter names in declaration order,
   // collected before any function is erased
   llvm::StringMap<SmallVector<std::string, 4>> fcSignatures;
@@ -186,8 +197,18 @@ struct FuncConverter {
           return atTy.getElementType();
     }
     if (auto ge = addr.getDefiningOp<scl::GetElementOp>()) {
-      if (auto bt = ge.getBaseType())
-        return *bt;
+      if (auto btOpt = ge.getBaseType()) {
+        // the declared type of the element address is the FIELD type, not
+        // the base struct's type (matters for nested structs: r.br.x)
+        Type bt = *btOpt;
+        if (auto st = bt.dyn_cast<scl::StructType>()) {
+          for (auto [fname, fty] :
+               llvm::zip(st.getElementNames(), st.getElementTypes()))
+            if (fname.str() == ge.getName().str())
+              return fty;
+        }
+        return bt;
+      }
     }
     return addr.getType().cast<scl::AddressType>().getElementType();
   }
@@ -327,9 +348,22 @@ struct FuncConverter {
                                    dt.getBit(), dt.getWidth());
   }
 
+  // awl values holding signed scl::IntegerType data (INT): L zero-extends
+  // words like awlsim, so widening a signed word to a dword needs an explicit
+  // sign extension (SLD 16; SRD 16)
+  DenseSet<Value> signedVals;
+
   Value castTo(Value v, Type t) {
     if (!v || v.getType() == t)
       return v;
+    if (t.isInteger(32) && v.getType().isInteger(16) && signedVals.count(v)) {
+      auto i32 = IntegerType::get(ctx, 32);
+      Value w = b.create<awl::CastOp>(loc, i32, v);
+      Value s1 = b.create<awl::ShiftOp>(loc, i32, strAttr("sld"), w,
+                                        constI(APInt(32, 16), i32));
+      return b.create<awl::ShiftOp>(loc, i32, strAttr("srd"), s1,
+                                    constI(APInt(32, 16), i32));
+    }
     return b.create<awl::CastOp>(loc, t, v);
   }
 
@@ -421,6 +455,13 @@ struct FuncConverter {
   }
 
   Value materialize(Value v) {
+    auto sp = spillTemps.find(v);
+    if (sp != spillTemps.end()) {
+      Type rt = awlValueType(ctx, v.getType());
+      if (rt && rt.isInteger(8))
+        rt = IntegerType::get(ctx, 16);
+      return b.create<awl::LoadOp>(loc, rt, directValue(sp->second));
+    }
     auto it = materialized.find(v);
     if (it != materialized.end())
       return it->second;
@@ -441,35 +482,44 @@ struct FuncConverter {
                                << v.getType();
       return nullptr;
     }
-    if (auto call = dyn_cast<scl::CallFcOp>(def)) {
-      r = emitCallFc(call, true);
-    } else if (auto c = dyn_cast<scl::ConstantOp>(def)) {
+    // Pure producers (loads, constants) are re-emitted on every call and
+    // never cached: each AWL arithmetic op consumes the top two accumulator
+    // entries, so every use needs its own L.
+    if (auto c = dyn_cast<scl::ConstantOp>(def)) {
       Attribute attr = c.getValue();
       if (isa<StringAttr>(attr)) {
         emitError(def->getLoc()) << "string constants are not supported by "
                                     "the AWL backend";
         return nullptr;
       }
-      r = b.create<awl::ConstOp>(loc, rt, attr);
-    } else if (auto l = dyn_cast<scl::LoadOp>(def)) {
+      return b.create<awl::ConstOp>(loc, rt, attr);
+    }
+    if (auto l = dyn_cast<scl::LoadOp>(def)) {
       scl::DirectType dt = directOf(l.getAddress());
       if (!dt)
         return nullptr;
       Value loaded = b.create<awl::LoadOp>(loc, awlDirectValueType(ctx, dt),
                                            directValue(dt));
-      r = castTo(loaded, rt);
+      if (isa<scl::IntegerType>(l.getType()))
+        signedVals.insert(loaded);
+      return castTo(loaded, rt);
+    }
+    if (auto call = dyn_cast<scl::CallFcOp>(def)) {
+      r = emitCallFc(call, true);
     } else if (isa<scl::AddOp, scl::SubOp, scl::MulOp, scl::DivOp,
                    scl::AndOp, scl::OrOp, scl::XOrOp>(def)) {
-      Value a = materialize(def->getOperand(0));
-      Value b2 = materialize(def->getOperand(1));
-      if (!a || !b2)
-        return nullptr;
       if (isa<scl::LogicalType>(v.getType())) {
         // boolean logic: rlo chain over bit directs
         r = boolLogic(def);
       } else {
-        a = castTo(a, rt);
-        b2 = castTo(b2, rt);
+        // operands via temps, loaded adjacently right before the op (the
+        // accumulator stack only keeps the top two entries usable)
+        scl::DirectType dA = tempOf(def->getOperand(0), rt);
+        scl::DirectType dB = tempOf(def->getOperand(1), rt);
+        if (!dA || !dB)
+          return nullptr;
+        Value a = b.create<awl::LoadOp>(loc, rt, directValue(dA));
+        Value b2 = b.create<awl::LoadOp>(loc, rt, directValue(dB));
         if (isa<scl::AddOp>(def))
           r = b.create<awl::AddOp>(loc, rt, a, b2);
         else if (isa<scl::SubOp>(def))
@@ -486,21 +536,36 @@ struct FuncConverter {
           r = b.create<awl::XOrOp>(loc, rt, a, b2);
       }
     } else if (auto m = dyn_cast<scl::ModOp>(def)) {
-      // a mod b = a - (a / b) * b
+      // a mod b = a - (a / b) * b, through M-area temps: T does not pop the
+      // 4-deep accumulator stack and each arith op consumes its two top
+      // operands, so every intermediate is stored to a temp and re-loaded.
+      // Word ops (/I, *I, -I) sign-handle their operands (cast through i16);
+      // /I packs quotient+remainder into ACCU1, so the quotient is extracted
+      // with T dQ (stores the low word).
       Value a = castTo(materialize(m.getLhs()), rt);
-      Value b2 = castTo(materialize(m.getRhs()), rt);
-      if (!a || !b2)
+      if (!a)
         return nullptr;
-      Value q = b.create<awl::DivOp>(loc, rt, a, b2);
-      Value t = b.create<awl::MulOp>(loc, rt, q, b2);
-      r = b.create<awl::SubOp>(loc, rt, a, t);
+      scl::DirectType dA = allocDirect(rt);
+      b.create<awl::StoreOp>(loc, a, directValue(dA));
+      Value b2 = castTo(materialize(m.getRhs()), rt);
+      if (!b2)
+        return nullptr;
+      scl::DirectType dB = allocDirect(rt);
+      b.create<awl::StoreOp>(loc, b2, directValue(dB));
+      auto ld = [&](scl::DirectType dt) {
+        return b.create<awl::LoadOp>(loc, rt, directValue(dt));
+      };
+      scl::DirectType dQ = allocDirect(rt);
+      Value q = b.create<awl::DivOp>(loc, rt, ld(dA), ld(dB));
+      b.create<awl::StoreOp>(loc, q, directValue(dQ));
+      scl::DirectType dT = allocDirect(rt);
+      Value t = b.create<awl::MulOp>(loc, rt, ld(dQ), ld(dB));
+      b.create<awl::StoreOp>(loc, t, directValue(dT));
+      r = b.create<awl::SubOp>(loc, rt, ld(dA), ld(dT));
     } else if (isa<scl::EqualOp, scl::NotEqualOp, scl::LessThanOp,
                    scl::LessEqualOp, scl::GreaterThanOp, scl::GreaterEqualOp>(
                    def)) {
-      Value a = materialize(def->getOperand(0));
-      Value b2 = materialize(def->getOperand(1));
-      if (!a || !b2)
-        return nullptr;
+      Value a, b2;
       if (isa<scl::LogicalType>(def->getOperand(0).getType())) {
         if (!isa<scl::EqualOp, scl::NotEqualOp>(def)) {
           emitError(def->getLoc()) << "ordering comparison on bools is not "
@@ -512,8 +577,12 @@ struct FuncConverter {
         Type ot = awlValueType(ctx, def->getOperand(0).getType());
         if (ot && ot.isInteger(8))
           ot = IntegerType::get(ctx, 16);
-        a = castTo(a, ot);
-        b2 = castTo(b2, ot);
+        scl::DirectType dA = tempOf(def->getOperand(0), ot);
+        scl::DirectType dB = tempOf(def->getOperand(1), ot);
+        if (!dA || !dB)
+          return nullptr;
+        a = b.create<awl::LoadOp>(loc, ot, directValue(dA));
+        b2 = b.create<awl::LoadOp>(loc, ot, directValue(dB));
         Type i1 = IntegerType::get(ctx, 1);
         if (isa<scl::EqualOp>(def))
           r = b.create<awl::CmpEqOp>(loc, i1, a, b2);
@@ -531,10 +600,13 @@ struct FuncConverter {
     } else if (auto n = dyn_cast<scl::UnaryNotOp>(def)) {
       r = boolNot(n.getRhs());
     } else if (auto n = dyn_cast<scl::UnaryMinusOp>(def)) {
+      // 0 - x: the zero must be loaded first (stack [0, x] so that -I
+      // computes ACCU2 - ACCU1 = 0 - x)
+      Value z = constI(APInt(rt.getIntOrFloatBitWidth(), 0), rt);
       Value a = castTo(materialize(n.getRhs()), rt);
       if (!a)
         return nullptr;
-      r = b.create<awl::SubOp>(loc, rt, constI(APInt(rt.getIntOrFloatBitWidth(), 0), rt), a);
+      r = b.create<awl::SubOp>(loc, rt, z, a);
     } else if (isa<scl::IntegerCastOp, scl::BitCastOp, scl::DialectCastOp>(
                    def)) {
       Value a = materialize(def->getOperand(0));
@@ -546,8 +618,18 @@ struct FuncConverter {
           << "operation not supported by the AWL backend: " << def->getName();
       return nullptr;
     }
-    materialized[v] = r;
-    return r;
+    // Computed values: spill to a temp right away (T does not pop the
+    // 4-deep accumulator stack, and the value would be clobbered by the next
+    // loads) and hand out a fresh load per use.
+    if (r) {
+      scl::DirectType dt = allocDirect(rt);
+      if (!dt)
+        return nullptr;
+      b.create<awl::StoreOp>(loc, r, directValue(dt));
+      spillTemps[v] = dt;
+      return b.create<awl::LoadOp>(loc, rt, directValue(dt));
+    }
+    return nullptr;
   }
 
   scl::DirectType tempBit() {
@@ -761,6 +843,26 @@ struct FuncConverter {
     }
   }
 
+  // Force an scl value into an M-area temp (spilling if computed) and return
+  // the temp's direct type. AWL arithmetic consumes the top two accumulator
+  // entries, so operands must be loaded adjacently right before the op —
+  // intermediate results have to live in temps, not on the 4-deep stack
+  // (T does not pop it).
+  scl::DirectType tempOf(Value v, Type rt) {
+    auto sp = spillTemps.find(v);
+    if (sp != spillTemps.end())
+      return sp->second;
+    Value m = materialize(v);
+    if (!m)
+      return nullptr;
+    scl::DirectType dt = allocDirect(rt);
+    if (!dt)
+      return nullptr;
+    b.create<awl::StoreOp>(loc, m, directValue(dt));
+    spillTemps[v] = dt;
+    return dt;
+  }
+
   Value materializeCondition(Value cond) { return materialize(cond); }
 
   // Like materialize() but always emits a fresh producer (used where the
@@ -770,14 +872,39 @@ struct FuncConverter {
     Operation *def = v.getDefiningOp();
     if (!def)
       return materialize(v);
+    Type rt = awlValueType(ctx, v.getType());
+    if (rt && rt.isInteger(8))
+      rt = IntegerType::get(ctx, 16);
     if (auto l = dyn_cast<scl::LoadOp>(def)) {
       scl::DirectType dt = directOf(l.getAddress());
       if (!dt)
         return nullptr;
-      return b.create<awl::LoadOp>(loc, awlDirectValueType(ctx, dt),
-                                   directValue(dt));
+      return castTo(b.create<awl::LoadOp>(loc, awlDirectValueType(ctx, dt),
+                                           directValue(dt)),
+                    rt);
     }
-    return materialize(v);
+    if (auto c = dyn_cast<scl::ConstantOp>(def)) {
+      if (isa<StringAttr>(c.getValue()))
+        return materialize(v);
+      return b.create<awl::ConstOp>(loc, rt, c.getValue());
+    }
+    // computed value: spill it once (right after its computation, while it
+    // is on top of the accumulator stack), then hand out fresh loads — the
+    // accumulator stack is only 4 deep and T does not pop, so a value cannot
+    // be consumed from the stack twice
+    auto sp = spillTemps.find(v);
+    if (sp == spillTemps.end()) {
+      Value r = materialize(v);
+      if (!r)
+        return nullptr;
+      scl::DirectType dt = allocDirect(rt);
+      if (!dt)
+        return nullptr;
+      b.create<awl::StoreOp>(loc, r, directValue(dt));
+      spillTemps[v] = dt;
+      sp = spillTemps.find(v);
+    }
+    return b.create<awl::LoadOp>(loc, rt, directValue(sp->second));
   }
 
   void emitLabel(llvm::StringRef name) {
@@ -1102,11 +1229,20 @@ struct FuncConverter {
 
   LogicalResult emitCase(scl::CaseOp c,
                          DenseMap<Block *, std::string> &blockLabels) {
-    Value sel = materialize(c.getSelector());
+    Type st = awlValueType(ctx, c.getSelector().getType());
+    Value sel = castTo(materialize(c.getSelector()), st);
     if (!sel)
       return failure();
-    Type st = awlValueType(ctx, c.getSelector().getType());
-    sel = castTo(sel, st);
+    // A computed selector cannot be re-loaded (only LoadOp defs can), and
+    // each compare needs the selector on top of the accumulator stack, so
+    // spill it once and load the spill before every compare.
+    scl::DirectType selSpill = nullptr;
+    if (!isa_and_nonnull<scl::LoadOp>(c.getSelector().getDefiningOp())) {
+      selSpill = allocDirect(st);
+      if (!selSpill)
+        return failure();
+      b.create<awl::StoreOp>(loc, sel, directValue(selSpill));
+    }
     ArrayAttr caseValues = c.getCaseValues();
     // one region (single block) per case; the last is the else block
     SmallVector<Region *, 8> regions;
@@ -1125,7 +1261,9 @@ struct FuncConverter {
     for (int i = 0; i + 1 < numRegions; ++i) {
       auto vals = cast<DenseI32ArrayAttr>(caseValues[i]);
       for (int32_t val : vals.asArrayRef()) {
-        Value selV = castTo(materializeFresh(c.getSelector()), st);
+        Value selV = selSpill
+                         ? b.create<awl::LoadOp>(loc, st, directValue(selSpill))
+                         : castTo(materializeFresh(c.getSelector()), st);
         Value cv = constI(APInt(st.getIntOrFloatBitWidth(), val, true), st);
         Value cc = b.create<awl::CmpEqOp>(loc, IntegerType::get(ctx, 1), selV,
                                           castTo(cv, st));
