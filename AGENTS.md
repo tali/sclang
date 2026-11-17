@@ -147,6 +147,13 @@ has no `\b` — use python3 for regex edits.
   --twoaccu for it — permanent under our 4-accu default).
   dbpointer.awl line 99 (P#"Data".DTVAR1 quoted-DB-name extension) is
   also open; awlsim itself needs a symbol table for that file.
+  ST/SCL trace tier: `test/conformance/run_st_traces.py` runs the 92
+  s-celles IEC 61131-3 `.st`/`.trace` pairs through the SCL JIT engine and
+  compares per-scan outputs (PROGRAM rewritten to FB + instance DB + OB1
+  wrapper; driver flags --scan-io/--scan-inputs feed M-area slots per scan,
+  see test/sclang/jit_scan_io.scl; --cross diffs SCL->JIT vs SCL->AWL->JIT).
+  Current: 26/75 pass, 17 unsupported (CONFIGURATION/LREAL/STRING/...).
+  Update this and docs/conformance.md ("ST/SCL trace tier") when it changes.
   Fixed since last writing: runtime ACCU1..4 registers
   (awl.accu_get/accu_set, values now persist across labels and calls),
   which unblocked insn_4ACCU, the insn_JUMP SPZ/LOOP sections and

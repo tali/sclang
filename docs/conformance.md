@@ -64,7 +64,8 @@ function (documented approximation; system blocks SFC/SFB included).
 | `lopez-dev-Siemens-SCL-Source-Files` | 15 TIA Portal SCL exports | repo license |
 | `thomas-v2-S7-PLC-Snippets` | SCL multi-file project (Formelparser), TIA Put/Get OUC, Quine AWL | repo license |
 | `zjx195-TIA-Portal-SCL`, `LeoSunSET-...-Algorithms` | more SCL/AWL samples | repo license |
-| `tallakt-awltool`, `PLC-lang-rusty`, `s-celles-iec61131-conformance` | AWL tooling / IEC ST (ST is not SCL; used only for reference) | various |
+| `tallakt-awltool`, `PLC-lang-rusty` | AWL tooling | various |
+| `s-celles-iec61131-conformance` | 92 IEC 61131-3 ST conformance programs, each with a `.trace` file of per-scan expected outputs (CC0) — ground truth for the ST/SCL trace tier below | CC0 |
 
 Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 
@@ -121,6 +122,31 @@ Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
   `anyAutoType`/`anyTypeCodeOf`, incl. ARRAY -> (elem code, elem count) —
   plus FB VAR_IN ANY params now stage the full 10-byte header into the
   instance DB, not just the raw pointer dword) and any-to-instance-db.awl.
+
+## ST/SCL trace tier (s-celles IEC 61131-3, value-level)
+
+`test/conformance/run_st_traces.py` executes the 92 `.st`/`.trace` pairs of
+`s-celles-iec61131-conformance` through the SCL engine and compares every
+per-scan output. Each `PROGRAM` is rewritten to a `FUNCTION_BLOCK` plus an
+instance `DATA_BLOCK`, wrapped in an `OB1` that copies per-scan inputs from
+fixed M-area slots into the instance, calls the block and copies the outputs
+back. The driver runs it with `--emit=jit --jit-cycles=N --cycle-ms=<period>`
+`--scan-io=... --scan-inputs=...` (writes scan inputs before each OB1 scan,
+prints `scan i: name=value ...` after it; see test/sclang/jit_scan_io.scl)
+and the observed scan lines are compared to the trace. `--cross` also runs
+each wrapper SCL->AWL->JIT and requires identical scan lines (differential
+check of the SCL and AWL lowering paths; the AWL path itself is
+oracle-verified against awlsim above). Tests using constructs outside the
+supported subset (CONFIGURATION, LREAL, STRING/array/struct outputs, ...) are
+counted as "unsupported", not failures.
+
+Current: **26/75 pass (35%), 17 unsupported** (74 traces are `status:
+conformant`, 18 `implementation-defined`). Open clusters: standard FBs
+(CTU/CTD/CTUD/R_TRIG/F_TRIG/SR/RS as real implementations, not stubs), array
+literals `[...]`, enum types, SHL/SHR/ROL/ROR, unsigned-source conversions
+(UINT->DINT zero-extend), DATE/TOD/DT arithmetic, FUNCTION VAR retention,
+FB EN/ENO, named-vs-positional call binding, REAL output observation via
+__BITS.
 
 ## Remaining failures and known approximations
 
