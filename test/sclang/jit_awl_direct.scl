@@ -1,0 +1,39 @@
+// RUN: printf '0 x=3\n1 x=2\n2 x=7\n' > %t.in && sclang --emit=jit-awl --jit-cycles=3 --area-size M=65536 --area-size DB1=8192 --scan-io=in:x=M/0/2 --scan-io=out:branch=M/2/2 --scan-inputs=%t.in %s 2>&1 | FileCheck %s
+// RUN: printf '0 x=3\n1 x=2\n2 x=7\n' > %t.in && sclang --emit=jit --jit-cycles=3 --scan-io=in:x=M/0/2 --scan-io=out:branch=M/2/2 --scan-inputs=%t.in %s 2>&1 | FileCheck %s
+// The no-text SCL->AWL execution path (--emit=jit-awl): the module is lowered
+// to awl-dialect ops in memory and JIT-run without an AWL text round-trip,
+// so the block names must follow the AWL convention (FB1/DB1/OB1). cnt
+// accumulates x each scan: branch = 3, 5, 12 — identical to --emit=jit.
+// CHECK: scan 0: branch=3
+// CHECK: scan 1: branch=5
+// CHECK: scan 2: branch=12
+function_block FB1
+var_input
+  x : int;
+end_var
+var_output
+  branch : int;
+end_var
+var
+  cnt : int := 0;
+end_var
+begin
+  cnt := cnt + x;
+  branch := cnt;
+end_function_block
+
+data_block DB1
+  FB1
+end_data_block
+
+function OB1 : int
+begin
+  DB1.x := %MW0;
+  FB1."DB1"();
+  %MW2 := DB1.branch;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

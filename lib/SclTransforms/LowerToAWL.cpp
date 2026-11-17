@@ -56,8 +56,8 @@ using AwlFbLayout = llvm::StringMap<AwlFbMember>;
 
 // Maps an scl type to the value type used in the awl dialect.
 static Type awlValueType(MLIRContext *ctx, Type t) {
-  if (isa<scl::LogicalType>(t))
-    return IntegerType::get(ctx, 1);
+  if (auto lt = dyn_cast<scl::LogicalType>(t))
+    return IntegerType::get(ctx, lt.getWidth()); // BOOL=1, BYTE=8, WORD/UINT=16, ...
   if (auto it = dyn_cast<scl::IntegerType>(t))
     return IntegerType::get(ctx, it.getWidth());
   if (isa<scl::RealType>(t))
@@ -126,11 +126,19 @@ struct FuncConverter {
   const llvm::StringMap<AwlFbLayout> *fbLayouts = nullptr;
   Value currentFbArg; // block arg holding the instance DB of the current FB
   DenseMap<Value, Value> materialized;        // scl value -> awl value
-  // scl values used more than once are spilled to an M-area temp; every
+  // Computed scl values are spilled to an M-area temp right at their
+  // definition (materialize() is called eagerly there); every later
   // materialize() call then returns a fresh load of the spill, because each
   // AWL arithmetic/compare op consumes its accumulator operands (a value on
-  // the ACC stack can only be consumed once).
+  // the ACC stack can only be consumed once). The spill store at the
+  // definition dominates every use.
   DenseMap<Value, scl::DirectType> spillTemps;
+  // Operand temps used by tempOf(): a stable M-area slot per scl value that
+  // is (re-)stored at every use, so the slot is always initialized at the
+  // immediately following load regardless of control flow. Kept separate
+  // from spillTemps so pure producers (constants/loads) re-materialize
+  // freshly instead of hitting a stale spill.
+  DenseMap<Value, scl::DirectType> operandTemps;
   // FC name (uppercased) -> input parameter names in declaration order,
   // collected before any function is erased
   llvm::StringMap<SmallVector<std::string, 4>> fcSignatures;
@@ -353,18 +361,24 @@ struct FuncConverter {
   // sign extension (SLD 16; SRD 16)
   DenseSet<Value> signedVals;
 
-  Value castTo(Value v, Type t) {
+  Value castTo(Value v, Type t, bool zext = false) {
     if (!v || v.getType() == t)
       return v;
-    if (t.isInteger(32) && v.getType().isInteger(16) && signedVals.count(v)) {
+    if (t.isInteger(32) && v.getType().isInteger(16) && !zext &&
+        signedVals.count(v)) {
+      // Sign-extend i16 -> i32 via SLD 16 then SSD 16 (SRD is a *logical*
+      // shift in S7/awlsim — only SSD fills with the sign bit).
       auto i32 = IntegerType::get(ctx, 32);
       Value w = b.create<awl::CastOp>(loc, i32, v);
       Value s1 = b.create<awl::ShiftOp>(loc, i32, strAttr("sld"), w,
                                         constI(APInt(32, 16), i32));
-      return b.create<awl::ShiftOp>(loc, i32, strAttr("srd"), s1,
+      return b.create<awl::ShiftOp>(loc, i32, strAttr("ssd"), s1,
                                     constI(APInt(32, 16), i32));
     }
-    return b.create<awl::CastOp>(loc, t, v);
+    auto op = b.create<awl::CastOp>(loc, t, v);
+    if (zext)
+      op.setZextAttr(b.getUnitAttr()); // unsigned widening: zero-extend
+    return op;
   }
 
   Value constI(llvm::APInt v, Type t) {
@@ -449,7 +463,12 @@ struct FuncConverter {
       scl::DirectType dt = scl::DirectType::get(
           ctx, scl::DirectArea::Marker, 0, kResultByte, 0,
           rt.getIntOrFloatBitWidth());
-      return b.create<awl::LoadOp>(loc, rt, directValue(dt));
+      Value r = b.create<awl::LoadOp>(loc, rt, directValue(dt));
+      // L loads zero-extend, so a widening cast to i32 must sign-extend via
+      // SLD/SRD for signed integer results (castTo consults signedVals).
+      if (isa<scl::IntegerType>(call.getResult().getType()))
+        signedVals.insert(r);
+      return r;
     }
     return nullptr;
   }
@@ -491,6 +510,19 @@ struct FuncConverter {
         emitError(def->getLoc()) << "string constants are not supported by "
                                     "the AWL backend";
         return nullptr;
+      }
+      // The constant's attribute type can differ from the awl result type
+      // (e.g. a bool constant stored as an i16 attr): coerce integer attrs
+      // to the result type, else the awl.const is malformed (attr type !=
+      // result type) and fails to lower.
+      if (auto ia = dyn_cast<IntegerAttr>(attr)) {
+        unsigned w = rt.getIntOrFloatBitWidth();
+        APInt v = ia.getValue();
+        if (v.getBitWidth() > w)
+          v = v.trunc(w);
+        else if (v.getBitWidth() < w)
+          v = v.zext(w); // bools are 0/1, zero-extend on widening
+        attr = IntegerAttr::get(rt, v);
       }
       return b.create<awl::ConstOp>(loc, rt, attr);
     }
@@ -612,7 +644,13 @@ struct FuncConverter {
       Value a = materialize(def->getOperand(0));
       if (!a)
         return nullptr;
-      r = castTo(a, rt);
+      // Widening casts sign-extend only for signed (IntegerType) sources and
+      // only when the cast is not marked zext (BYTE/WORD/UINT are unsigned
+      // bit strings).
+      bool zext = isa<scl::LogicalType>(def->getOperand(0).getType());
+      if (auto ic = dyn_cast<scl::IntegerCastOp>(def))
+        zext = zext || (bool)ic.getZextAttr();
+      r = castTo(a, rt, zext);
     } else {
       emitError(def->getLoc())
           << "operation not supported by the AWL backend: " << def->getName();
@@ -849,17 +887,24 @@ struct FuncConverter {
   // intermediate results have to live in temps, not on the 4-deep stack
   // (T does not pop it).
   scl::DirectType tempOf(Value v, Type rt) {
-    auto sp = spillTemps.find(v);
-    if (sp != spillTemps.end())
-      return sp->second;
     Value m = materialize(v);
     if (!m)
       return nullptr;
-    scl::DirectType dt = allocDirect(rt);
-    if (!dt)
-      return nullptr;
+    // Always (re-)store at the current point: a cached slot may have been
+    // stored only inside a loop/conditional that did not execute on this
+    // path (e.g. a CSE-shared constant first used in a skipped loop), so the
+    // slot cannot be assumed initialized at a later use.
+    scl::DirectType dt;
+    auto sp = operandTemps.find(v);
+    if (sp != operandTemps.end()) {
+      dt = sp->second;
+    } else {
+      dt = allocDirect(rt);
+      if (!dt)
+        return nullptr;
+      operandTemps[v] = dt;
+    }
     b.create<awl::StoreOp>(loc, m, directValue(dt));
-    spillTemps[v] = dt;
     return dt;
   }
 
@@ -1083,7 +1128,12 @@ struct FuncConverter {
       emitError(op->getLoc()) << "loop condition outside a loop header";
       return failure();
     }
-    // pure value ops are emitted on demand by materialize()
+    // Pure value ops: materialize them right at their definition, so the
+    // spill store of a computed value dominates every later use. (Emitting
+    // lazily at the first use could place the store inside a loop body that
+    // runs zero times, leaving the temp stale at later uses.) Address-typed
+    // results (get* ops) are not values; they are resolved via directOf() at
+    // the load/store site instead.
     if (op->getNumResults() > 0 &&
         isa<scl::LoadOp, scl::ConstantOp, scl::AddOp, scl::SubOp, scl::MulOp,
             scl::DivOp, scl::ModOp, scl::ExpOp, scl::AndOp, scl::OrOp,
@@ -1092,8 +1142,16 @@ struct FuncConverter {
             scl::UnaryNotOp, scl::UnaryMinusOp, scl::IntegerCastOp,
             scl::BitCastOp, scl::DialectCastOp, scl::GetDirectOp,
             scl::GetVariableOp, scl::GetGlobalOp, scl::GetIndexOp,
-            scl::GetElementOp>(op))
+            scl::GetElementOp>(op)) {
+      for (Value r : op->getResults())
+        // skip address-typed results (resolved via directOf() at the
+        // load/store site) and composite values (arrays/structs, no scalar
+        // awl type) — those are only handled through directOf()
+        if (!isa<scl::AddressType>(r.getType()) &&
+            awlValueType(ctx, r.getType()) && !materialize(r))
+          return failure();
       return success();
+    }
     emitError(op->getLoc()) << "operation not supported by the AWL backend: "
                             << op->getName();
     return failure();
@@ -1382,6 +1440,12 @@ struct LowerToAWLPass
     : public PassWrapper<LowerToAWLPass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LowerToAWLPass)
 
+  /// When set (used by `sclang --emit=jit-awl`), synthesize the
+  /// `_mlir_ciface_OB1` wrapper block that the JIT driver invokes, mirroring
+  /// what the AWL text frontend generates (AwlGen) — the scl wrapper funcs
+  /// are erased, so without this the in-memory path would have no entry point.
+  bool synthCiface = false;
+
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<awl::AwlDialect>();
     registry.insert<cf::ControlFlowDialect>();
@@ -1477,13 +1541,44 @@ struct LowerToAWLPass
                          "AWL output; dropped");
       op->erase();
     }
+    // In-memory JIT path: the driver invokes the packed `_mlir_ciface_OB1`
+    // entry (the scl wrapper was erased above), so synthesize the same awl
+    // wrapper block the AWL text frontend generates: call OB1, then BE.
+    if (synthCiface) {
+      std::string ob1Name;
+      bool haveWrapper = false;
+      module.walk([&](awl::BlockOp op) {
+        if (op.getSymName() == "_mlir_ciface_OB1")
+          haveWrapper = true;
+        if (ob1Name.empty() &&
+            llvm::StringRef(op.getSymName()).upper() == "OB1")
+          ob1Name = op.getSymName().str();
+      });
+      if (!ob1Name.empty() && !haveWrapper) {
+        OpBuilder b(&getContext());
+        Location loc = module.getLoc();
+        b.setInsertionPointToEnd(module.getBody());
+        auto wrap = b.create<awl::BlockOp>(
+            loc, b.getStringAttr("_mlir_ciface_OB1"), IntegerAttr(),
+            IntegerAttr(), UnitAttr());
+        Block *entry = b.createBlock(&wrap.getBody());
+        b.setInsertionPointToStart(entry);
+        SmallVector<NamedAttribute, 1> attrs;
+        attrs.push_back(b.getNamedAttr(
+            "callee", FlatSymbolRefAttr::get(&getContext(), ob1Name)));
+        b.create<awl::CallOp>(loc, TypeRange{}, ValueRange{}, attrs);
+        b.create<awl::BeOp>(loc);
+      }
+    }
   }
 };
 
 } // namespace
 
-std::unique_ptr<Pass> createLowerToAWLPass() {
-  return std::make_unique<LowerToAWLPass>();
+std::unique_ptr<Pass> createLowerToAWLPass(bool synthCiface) {
+  auto p = std::make_unique<LowerToAWLPass>();
+  p->synthCiface = synthCiface;
+  return p;
 }
 
 } // namespace sclang

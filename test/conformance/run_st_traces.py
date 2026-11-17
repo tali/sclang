@@ -18,10 +18,12 @@
 #      scan i into the M slots before OB1 scan i and prints
 #      `scan i: name=value ...` for the output slots after each scan.
 #   3. The observed scan lines are compared to the .trace expectations.
-# With --cross, each wrapper is additionally lowered SCL->AWL (sclang-gen
-# --emit=awl) and JIT-run through the AWL frontend; its scan lines must match
-# the direct SCL JIT run (differential test of the two lowering paths, the
-# AWL path itself being oracle-verified against awlsim).
+# With --cross, each wrapper is additionally lowered SCL->AWL and JIT-run;
+# its scan lines must match the direct SCL JIT run (differential test of the
+# two lowering paths, the AWL path itself being oracle-verified against
+# awlsim). The default cross mode lowers to the awl dialect in memory
+# (sclang --emit=jit-awl, no AWL text round-trip); --cross-text additionally
+# runs the AWL text round-trip (sclang-gen --emit=awl, then -x=awl --emit=jit).
 #
 # Tests using constructs outside the supported subset (CONFIGURATION,
 # STRING/array/struct outputs, LREAL, ...) are counted as "unsupported",
@@ -586,6 +588,58 @@ def compare_scans(trace, observed, out_slots):
     return errs
 
 
+# LowerToAWL error substrings that mean "not representable in AWL" (skip the
+# differential check for that test, not a failure).
+CROSS_SKIP_MARKERS = ('unsupported', 'not supported', 'not representable',
+                      'unknown FB member')
+
+
+def run_cross(args, cross_src, cwpath, nscans, period_ms, io_args, infile,
+              observed, mode):
+    """Differential check of the AWL lowering against the direct SCL JIT run.
+    mode='mem': lower to the awl dialect in memory and JIT
+    (sclang -x=st --emit=jit-awl); mode='text': AWL text round-trip
+    (sclang-gen --emit=awl, then sclang -x=awl --emit=jit).
+    Returns (ok, note); a cross-skip (construct not representable in AWL)
+    returns ok=True with a skip note."""
+    with open(cwpath, 'w') as f:
+        f.write(cross_src)
+    # First run only the SCL->awl-dialect lowering: any failure there means
+    # the construct is not representable in AWL and the differential check is
+    # skipped (not failed) — same condition the text mode checks on sclang-gen.
+    rcg, outg = run_sclang(args.sclang,
+                           ['-x=st', '--emit=awl-mlir', cwpath])
+    if rcg != 0 or any(m in outg for m in CROSS_SKIP_MARKERS):
+        return True, 'cross-skip: %s' % outg[-120:].replace('\n', ' ')
+    # the AWL backend parks the FC param window at M byte 65280, so the cross
+    # run needs a full-size M area
+    if mode == 'mem':
+        src_args = ['-x=st', cwpath]
+        emit = '--emit=jit-awl'
+    else:
+        rcg, outg = run_sclang(args.sclang_gen,
+                               ['-x=st', '--emit=awl', cwpath])
+        if rcg != 0:
+            return True, 'cross-skip: %s' % outg[-120:].replace('\n', ' ')
+        src_args = ['-x=awl', cwpath + '.awl']
+        with open(cwpath + '.awl', 'w') as f:
+            f.write(outg)
+        emit = '--emit=jit'
+    base = src_args[:1] + [emit, '--jit-cycles', str(nscans),
+                           '--cycle-ms', str(period_ms),
+                           '--area-size', 'M=65536', '--area-size', 'DB1=8192']
+    base += io_args + ['--scan-inputs', infile, src_args[1]]
+    rc, out = run_sclang(args.sclang, base)
+    if rc not in (0, 2):
+        return False, 'awl jit rc=%d %s' % (rc, out[-200:])
+    obs2 = parse_scan_lines(out)
+    if obs2 != observed:
+        diff = [k for k in set(obs2) | set(observed)
+                if obs2.get(k) != observed.get(k)]
+        return False, 'SCL->AWL differs at scans %s' % diff[:3]
+    return True, 'cross ok'
+
+
 def awl_compat(wrapper, prog):
     """Rename wrapper identifiers to the AWL backend's OBn/FBn/FCn, DBn
     naming convention (PROGRAM prog -> FB1, instance DB inst -> DB1, other
@@ -745,38 +799,23 @@ def run_one(args, st_path, trace, tmpdir, cross):
     # between the two lowering paths — no differential check there
     if cross and not errs and trace.get('status') != 'implementation-defined' \
             and not has_var_initializers(raw):
-        awl = wpath + '.awl'
         # The AWL backend names blocks OBn/FBn/FCn and DBs DBn, so rename the
         # wrapper's program FB and instance DB (and any non-FCn FUNCTIONs).
         cross_src = awl_compat(wrapper, prog)
         cwpath = wpath + '.cross.scl'
-        with open(cwpath, 'w') as f:
-            f.write(cross_src)
-        rcg, outg = run_sclang(args.sclang_gen,
-                               ['-x=st', '--emit=awl', cwpath])
-        if rcg != 0 or 'unsupported' in outg or 'not supported' in outg \
-                or 'not representable' in outg or 'unknown FB member' in outg:
-            # constructs the AWL backend cannot represent (date/time, FB
-            # builtins, LREAL, strings, ...) are skipped, not failed: the
-            # differential check only applies where both paths run
-            return 'pass', 'ok (cross-skip: %s)' % outg[-120:].replace('\n', ' ')
-        with open(awl, 'w') as f:
-            f.write(outg)
-        # the AWL backend parks the FC param window at M byte 65280, so the
-        # cross run needs a full-size M area
-        base_awl = ['-x=awl', '--emit=jit', '--jit-cycles', str(nscans),
-                    '--cycle-ms', str(trace['period_ms']),
-                    '--area-size', 'M=65536', '--area-size', 'DB1=8192']
-        base_awl += io_args + ['--scan-inputs', infile, awl]
-        rc2, out2 = run_sclang(args.sclang, base_awl)
-        if rc2 not in (0, 2):
-            return 'fail', 'awl jit rc=%d %s' % (rc2, out2[-200:])
-        obs2 = parse_scan_lines(out2)
-        if obs2 != observed:
-            diff = [k for k in set(obs2) | set(observed)
-                    if obs2.get(k) != observed.get(k)]
-            return 'fail', 'SCL->AWL differs at scans %s' % diff[:3]
-        cross_note = ' (cross ok)'
+        ok, note = run_cross(args, cross_src, cwpath, nscans,
+                             trace['period_ms'], io_args, infile, observed,
+                             'mem')
+        if not ok:
+            return 'fail', note
+        cross_note = ' (%s)' % note
+        if args.cross_text:
+            ok, note = run_cross(args, cross_src, cwpath, nscans,
+                                 trace['period_ms'], io_args, infile,
+                                 observed, 'text')
+            if not ok:
+                return 'fail', 'text: %s' % note
+            cross_note += ' +text'
     if errs:
         # status: implementation-defined traces record one valid behavior of
         # an undefined one (IEC 61131-3); a divergence is reported but is not
@@ -795,7 +834,13 @@ def main():
     ap.add_argument('--sclang-gen', default=None)
     ap.add_argument('--corpora', default='/Users/martin/scl-external')
     ap.add_argument('--cross', action='store_true',
-                    help='also run SCL->AWL->JIT and require identical scans')
+                    help='also run SCL->AWL->JIT (in-memory awl-dialect '
+                         'lowering, --emit=jit-awl) and require identical '
+                         'scans')
+    ap.add_argument('--cross-text', action='store_true',
+                    help='with --cross, additionally run the AWL text '
+                         'round-trip (sclang-gen --emit=awl + -x=awl) as an '
+                         'extra differential check')
     ap.add_argument('--only', default=None, help='substring filter on test')
     ap.add_argument('--floor', type=float, default=0.0)
     args = ap.parse_args()

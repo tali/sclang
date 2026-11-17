@@ -134,18 +134,21 @@ back. The driver runs it with `--emit=jit --jit-cycles=N --cycle-ms=<period>`
 `--scan-io=... --scan-inputs=...` (writes scan inputs before each OB1 scan,
 prints `scan i: name=value ...` after it; see test/sclang/jit_scan_io.scl)
 and the observed scan lines are compared to the trace. `--cross` also runs
-each wrapper SCL->AWL->JIT and requires identical scan lines (differential
-check of the SCL and AWL lowering paths; the AWL path itself is
-oracle-verified against awlsim above). Tests using constructs outside the
-supported subset are counted as "unsupported", not failures.
+each wrapper through the in-memory SCL->awl-dialect->JIT path
+(`sclang --emit=jit-awl`, no AWL text round-trip) and requires identical
+scan lines (differential check of the SCL and AWL lowering paths; the AWL
+path itself is oracle-verified against awlsim above). `--cross-text`
+additionally runs the legacy AWL text round-trip. Tests using constructs
+outside the supported subset are counted as "unsupported", not failures.
 
 With `--cross` (the default in run_conformance.py), each wrapper is also
-lowered SCL->AWL->JIT and must produce identical scan lines — a
-differential check of the two lowering paths. Constructs the AWL backend
-cannot represent (FB builtins like CTU, LREAL, strings, date/time, VAR
-declaration initializers, ...) are cross-skips, not failures, as are
+lowered to the awl dialect in memory and JIT-run (`--emit=jit-awl`) and must
+produce identical scan lines — a differential check of the two lowering
+paths with no AWL text round-trip. Constructs the AWL backend cannot
+represent (FB builtins like CTU, LREAL, strings, date/time, VAR declaration
+initializers, ...) are cross-skips, not failures, as are
 implementation-defined traces. `test/conformance/fuzz_st.py` goes further:
-seeded random per-scan inputs, SCL->JIT vs SCL->AWL->JIT must agree.
+seeded random per-scan inputs, SCL->JIT vs SCL->jit-awl must agree.
 
 Current: **92/92 pass (100%), 0 unsupported** (74 traces are
 `status: conformant`, 18 `implementation-defined`; 3 implementation-defined
@@ -183,12 +186,11 @@ pass (non-normative); the one remaining divergence is timer_pt_zero's TOF
 power-up Q=TRUE, a documented IronPLC deviation that contradicts the
 conformant timers/tof trace.
 The ST tier is part of run_conformance.py (floor 0.95, `ST traces (JIT)`
-line). The `--cross` differential (SCL->JIT vs SCL->AWL->JIT per trace) now
-runs end-to-end: wrappers are renamed to the AWL OBn/FBn/FCn/DBn convention
-(awl_compat in run_st_traces.py), DB1 is pre-sized, and AWL-unrepresentable
-constructs are cross-skips. Current: 46/75 traces identical across both
-paths; the rest are AWL-backend gaps (builtin FB calls in SCL FBs, CASE
-expressions, struct copies in expressions), listed in AGENTS.md.
+line). The `--cross` differential (SCL->JIT vs SCL->awl-dialect->JIT per
+trace) runs end-to-end in memory: wrappers are renamed to the AWL
+OBn/FBn/FCn/DBn convention (awl_compat in run_st_traces.py), DB1 is
+pre-sized, and AWL-unrepresentable constructs are cross-skips. Current:
+92/92 traces identical across both paths.
 
 ## Remaining failures and known approximations
 

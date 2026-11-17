@@ -1,27 +1,44 @@
-# Design: lowering SCL to AWL (text backend)
+# Design: lowering SCL to AWL (text backend + in-memory execution)
 
-- **Status**: implemented. `sclang-gen --emit=awl` runs the LowerToAWL pass
-  (`lib/SclTransforms/LowerToAWL.cpp`) and prints S7 text via
-  `awl::printAwlText` (`lib/AwlDialect/Printer.cpp`). Tests:
-  test/SclTransforms/to_awl{,_areas,_fb}.scl, test/AwlGen/roundtrip.awl,
-  test/sclang/jit_awl_backend.scl (SCL -> AWL -> JIT gives the same memory
-  writes as the SCL original).
+- **Status**: implemented. Two consumers of the LowerToAWL pass
+  (`lib/SclTransforms/LowerToAWL.cpp`):
+  1. `sclang-gen --emit=awl` prints S7 text via `awl::printAwlText`
+     (`lib/AwlDialect/Printer.cpp`) — legacy export for comparison with
+     STEP 7 output. The text print/re-parse round-trip has known
+     accumulator-model limitations (the printer models T as popping ACCU1;
+     awlsim does not), so it is not used for execution.
+  2. `sclang --emit=awl-mlir` (dump) and `--emit=jit-awl` (run) keep the
+     awl-dialect IR in memory and feed it straight to LowerToStd/LLVM/JIT —
+     the primary SCL->AWL execution path, used by the `--cross` differential
+     in test/conformance/run_st_traces.py and fuzz_st.py. With
+     `synthCiface`, the pass synthesizes the `_mlir_ciface_OB1` awl wrapper
+     block (call OB1 + BE) that the JIT driver invokes.
+  Tests: test/SclTransforms/to_awl{,_areas,_fb}.scl,
+  test/AwlGen/roundtrip.awl, test/sclang/jit_awl_backend.scl,
+  test/sclang/jit_awl_direct.scl (--emit=jit-awl).
   Deviations/gaps: FB arrays/structs, strings and DB initializers are
   rejected/dropped with an error or warning; `scl.debug.print` is dropped;
-  cross-width assignments insert an awl.cast;
-  awl.cast is implicit in the mnemonic letter (not printed); bool logic is
-  emitted as rlo chains (U/UN/O/ON/=) with temp bits for computed operands;
-  the CASE selector is re-loaded before each compare (AWL L shifts ACC1).
+  cross-width assignments insert an awl.cast (with `zext` for unsigned
+  sources; signed i16->i32 widening emits SLD 16 + SSD 16 — SRD is a
+  *logical* shift in S7/awlsim);
+  bool logic is emitted as rlo chains (U/UN/O/ON/=) with temp bits for
+  computed operands; the CASE selector is re-loaded before each compare
+  (AWL L shifts ACC1). Computed values are spilled to M-area temps right at
+  their definition, and operand temps are (re-)stored at every use, so no
+  temp read can be dominated by a skipped loop/conditional.
 - Related: ADR 003, `awl-frontend.md`
 
 Goal: emit canonical AWL (S7 mnemonic) listings from SCL sources, to compare
-with existing implementations (e.g. STEP 7 output). Exposed as
-`sclang-gen --emit=awl`.
+with existing implementations (e.g. STEP 7 output), and to execute SCL
+through the AWL dialect without a text round-trip. Exposed as
+`sclang-gen --emit=awl` (text) and `sclang --emit=awl-mlir` / `--emit=jit-awl`
+(in-memory).
 
 ## Pipeline position
 
 ```
-.scl ──> scl dialect ──> LowerToAWL pass ──> awl dialect ──> printer ──> AWL text
+.scl ──> scl dialect ──> LowerToAWL pass ──> awl dialect ──> printer ──> AWL text   (sclang-gen --emit=awl)
+                                              └─> LowerToStd ──> LLVM ──> JIT              (sclang --emit=jit-awl)
 ```
 
 The `awl` dialect is the same one the AWL frontend produces, so `awl → awl`

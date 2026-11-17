@@ -29,8 +29,11 @@ std::unique_ptr<mlir::Pass> createLowerToLLVMPass();
 
 /// Create a pass for lowering the SCL dialect to the AWL dialect
 /// (SCL->AWL text backend, docs/design/scl-to-awl.md); the result is printed
-/// as S7 AWL text by `awl::printAwlText` (`sclang-gen --emit=awl`).
-std::unique_ptr<mlir::Pass> createLowerToAWLPass();
+/// as S7 AWL text by `awl::printAwlText` (`sclang-gen --emit=awl`). With
+/// `synthCiface` (used by `sclang --emit=jit-awl`), also synthesize the
+/// `_mlir_ciface_OB1` awl wrapper block so the result can be JIT-run directly
+/// without the AWL text round-trip.
+std::unique_ptr<mlir::Pass> createLowerToAWLPass(bool synthCiface = false);
 
 } // namespace sclang
 } // end namespace mlir

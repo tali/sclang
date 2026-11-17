@@ -112,22 +112,31 @@ enum Action {
   None,
   DumpAST,
   DumpMLIR,
+  DumpAWLMLIR,
   DumpMLIRStd,
   DumpMLIRLLVM,
   DumpLLVMIR,
-  RunJIT
+  RunJIT,
+  RunJITAwl
 };
 }
 static cl::opt<enum Action> emitAction(
     "emit", cl::desc("Select the kind of output desired"),
     cl::values(clEnumValN(DumpAST, "ast", "output the AST dump")),
     cl::values(clEnumValN(DumpMLIR, "mlir", "output the MLIR dump")),
+    cl::values(clEnumValN(DumpAWLMLIR, "awl-mlir",
+                          "output the MLIR dump after lowering to the AWL "
+                          "dialect (no AWL text round-trip)")),
     cl::values(clEnumValN(DumpMLIRStd, "mlir-std",
                           "output the MLIR dump after std lowering")),
     cl::values(clEnumValN(DumpMLIRLLVM, "mlir-llvm",
                           "output the MLIR dump after llvm lowering")),
     cl::values(clEnumValN(DumpLLVMIR, "llvm", "output the LLVM IR dump")),
-    cl::values(clEnumValN(RunJIT, "jit", "run the code")));
+    cl::values(clEnumValN(RunJIT, "jit", "run the code")),
+    cl::values(clEnumValN(RunJITAwl, "jit-awl",
+                          "run the code via in-memory lowering to the AWL "
+                          "dialect (skips the AWL text print/re-parse "
+                          "round-trip used by --emit=awl + -x=awl)")));
 
 static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
 
@@ -393,6 +402,13 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
     optFB.addPass(mlir::createCSEPass());
  }
 
+  // The AWL-dialect path: lower SCL to awl dialect ops in memory (the same
+  // conversion the --emit=awl text backend performs before printing), then
+  // let the regular std/LLVM lowering consume the awl blocks — no AWL text
+  // print/re-parse round-trip.
+  if (emitAction == Action::DumpAWLMLIR || emitAction == Action::RunJITAwl)
+    pm.addPass(mlir::sclang::createLowerToAWLPass(
+        /*synthCiface=*/emitAction == Action::RunJITAwl));
   if (isLoweringToStd) {
     // Partially lower the SCL dialect with a few cleanups afterwards.
     pm.addPass(mlir::sclang::createLowerToStdPass());
@@ -823,7 +839,7 @@ int main(int argc, char **argv) {
     return dumpLLVMIR(*module);
 
   // Otherwise, we must be running the jit.
-  if (emitAction == Action::RunJIT)
+  if (emitAction == Action::RunJIT || emitAction == Action::RunJITAwl)
     return runJit(*module);
 
   llvm::errs() << "No action specified (parsing only?), use -emit=<action>\n";

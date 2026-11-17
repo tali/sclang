@@ -41,6 +41,13 @@ one-line pointer here.
 ```
 
 - `sclang-gen --emit=mlir` prints unlowered scl-dialect IR; `--emit=mlir-std` runs LowerToStd.
+  `--emit=awl` lowers SCL to the awl dialect and prints S7 AWL text (legacy
+  export; the text print/re-parse round-trip has known accumulator-model
+  limitations — prefer the in-memory path below).
+- `sclang --emit=awl-mlir` prints the module after in-memory SCL->awl-dialect
+  lowering (no text); `--emit=jit-awl` additionally synthesizes the
+  `_mlir_ciface_OB1` awl wrapper block and JIT-runs — this is the primary
+  SCL->AWL execution path (skips the AWL text round-trip entirely).
 - Source-language mode (ADR 004): `--std=s7` (default) / `--std=iec` on both
   `sclang` and `sclang-gen`, or `-x=st` (= `-x=scl --std=iec`). The mode is a
   `LangMode` (include/sclang/SclGen/LangMode.h) carried by the Lexer into the
@@ -191,13 +198,17 @@ has no `\b` — use python3 for regex edits.
   Current: 92/92 pass (100%), 0 unsupported (3 implementation-defined
   traces diverge and are counted as pass-with-DIFF). With --cross (now the
   default in run_conformance.py) each wrapper is additionally lowered
-  SCL->AWL->JIT and must produce identical scan lines: cross-skips (not
-  failures) when the AWL backend cannot represent the construct (marked
-  'unsupported'/'not representable'/'unknown FB member' in the gen output,
-  implementation-defined traces, VAR declaration initializers — the AWL
-  backend drops DB cold-start values), and the cross run uses a full-size
-  M area (M=65536) because the AWL backend parks the FC param window at
-  M byte 65280. The AWL backend models the S7 accumulator stack exactly
+  SCL->awl-dialect->JIT in memory (`sclang --emit=jit-awl`, no AWL text
+  round-trip) and must produce identical scan lines: cross-skips (not
+  failures) when the AWL backend cannot represent the construct (the
+  `--emit=awl-mlir` pre-lowering fails or reports 'unsupported'/'not
+  representable'/'unknown FB member', implementation-defined traces, VAR
+  declaration initializers — the AWL backend drops DB cold-start values),
+  and the cross run uses a full-size M area (M=65536) because the AWL
+  backend parks the FC param window at M byte 65280. `--cross-text`
+  additionally runs the legacy AWL text round-trip (sclang-gen --emit=awl |
+  -x=awl --emit=jit) as an extra check; it has known gaps (see
+  docs/design/scl-to-awl.md). The AWL backend models the S7 accumulator stack exactly
   (T does not pop; arith consumes the top two; only top-2 slots are
   usable), so LowerToAWL spills all computed values to M-area temps and
   loads arith/cmp operands adjacently from temps; signed INT widening uses
@@ -259,14 +270,14 @@ has no `\b` — use python3 for regex edits.
   initializers / unknown library types like Variant).
   The ST tier is wired into run_conformance.py as a tier with floor 0.95
   (FLOOR_ST_TRACES; prints `ST traces (JIT)` and propagates FAIL/DIFF lines).
-  --cross mode runs each passing wrapper SCL->AWL->JIT and requires identical
+  --cross mode runs each passing wrapper through the in-memory
+  SCL->awl-dialect->JIT path (`--emit=jit-awl`) and requires identical
   scan lines: the wrapper is renamed to the AWL naming convention by
   awl_compat() (prog->FB1, inst->DB1, other FUNCTIONs->FCn), DB1 is sized via
   --area-size DB1=8192 (the AWL backend drops DATA_BLOCK declarations), and
   constructs the AWL backend cannot represent are cross-skips, not failures.
-  Current cross: 46/75 identical; remaining diffs are AWL-backend gaps
-  (builtin FB calls TON/CTU/R_TRIG inside SCL FBs, CASE expr, whole-struct
-  expression materialization, ...).
+  Current cross: 92/92 identical (run_cross() in run_st_traces.py;
+  fuzz_st.py uses the same path).
   sclang-gen now registers a diagnostic handler (MLIRGen errors were
   previously swallowed, giving a silent rc=1).
   Builtin standard FBs (TON/TOF/TP/CTU/CTD/CTUD/R_TRIG/F_TRIG/SR/RS) are

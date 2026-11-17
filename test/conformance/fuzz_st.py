@@ -140,23 +140,24 @@ def fuzz_one(args, st_path, tmpdir, rng, nscans):
     if rc1 not in (0, 2):
         return 'skip', 'scl jit rc=%d' % rc1
     obs1 = R.parse_scan_lines(out1)
-    # cross: SCL->AWL->JIT
+    # cross: SCL->AWL->JIT via in-memory awl-dialect lowering (--emit=jit-awl)
+    if R.has_var_initializers(raw):
+        return 'skip', 'cross-skip'
     cross = R.awl_compat(wrapper, prog)
     cwpath = wpath + '.cross.scl'
     with open(cwpath, 'w') as f:
         f.write(cross)
-    rcg, outg = R.run_sclang(args.sclang_gen, ['-x=st', '--emit=awl', cwpath])
-    if rcg != 0 or 'unsupported' in outg or 'not supported' in outg \
-            or 'not representable' in outg or 'unknown FB member' in outg \
-            or R.has_var_initializers(raw):
+    # pre-check: only the SCL->awl-dialect lowering; failure = not
+    # representable in AWL -> skip (same condition as the trace harness)
+    rcg, outg = R.run_sclang(args.sclang,
+                             ['-x=st', '--emit=awl-mlir', cwpath],
+                             timeout=TIMEOUT_S)
+    if rcg != 0 or any(m in outg for m in R.CROSS_SKIP_MARKERS):
         return 'skip', 'cross-skip'
-    awl = wpath + '.awl'
-    with open(awl, 'w') as f:
-        f.write(outg)
-    base_awl = ['-x=awl', '--emit=jit', '--jit-cycles', str(nscans),
+    base_awl = ['-x=st', '--emit=jit-awl', '--jit-cycles', str(nscans),
                 '--cycle-ms', str(trace['period_ms']),
                 '--area-size', 'M=65536', '--area-size', 'DB1=8192']
-    base_awl += io_args + ['--scan-inputs', infile, awl]
+    base_awl += io_args + ['--scan-inputs', infile, cwpath]
     rc2, out2 = R.run_sclang(args.sclang, base_awl, timeout=TIMEOUT_S)
     if rc2 not in (0, 2):
         return 'fail', 'awl jit rc=%d %s' % (rc2, out2[-150:])
