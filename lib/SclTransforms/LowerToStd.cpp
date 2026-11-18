@@ -410,6 +410,21 @@ public:
   }
 };
 
+/// Shorthand for an integer constant of type `ty` with value `v`.
+static Value constInt(OpBuilder &b, Location loc, Type ty, int64_t v) {
+  return b.create<arith::ConstantOp>(loc, ty, b.getIntegerAttr(ty, v));
+}
+
+/// Shorthand for an index-typed constant with value `v`.
+static Value constIndex(OpBuilder &b, Location loc, int64_t v) {
+  return b.create<arith::ConstantIndexOp>(loc, v);
+}
+
+/// The enclosing module of an operation.
+static ModuleOp moduleOf(Operation *op) {
+  return op->getParentOfType<ModuleOp>();
+}
+
 // MARK: runtime C ABI (ADR 002)
 
 /// Get or insert a private declaration of a runtime ABI function (ADR 002)
@@ -435,8 +450,7 @@ static Value directDbValue(OpBuilder &b, Location loc, scl::DirectType dt,
     // DI-area operand: pass the DI marker 0xFFFF through, so the runtime
     // resolves it to the DI-register DB *and* adds the AR2 multi-instance
     // base offset (awlsim cpu.py getArea_DI/setArea_DI)
-    return b.create<arith::ConstantOp>(
-        loc, i32, b.getIntegerAttr(i32, (int32_t)0xFFFF));
+    return constInt(b, loc, i32, (int32_t)0xFFFF);
   }
   if (op && dt.getArea() == scl::DirectArea::DataBlock && dt.getDb() == 0) {
     if (auto func = op->template getParentOfType<func::FuncOp>()) {
@@ -445,8 +459,7 @@ static Value directDbValue(OpBuilder &b, Location loc, scl::DirectType dt,
         return func.getBody().front().getArgument(0);
     }
   }
-  return b.create<arith::ConstantOp>(loc, i32,
-                                     b.getIntegerAttr(i32, dt.getDb()));
+  return constInt(b, loc, i32, dt.getDb());
 }
 
 /// Lower a load from a direct address (memory area / DB operand) to a call
@@ -457,14 +470,11 @@ static Value lowerDirectLoad(OpBuilder &b, Location loc, scl::DirectType dt,
   auto i8 = b.getI8Type();
   auto i32 = b.getI32Type();
   auto i64 = b.getI64Type();
-  auto areaC = b.create<arith::ConstantOp>(
-      loc, i8, b.getIntegerAttr(i8, (uint8_t)dt.getArea()));
+  auto areaC = constInt(b, loc, i8, (uint8_t)dt.getArea());
   auto dbC = directDbValue(b, loc, dt, module, op);
-  auto byteC = b.create<arith::ConstantOp>(loc, i32,
-                                           b.getIntegerAttr(i32, dt.getByte()));
+  auto byteC = constInt(b, loc, i32, dt.getByte());
   if (dt.getWidth() == 1) {
-    auto bitC = b.create<arith::ConstantOp>(
-        loc, i8, b.getIntegerAttr(i8, dt.getBit()));
+    auto bitC = constInt(b, loc, i8, dt.getBit());
     auto fn = getOrInsertRtFunc(b, module, "scl_rt_read_bit",
                                 b.getFunctionType({i8, i32, i32, i8},
                                                   {b.getI1Type()}));
@@ -472,8 +482,7 @@ static Value lowerDirectLoad(OpBuilder &b, Location loc, scl::DirectType dt,
                                   ValueRange{areaC, dbC, byteC, bitC})
         .getResult(0);
   }
-  auto widthC = b.create<arith::ConstantOp>(
-      loc, i8, b.getIntegerAttr(i8, dt.getWidth() / 8));
+  auto widthC = constInt(b, loc, i8, dt.getWidth() / 8);
   auto fn = getOrInsertRtFunc(b, module, "scl_rt_read",
                               b.getFunctionType({i8, i32, i32, i8}, {i64}));
   Value v = b.create<func::CallOp>(loc, fn, TypeRange{i64},
@@ -489,8 +498,7 @@ static Value lowerDirectLoad(OpBuilder &b, Location loc, scl::DirectType dt,
   }
   if (resTy.isInteger(1))
     return b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne, v,
-                                   b.create<arith::ConstantOp>(
-                                       loc, i64, b.getIntegerAttr(i64, 0)));
+                                   constInt(b, loc, i64, 0));
   return b.create<arith::TruncIOp>(loc, resTy, v);
 }
 
@@ -504,11 +512,9 @@ static LogicalResult lowerDirectStore(OpBuilder &b, Location loc,
   auto i8 = b.getI8Type();
   auto i32 = b.getI32Type();
   auto i64 = b.getI64Type();
-  auto areaC = b.create<arith::ConstantOp>(
-      loc, i8, b.getIntegerAttr(i8, (uint8_t)dt.getArea()));
+  auto areaC = constInt(b, loc, i8, (uint8_t)dt.getArea());
   auto dbC = directDbValue(b, loc, dt, module, op);
-  auto byteC = b.create<arith::ConstantOp>(loc, i32,
-                                           b.getIntegerAttr(i32, dt.getByte()));
+  auto byteC = constInt(b, loc, i32, dt.getByte());
   if (dt.getWidth() == 1) {
     Value bitVal = value;
     if (!bitVal.getType().isInteger(1)) {
@@ -516,12 +522,9 @@ static LogicalResult lowerDirectStore(OpBuilder &b, Location loc,
         return failure();
       bitVal = b.create<arith::CmpIOp>(
           loc, arith::CmpIPredicate::ne, bitVal,
-          b.create<arith::ConstantOp>(
-              loc, bitVal.getType(),
-              b.getIntegerAttr(bitVal.getType(), 0)));
+          constInt(b, loc, bitVal.getType(), 0));
     }
-    auto bitC = b.create<arith::ConstantOp>(
-        loc, i8, b.getIntegerAttr(i8, dt.getBit()));
+    auto bitC = constInt(b, loc, i8, dt.getBit());
     auto fn = getOrInsertRtFunc(b, module, "scl_rt_write_bit",
                                 b.getFunctionType({i8, i32, i32, i8, b.getI1Type()},
                                                   {}));
@@ -540,8 +543,7 @@ static LogicalResult lowerDirectStore(OpBuilder &b, Location loc,
     v = v.getType().getIntOrFloatBitWidth() < 64
             ? (Value)b.create<arith::ExtUIOp>(loc, i64, v)
             : (Value)b.create<arith::TruncIOp>(loc, i64, v);
-  auto widthC = b.create<arith::ConstantOp>(
-      loc, i8, b.getIntegerAttr(i8, dt.getWidth() / 8));
+  auto widthC = constInt(b, loc, i8, dt.getWidth() / 8);
   auto fn = getOrInsertRtFunc(b, module, "scl_rt_write",
                               b.getFunctionType({i8, i32, i32, i8, i64}, {}));
   b.create<func::CallOp>(loc, fn, TypeRange{},
@@ -576,7 +578,7 @@ struct CallFcOpLowering : public OpConversionPattern<scl::CallFcOp> {
     // parameter converts to a 0-d view of the element type: adapt with a
     // single reinterpret_cast from the base buffer, preserving the offset.
     SmallVector<Value, 4> args = adaptor.getArguments();
-    auto module = op->template getParentOfType<ModuleOp>();
+    auto module = moduleOf(op);
     if (auto callee = llvm::dyn_cast_or_null<func::FuncOp>(
             module.lookupSymbol(op.getCallee()))) {
       auto fnTy = callee.getFunctionType();
@@ -793,7 +795,7 @@ struct FunctionOpLowering : public OpConversionPattern<scl::FunctionOp> {
     // An organization block models one scan cycle: read the process image
     // of the inputs on entry, write the outputs on exit (ADR 002).
     if (op->hasAttr("scl.organization_block")) {
-      auto module = op->template getParentOfType<ModuleOp>();
+      auto module = moduleOf(op);
       auto voidFn = rewriter.getFunctionType({}, {});
       auto updIn = getOrInsertRtFunc(rewriter, module, "scl_rt_update_inputs",
                                      voidFn);
@@ -827,7 +829,7 @@ static Value loadFromByteBuffer(OpBuilder &b, Location loc, Value addr,
     // Byte view (array/struct member of an FB/IDB): cast the view to the
     // requested buffer type using the result's static size.
     auto rm = llvm::cast<MemRefType>(resTy);
-    auto zero = b.create<arith::ConstantIndexOp>(loc, 0);
+    auto zero = constIndex(b, loc, 0);
     if (memTy.getRank() == 1 && memTy.getElementType().isInteger(8) &&
         rm.getRank() == 1 && rm.getElementType().isInteger(8) &&
         rm.getShape()[0] != ShapedType::kDynamic) {
@@ -838,7 +840,7 @@ static Value loadFromByteBuffer(OpBuilder &b, Location loc, Value addr,
     }
     return nullptr;
   }
-  auto zero = b.create<arith::ConstantIndexOp>(loc, 0);
+  auto zero = constIndex(b, loc, 0);
   if (memTy.getElementType() == resTy) {
     SmallVector<Value, 1> indices(memTy.getRank(), zero);
     return b.create<memref::LoadOp>(loc, addr, indices);
@@ -854,9 +856,9 @@ static Value loadFromByteBuffer(OpBuilder &b, Location loc, Value addr,
   if (resTy.isInteger(1)) {
     // bool: a single byte, true iff non-zero (extui/trunc i8<->i1 are
     // invalid casts).
-    auto idx0 = b.create<arith::ConstantIndexOp>(loc, 0);
+    auto idx0 = constIndex(b, loc, 0);
     Value byte = b.create<memref::LoadOp>(loc, addr, ValueRange{idx0});
-    auto zero = b.create<arith::ConstantOp>(loc, i8, b.getIntegerAttr(i8, 0));
+    auto zero = constInt(b, loc, i8, 0);
     return b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne, byte, zero);
   }
   auto accTy = llvm::isa<FloatType>(resTy)
@@ -867,15 +869,13 @@ static Value loadFromByteBuffer(OpBuilder &b, Location loc, Value addr,
   // value lives at offset i from the start, most significant byte first.
   // Do not chain another reinterpret_cast: its fold would drop the member
   // offset.
-  Value acc = b.create<arith::ConstantOp>(loc, accTy,
-                                          b.getIntegerAttr(accTy, 0));
+  Value acc = constInt(b, loc, accTy, 0);
   for (int64_t i = 0; i < nbytes; ++i) {
-    auto idx = b.create<arith::ConstantIndexOp>(loc, i);
+    auto idx = constIndex(b, loc, i);
     Value byte = b.create<memref::LoadOp>(loc, addr, ValueRange{idx});
     Value ext = b.create<arith::ExtUIOp>(loc, accTy, byte);
     if (i < nbytes - 1) {
-      auto sh = b.create<arith::ConstantOp>(
-          loc, accTy, b.getIntegerAttr(accTy, 8 * (nbytes - 1 - i)));
+      auto sh = constInt(b, loc, accTy, 8 * (nbytes - 1 - i));
       ext = b.create<arith::ShLIOp>(loc, ext, sh);
     }
     acc = b.create<arith::OrIOp>(loc, acc, ext);
@@ -899,7 +899,7 @@ struct LoadOpLowering : public OpConversionPattern<scl::LoadOp> {
     // Direct address (memory area / DB): runtime C ABI call (ADR 002).
     if (auto dt = llvm::dyn_cast<scl::DirectType>(llvm::cast<scl::AddressType>(op.getAddress().getType()).getElementType())) {
       Value loaded = lowerDirectLoad(rewriter, op.getLoc(), dt, resTy,
-                                     op->template getParentOfType<ModuleOp>());
+                                     moduleOf(op));
       rewriter.replaceOp(op, loaded);
       return success();
     }
@@ -1001,7 +1001,7 @@ struct ReturnValueOpLowering : public OpConversionPattern<scl::ReturnValueOp> {
 static LogicalResult storeToByteBuffer(OpBuilder &b, Location loc, Value value,
                                        Value addr) {
   auto memTy = llvm::cast<MemRefType>(addr.getType());
-  auto zero = b.create<arith::ConstantIndexOp>(loc, 0);
+  auto zero = constIndex(b, loc, 0);
   // Whole-buffer assignment (array/struct value stored into its buffer).
   if (llvm::isa<MemRefType>(value.getType()) && llvm::isa<MemRefType>(addr.getType())) {
     Value src = value;
@@ -1050,7 +1050,7 @@ static LogicalResult storeToByteBuffer(OpBuilder &b, Location loc, Value value,
   if (valTy.isInteger(1)) {
     // bool: a single byte, zero-extended from the i1 value.
     Value byte = b.create<arith::ExtUIOp>(loc, i8, value);
-    auto idx0 = b.create<arith::ConstantIndexOp>(loc, 0);
+    auto idx0 = constIndex(b, loc, 0);
     b.create<memref::StoreOp>(loc, byte, addr, ValueRange{idx0});
     return success();
   }
@@ -1077,12 +1077,11 @@ static LogicalResult storeToByteBuffer(OpBuilder &b, Location loc, Value value,
   for (int64_t i = 0; i < nbytes; ++i) {
     Value byte = acc;
     if (i < nbytes - 1) {
-      auto sh = b.create<arith::ConstantOp>(
-          loc, accTy, b.getIntegerAttr(accTy, 8 * (nbytes - 1 - i)));
+      auto sh = constInt(b, loc, accTy, 8 * (nbytes - 1 - i));
       byte = b.create<arith::ShRUIOp>(loc, acc, sh);
     }
     byte = b.create<arith::TruncIOp>(loc, i8, byte);
-    auto idx = b.create<arith::ConstantIndexOp>(loc, i);
+    auto idx = constIndex(b, loc, i);
     b.create<memref::StoreOp>(loc, byte, addr, ValueRange{idx});
   }
   return success();
@@ -1097,7 +1096,7 @@ struct StoreOpLowering : public OpConversionPattern<scl::StoreOp> {
     // Direct address (memory area / DB): runtime C ABI call (ADR 002).
     if (auto dt = llvm::dyn_cast<scl::DirectType>(llvm::cast<scl::AddressType>(op.getLhs().getType()).getElementType())) {
       if (failed(lowerDirectStore(rewriter, op.getLoc(), dt, adaptor.getRhs(),
-                                  op->template getParentOfType<ModuleOp>(), op)))
+                                  moduleOf(op), op)))
         return failure();
       rewriter.eraseOp(op);
       return success();
@@ -1132,7 +1131,7 @@ struct TempVariableOpLowering
       return success();
     }
     // alloca requires an identity layout; reinterpret to the address type.
-    auto zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+    auto zero = constIndex(rewriter, loc, 0);
     if (memref.getRank() == 1) {
       if (memref.getShape()[0] != ShapedType::kDynamic) {
         // struct window: alloca the whole buffer and cast to the window type
@@ -1487,11 +1486,11 @@ static Value combineOffsets(OpBuilder &b, Location loc, int64_t constOff,
   if (dynOff)
     res = res ? (Value)b.create<arith::AddIOp>(loc, res, dynOff) : dynOff;
   if (constOff != 0) {
-    auto c = b.create<arith::ConstantIndexOp>(loc, constOff);
+    auto c = constIndex(b, loc, constOff);
     res = res ? (Value)b.create<arith::AddIOp>(loc, res, c) : c;
   }
   if (!res)
-    res = b.create<arith::ConstantIndexOp>(loc, 0);
+    res = constIndex(b, loc, 0);
   return res;
 }
 
@@ -1507,10 +1506,10 @@ static Value makeByteView(OpBuilder &b, Location loc, Value root, Value off,
                              {staticSize ? 1 : ShapedType::kDynamic}));
   OpFoldResult sizeOfr =
       staticSize ? OpFoldResult(b.getIndexAttr(size))
-                 : OpFoldResult(b.create<arith::ConstantIndexOp>(loc, size));
+                 : OpFoldResult(constIndex(b, loc, size));
   OpFoldResult strideOfr =
       staticSize ? OpFoldResult(b.getIndexAttr(1))
-                 : OpFoldResult(b.create<arith::ConstantIndexOp>(loc, 1));
+                 : OpFoldResult(constIndex(b, loc, 1));
   return b.create<memref::ReinterpretCastOp>(loc, resTy, root, OpFoldResult(off),
                                              ArrayRef<OpFoldResult>{sizeOfr},
                                              ArrayRef<OpFoldResult>{strideOfr});
@@ -1581,13 +1580,13 @@ struct GetIndexOpLowering : public OpConversionPattern<scl::GetIndexOp> {
                       ? idx
                       : (Value)rewriter.create<arith::IndexCastOp>(loc, indexTy, idx);
       if (dims[i].first != 0) {
-        auto minC = rewriter.create<arith::ConstantIndexOp>(loc, dims[i].first);
+        auto minC = constIndex(rewriter, loc, dims[i].first);
         adj = rewriter.create<arith::SubIOp>(loc, adj, minC);
       }
       Value contrib = adj;
       if (strides[i] != 1) {
         auto strideC =
-            rewriter.create<arith::ConstantIndexOp>(loc, strides[i]);
+            constIndex(rewriter, loc, strides[i]);
         contrib = rewriter.create<arith::MulIOp>(loc, adj, strideC);
       }
       flat = flat ? rewriter.create<arith::AddIOp>(loc, flat, contrib).getResult()
@@ -1611,7 +1610,7 @@ struct GetIndexOpLowering : public OpConversionPattern<scl::GetIndexOp> {
         return failure();
       Value byteFlat = flat;
       if (elemBytes != 1) {
-        auto scale = rewriter.create<arith::ConstantIndexOp>(loc, elemBytes);
+        auto scale = constIndex(rewriter, loc, elemBytes);
         byteFlat = rewriter.create<arith::MulIOp>(loc, flat, scale);
       }
       bool compositeElem =
@@ -1859,8 +1858,7 @@ struct ForDoOpLowering : public OpConversionPattern<scl::ForDoOp> {
     Value to = loadFromByteBuffer(rewriter, loc, toAddr, init.getType());
     if (!to)
       return failure();
-    auto zero = rewriter.create<arith::ConstantOp>(
-        loc, step.getType(), rewriter.getIntegerAttr(step.getType(), 0));
+    auto zero = constInt(rewriter, loc, step.getType(), 0);
     Value pos = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt,
                                                step, zero);
     Value le = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sle,
@@ -2297,7 +2295,7 @@ struct CallFbOpLowering : public OpConversionPattern<scl::CallFbOp> {
     }
     if (rtName) {
       auto loc = op.getLoc();
-      ModuleOp module = op->template getParentOfType<ModuleOp>();
+      ModuleOp module = moduleOf(op);
       auto i8 = rewriter.getI8Type();
       auto i64 = rewriter.getI64Type();
       auto fnTy = rewriter.getFunctionType({i8, i64}, {});
@@ -2311,8 +2309,7 @@ struct CallFbOpLowering : public OpConversionPattern<scl::CallFbOp> {
       Value ptrIdx =
           rewriter.create<arith::AddIOp>(loc, basePtr, meta.getOffset());
       Value ptr = rewriter.create<arith::IndexCastOp>(loc, i64, ptrIdx);
-      Value modeC = rewriter.create<arith::ConstantOp>(
-          loc, i8, rewriter.getI8IntegerAttr((int8_t)mode));
+      Value modeC = constInt(rewriter, loc, i8, (int8_t)mode);
       rewriter.create<func::CallOp>(loc, rtFn, TypeRange{}, ValueRange{modeC, ptr});
       rewriter.eraseOp(op);
       return success();
@@ -2501,8 +2498,7 @@ struct AwlTimerLcOpLowering : public OpConversionPattern<awl::TimerLcOp> {
     auto i32 = rewriter.getI32Type();
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_timer_lc",
                                 rewriter.getFunctionType({i32}, {rewriter.getI64Type()}));
-    auto tC = rewriter.create<arith::ConstantOp>(
-        loc, i32, rewriter.getI32IntegerAttr(op.getTimer()));
+    auto tC = constInt(rewriter, loc, i32, op.getTimer());
     auto v = rewriter.create<func::CallOp>(loc, fn, TypeRange{rewriter.getI64Type()},
                                            ValueRange{tC})
                  .getResult(0);
@@ -2521,7 +2517,7 @@ struct AwlLoadOpLowering : public OpConversionPattern<awl::LoadOp> {
     if (!resTy)
       return failure();
     Value v = lowerDirectLoad(rewriter, op.getLoc(), dt, resTy,
-                              op->template getParentOfType<ModuleOp>(), op);
+                              moduleOf(op), op);
     rewriter.replaceOp(op, v);
     return success();
   }
@@ -2534,7 +2530,7 @@ struct AwlStoreOpLowering : public OpConversionPattern<awl::StoreOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto dt = llvm::cast<scl::DirectType>(op.getAddr().getType());
     if (failed(lowerDirectStore(rewriter, op.getLoc(), dt, adaptor.getValue(),
-                                op->template getParentOfType<ModuleOp>(), op)))
+                                moduleOf(op), op)))
       return failure();
     rewriter.eraseOp(op);
     return success();
@@ -2550,10 +2546,9 @@ struct AwlRloLowering : public OpConversionPattern<RloOp> {
     auto dt = llvm::cast<scl::DirectType>(op.getAddr().getType());
     auto i1 = rewriter.getI1Type();
     Value bit = lowerDirectLoad(rewriter, op.getLoc(), dt, i1,
-                                op->template getParentOfType<ModuleOp>());
+                                moduleOf(op));
     if (op.getNegate()) {
-      auto trueC = rewriter.create<arith::ConstantOp>(
-          op.getLoc(), i1, rewriter.getIntegerAttr(i1, 1));
+      auto trueC = constInt(rewriter, op.getLoc(), i1, 1);
       bit = rewriter.create<arith::XOrIOp>(op.getLoc(), bit, trueC);
     }
     Value r = isOr ? (Value)rewriter.create<arith::OrIOp>(op.getLoc(),
@@ -2571,8 +2566,7 @@ struct AwlNotOpLowering : public OpConversionPattern<awl::NotOp> {
   matchAndRewrite(awl::NotOp op, awl::NotOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto i1 = rewriter.getI1Type();
-    auto trueC = rewriter.create<arith::ConstantOp>(op.getLoc(), i1,
-                                                    rewriter.getIntegerAttr(i1, 1));
+    auto trueC = constInt(rewriter, op.getLoc(), i1, 1);
     rewriter.replaceOpWithNewOp<arith::XOrIOp>(op, adaptor.getRlo(), trueC);
     return success();
   }
@@ -2585,7 +2579,7 @@ struct AwlAssignOpLowering : public OpConversionPattern<awl::AssignOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto dt = llvm::cast<scl::DirectType>(op.getAddr().getType());
     if (failed(lowerDirectStore(rewriter, op.getLoc(), dt, adaptor.getRlo(),
-                                op->template getParentOfType<ModuleOp>(), op)))
+                                moduleOf(op), op)))
       return failure();
     rewriter.eraseOp(op);
     return success();
@@ -2600,10 +2594,9 @@ struct AwlSetResetLowering : public OpConversionPattern<SetResetOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto dt = llvm::cast<scl::DirectType>(op.getAddr().getType());
     auto i1 = rewriter.getI1Type();
-    auto v = rewriter.create<arith::ConstantOp>(
-        op.getLoc(), i1, rewriter.getIntegerAttr(i1, set ? 1 : 0));
+    auto v = constInt(rewriter, op.getLoc(), i1, set ? 1 : 0);
     if (failed(lowerDirectStore(rewriter, op.getLoc(), dt, v,
-                                op->template getParentOfType<ModuleOp>(), op)))
+                                moduleOf(op), op)))
       return failure();
     rewriter.replaceOp(op, v);
     return success();
@@ -2641,11 +2634,10 @@ struct AwlArithLowering : public OpConversionPattern<AwlOp> {
         Value rd = convertScalarTo(rewriter, op.getLoc(), adaptor.getRhs(), f64);
         if (!ld || !rd)
           return failure();
-        ModuleOp module = op->template getParentOfType<ModuleOp>();
+        ModuleOp module = moduleOf(op);
         auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_arith_f",
                                     rewriter.getFunctionType({i8, f64, f64}, {f64}));
-        Value opcC = rewriter.create<arith::ConstantOp>(
-            op.getLoc(), i8, rewriter.getI8IntegerAttr(opc));
+        Value opcC = constInt(rewriter, op.getLoc(), i8, opc);
         Value res = rewriter.create<func::CallOp>(op.getLoc(), fn,
                                                   TypeRange{f64}, ValueRange{opcC, ld, rd})
                         .getResult(0);
@@ -2684,8 +2676,7 @@ struct AwlShiftOpLowering : public OpConversionPattern<awl::ShiftOp> {
     Value v = adaptor.getValue();
     Value n = adaptor.getAmount();
     auto c = [&](int32_t x) {
-      return rewriter.create<arith::ConstantOp>(loc, i32,
-                                                rewriter.getI32IntegerAttr(x));
+      return constInt(rewriter, loc, i32, x);
     };
     auto bin = [&](Value a, Value b, auto mk) -> Value {
       return rewriter.create<decltype(mk)>(loc, i32, a, b);
@@ -2792,13 +2783,12 @@ struct AwlRealMathOpLowering : public OpConversionPattern<awl::RealMathOp> {
       else if (k == "ln") opc = 8;
       else if (k == "sqr") opc = 9;
       else return failure();
-      auto mod = op->template getParentOfType<ModuleOp>();
+      auto mod = moduleOf(op);
       auto f64 = rewriter.getF64Type();
       auto i8 = rewriter.getI8Type();
       auto fn = getOrInsertRtFunc(rewriter, mod, "scl_rt_realmath_f",
                                   rewriter.getFunctionType({i8, f64}, {f64}));
-      Value opcC = rewriter.create<arith::ConstantOp>(
-          loc, i8, rewriter.getI8IntegerAttr(opc));
+      Value opcC = constInt(rewriter, loc, i8, opc);
       Value d = mlir::sclang::withFPFastMath(rewriter.create<arith::ExtFOp>(loc, f64, v));
       Value rd = rewriter.create<func::CallOp>(loc, fn, TypeRange{f64},
                                                ValueRange{opcC, d}).getResult(0);
@@ -2821,8 +2811,7 @@ struct AwlNegOpLowering : public OpConversionPattern<awl::NegOp> {
     if (llvm::isa<FloatType>(resTy)) {
       mlir::sclang::withFPFastMath(rewriter.replaceOpWithNewOp<arith::NegFOp>(op, resTy, v));
     } else {
-      auto zero = rewriter.create<arith::ConstantOp>(
-          op.getLoc(), resTy, rewriter.getIntegerAttr(resTy, 0));
+      auto zero = constInt(rewriter, op.getLoc(), resTy, 0);
       rewriter.replaceOpWithNewOp<arith::SubIOp>(op, resTy, zero, v);
     }
     return success();
@@ -2899,10 +2888,8 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
       auto i8 = rewriter.getI8Type();
       auto fn = getOrInsertRtFunc(rewriter, mod, "scl_rt_stw_set_bit",
                                   rewriter.getFunctionType({i8, i8}, {}));
-      auto bitC = rewriter.create<arith::ConstantOp>(
-          op.getLoc(), i8, rewriter.getI8IntegerAttr(4));
-      auto zero = rewriter.create<arith::ConstantOp>(
-          op.getLoc(), i8, rewriter.getI8IntegerAttr(0));
+      auto bitC = constInt(rewriter, op.getLoc(), i8, 4);
+      auto zero = constInt(rewriter, op.getLoc(), i8, 0);
       rewriter.create<func::CallOp>(op.getLoc(), fn, TypeRange{},
                                     ValueRange{bitC, zero});
     };
@@ -2938,8 +2925,7 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
         rewriter.create<func::CallOp>(op.getLoc(), dbFn, TypeRange{},
                                       ValueRange{diVal});
       } else {
-        args.push_back(rewriter.create<arith::ConstantOp>(
-            op.getLoc(), i32, rewriter.getI32IntegerAttr(dbAttr.value())));
+        args.push_back(constInt(rewriter, op.getLoc(), i32, dbAttr.value()));
         // the instance DB becomes the DI register for the callee (AUF DI)
         auto diFn = getOrInsertRtFunc(rewriter, mod, "scl_rt_set_current_di",
                                       rewriter.getFunctionType({i32}, {}));
@@ -3008,8 +2994,7 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
       auto packFn = getOrInsertRtFunc(rewriter, module, "scl_rt_pack_s7",
                                       rewriter.getFunctionType(
                                           {i32, i32, i32, i32}, {i64}));
-      auto arC = rewriter.create<arith::ConstantOp>(
-          op.getLoc(), i8, rewriter.getI8IntegerAttr(2));
+      auto arC = constInt(rewriter, op.getLoc(), i8, 2);
       savedAr2 = rewriter.create<func::CallOp>(op.getLoc(), getFn,
                                                TypeRange{i64},
                                                ValueRange{arC})
@@ -3022,10 +3007,8 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
         auto addFn = getOrInsertRtFunc(
             rewriter, module, "scl_rt_ar_add",
             rewriter.getFunctionType({i8, i32}, {i64}));
-        auto arC2 = rewriter.create<arith::ConstantOp>(
-            op.getLoc(), i8, rewriter.getI8IntegerAttr(2));
-        auto offC = rewriter.create<arith::ConstantOp>(
-            op.getLoc(), i32, rewriter.getI32IntegerAttr(ar2off * 8));
+        auto arC2 = constInt(rewriter, op.getLoc(), i8, 2);
+        auto offC = constInt(rewriter, op.getLoc(), i32, ar2off * 8);
         ptr = rewriter
                   .create<func::CallOp>(op.getLoc(), addFn, TypeRange{i64},
                                         ValueRange{arC2, offC})
@@ -3033,10 +3016,8 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
       } else {
         // awlsim sets AR2 = AREA_DB_S | base offset (P#DBX 0.0 style, db
         // field 0 = current DI register at use time), not the DI area code
-        auto areaC = rewriter.create<arith::ConstantOp>(
-            op.getLoc(), i32, rewriter.getI32IntegerAttr(0x84));
-        auto zero32 = rewriter.create<arith::ConstantOp>(
-            op.getLoc(), i32, rewriter.getI32IntegerAttr(0));
+        auto areaC = constInt(rewriter, op.getLoc(), i32, 0x84);
+        auto zero32 = constInt(rewriter, op.getLoc(), i32, 0);
         ptr = rewriter
                   .create<func::CallOp>(op.getLoc(), packFn, TypeRange{i64},
                                         ValueRange{areaC, zero32, zero32,
@@ -3050,8 +3031,7 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
       auto i32 = rewriter.getI32Type();
       auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_sfb",
                                   rewriter.getFunctionType({i32}, {}));
-      auto nC = rewriter.create<arith::ConstantOp>(
-          op.getLoc(), i32, rewriter.getI32IntegerAttr(sfbN));
+      auto nC = constInt(rewriter, op.getLoc(), i32, sfbN);
       rewriter.create<func::CallOp>(op.getLoc(), fn, TypeRange{},
                                     ValueRange{nC});
       if (savedAr2) {
@@ -3060,8 +3040,7 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
         auto setFn = getOrInsertRtFunc(
             rewriter, module, "scl_rt_ar_set",
             rewriter.getFunctionType({i8, i64}, {}));
-        auto arC = rewriter.create<arith::ConstantOp>(
-            op.getLoc(), i8, rewriter.getI8IntegerAttr(2));
+        auto arC = constInt(rewriter, op.getLoc(), i8, 2);
         rewriter.create<func::CallOp>(op.getLoc(), setFn, TypeRange{},
                                       ValueRange{arC, savedAr2});
       }
@@ -3072,8 +3051,7 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
       auto i32 = rewriter.getI32Type();
       auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_sfc",
                                   rewriter.getFunctionType({i32}, {}));
-      auto nC = rewriter.create<arith::ConstantOp>(
-          op.getLoc(), i32, rewriter.getI32IntegerAttr(sfcN));
+      auto nC = constInt(rewriter, op.getLoc(), i32, sfcN);
       rewriter.create<func::CallOp>(op.getLoc(), fn, TypeRange{},
                                     ValueRange{nC});
       rewriter.eraseOp(op);
@@ -3083,8 +3061,7 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
       auto i32 = rewriter.getI32Type();
       auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_iec",
                                   rewriter.getFunctionType({i32}, {}));
-      auto nC = rewriter.create<arith::ConstantOp>(
-          op.getLoc(), i32, rewriter.getI32IntegerAttr(iecN));
+      auto nC = constInt(rewriter, op.getLoc(), i32, iecN);
       rewriter.create<func::CallOp>(op.getLoc(), fn, TypeRange{},
                                     ValueRange{nC});
       rewriter.eraseOp(op);
@@ -3099,10 +3076,8 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
       auto fn = getOrInsertRtFunc(rewriter, mod, "scl_rt_stw_set_bit",
                                   rewriter.getFunctionType({i8, i8}, {}));
       for (auto bv : {std::pair<int, int>{4, 0}, {3, 0}, {2, 1}, {0, 0}}) {
-        auto bitC = rewriter.create<arith::ConstantOp>(
-            op.getLoc(), i8, rewriter.getI8IntegerAttr(bv.first));
-        auto valC = rewriter.create<arith::ConstantOp>(
-            op.getLoc(), i8, rewriter.getI8IntegerAttr(bv.second));
+        auto bitC = constInt(rewriter, op.getLoc(), i8, bv.first);
+        auto valC = constInt(rewriter, op.getLoc(), i8, bv.second);
         rewriter.create<func::CallOp>(op.getLoc(), fn, TypeRange{},
                                       ValueRange{bitC, valC});
       }
@@ -3113,8 +3088,7 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
       auto setFn = getOrInsertRtFunc(
           rewriter, module, "scl_rt_ar_set",
           rewriter.getFunctionType({i8, i64}, {}));
-      auto arC = rewriter.create<arith::ConstantOp>(
-          op.getLoc(), i8, rewriter.getI8IntegerAttr(2));
+      auto arC = constInt(rewriter, op.getLoc(), i8, 2);
       rewriter.create<func::CallOp>(op.getLoc(), setFn, TypeRange{},
                                     ValueRange{arC, savedAr2});
     }
@@ -3146,10 +3120,8 @@ struct AwlAssertOpLowering : public OpConversionPattern<awl::AssertOp> {
     auto i64 = rewriter.getI64Type();
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_assert_cmp",
                                 rewriter.getFunctionType({i32, i8, i64, i64}, {}));
-    auto idC = rewriter.create<arith::ConstantOp>(
-        op.getLoc(), i32, rewriter.getI32IntegerAttr(op.getId()));
-    auto opC = rewriter.create<arith::ConstantOp>(
-        op.getLoc(), i8, rewriter.getI8IntegerAttr(op.getOp()));
+    auto idC = constInt(rewriter, op.getLoc(), i32, op.getId());
+    auto opC = constInt(rewriter, op.getLoc(), i8, op.getOp());
     rewriter.create<func::CallOp>(op.getLoc(), fn, TypeRange{},
                                   ValueRange{idC, opC, adaptor.getActual(),
                                              adaptor.getExpected()});
@@ -3169,10 +3141,8 @@ struct AwlAssertROpLowering : public OpConversionPattern<awl::AssertROp> {
     auto f64 = rewriter.getF64Type();
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_assert_cmp_r",
                                 rewriter.getFunctionType({i32, i8, f64, f64}, {}));
-    auto idC = rewriter.create<arith::ConstantOp>(
-        op.getLoc(), i32, rewriter.getI32IntegerAttr(op.getId()));
-    auto opC = rewriter.create<arith::ConstantOp>(
-        op.getLoc(), i8, rewriter.getI8IntegerAttr(op.getOp()));
+    auto idC = constInt(rewriter, op.getLoc(), i32, op.getId());
+    auto opC = constInt(rewriter, op.getLoc(), i8, op.getOp());
     rewriter.create<func::CallOp>(op.getLoc(), fn, TypeRange{},
                                   ValueRange{idC, opC, adaptor.getActual(),
                                              adaptor.getExpected()});
@@ -3221,8 +3191,7 @@ struct AwlAccuGetLowering : public OpConversionPattern<awl::AccuGetOp> {
     auto loc = op.getLoc();
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto i8 = rewriter.getI8Type();
-    Value idx = rewriter.create<arith::ConstantOp>(
-        loc, i8, rewriter.getI8IntegerAttr(op.getIndex()));
+    Value idx = constInt(rewriter, loc, i8, op.getIndex());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_accu_get",
                                 rewriter.getFunctionType({i8}, {rewriter.getI32Type()}));
     auto v = rewriter.create<func::CallOp>(loc, fn, TypeRange{rewriter.getI32Type()},
@@ -3242,8 +3211,7 @@ struct AwlAccuSetLowering : public OpConversionPattern<awl::AccuSetOp> {
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto i8 = rewriter.getI8Type();
     auto i32 = rewriter.getI32Type();
-    Value idx = rewriter.create<arith::ConstantOp>(
-        loc, i8, rewriter.getI8IntegerAttr(op.getIndex()));
+    Value idx = constInt(rewriter, loc, i8, op.getIndex());
     Value v = convertScalarTo(rewriter, loc, adaptor.getValue(), i32);
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_accu_set",
                                 rewriter.getFunctionType({i8, i32}, {}));
@@ -3284,15 +3252,12 @@ struct AwlStwBitLowering : public OpConversionPattern<awl::StwBitOp> {
                                 rewriter.getFunctionType({}, {i32}));
     Value word = rewriter.create<func::CallOp>(loc, fn, TypeRange{i32}, ValueRange{})
                      .getResult(0);
-    Value bitC = rewriter.create<arith::ConstantOp>(
-        loc, i32, rewriter.getI32IntegerAttr(op.getBit()));
+    Value bitC = constInt(rewriter, loc, i32, op.getBit());
     Value shifted = rewriter.create<arith::ShRUIOp>(loc, word, bitC);
-    Value one = rewriter.create<arith::ConstantOp>(loc, i32,
-                                                   rewriter.getI32IntegerAttr(1));
+    Value one = constInt(rewriter, loc, i32, 1);
     Value bit = rewriter.create<arith::AndIOp>(loc, shifted, one);
     // arith.cmpi returns i1 for any integer operands
-    Value zero = rewriter.create<arith::ConstantOp>(
-        loc, i32, rewriter.getI32IntegerAttr(0));
+    Value zero = constInt(rewriter, loc, i32, 0);
     Value res = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
                                                 bit, zero);
     rewriter.replaceOp(op, res);
@@ -3309,8 +3274,7 @@ struct AwlStwSetBitLowering : public OpConversionPattern<awl::StwSetBitOp> {
     auto loc = op.getLoc();
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto i8 = rewriter.getI8Type();
-    Value bitC = rewriter.create<arith::ConstantOp>(
-        loc, i8, rewriter.getI8IntegerAttr(op.getBit()));
+    Value bitC = constInt(rewriter, loc, i8, op.getBit());
     Value val = rewriter.create<arith::ExtUIOp>(loc, i8, adaptor.getValue());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_stw_set_bit",
                                 rewriter.getFunctionType({i8, i8}, {}));
@@ -3337,17 +3301,14 @@ struct AwlStwCondLowering : public OpConversionPattern<awl::StwCondOp> {
     Value word = rewriter.create<func::CallOp>(loc, fn, TypeRange{i32}, ValueRange{})
                      .getResult(0);
     auto bitOf = [&](int bit) -> Value {
-      Value c = rewriter.create<arith::ConstantOp>(loc, i32,
-                                                   rewriter.getI32IntegerAttr(bit));
+      Value c = constInt(rewriter, loc, i32, bit);
       Value sh = rewriter.create<arith::ShRUIOp>(loc, word, c);
-      Value one = rewriter.create<arith::ConstantOp>(
-          loc, i32, rewriter.getI32IntegerAttr(1));
+      Value one = constInt(rewriter, loc, i32, 1);
       return rewriter.create<arith::AndIOp>(loc, sh, one);
     };
     Value a0 = bitOf(6); // CC0: result < 0
     Value a1 = bitOf(7); // CC1: result > 0
-    Value zero = rewriter.create<arith::ConstantOp>(loc, i32,
-                                                    rewriter.getI32IntegerAttr(0));
+    Value zero = constInt(rewriter, loc, i32, 0);
     Value isZ = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
                                                 rewriter.create<arith::OrIOp>(loc, a0, a1),
                                                 zero);
@@ -3406,8 +3367,7 @@ struct AwlStwCmpLowering : public OpConversionPattern<awl::StwCmpOp> {
     auto loc = op.getLoc();
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto i8 = rewriter.getI8Type();
-    Value predC = rewriter.create<arith::ConstantOp>(
-        loc, i8, rewriter.getI8IntegerAttr(op.getPred()));
+    Value predC = constInt(rewriter, loc, i8, op.getPred());
     if (llvm::isa<FloatType>(adaptor.getLhs().getType())) {
       auto f64 = rewriter.getF64Type();
       Value l = convertScalarTo(rewriter, loc, adaptor.getLhs(), f64);
@@ -3449,10 +3409,8 @@ struct AwlStwSignLowering : public OpConversionPattern<awl::StwSignOp> {
       Value v = convertScalarTo(rewriter, loc, adaptor.getValue(), i64);
       Value l = convertScalarTo(rewriter, loc, adaptor.getLhs(), i64);
       Value r = convertScalarTo(rewriter, loc, adaptor.getRhs(), i64);
-      Value opC = rewriter.create<arith::ConstantOp>(
-          loc, i8, rewriter.getI8IntegerAttr(op.getOp()));
-      Value rangeC = rewriter.create<arith::ConstantOp>(
-          loc, i32, rewriter.getI32IntegerAttr(op.getRange()));
+      Value opC = constInt(rewriter, loc, i8, op.getOp());
+      Value rangeC = constInt(rewriter, loc, i32, op.getRange());
       auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_stw_sign_i",
                                   rewriter.getFunctionType({i64, i64, i64, i8, i32}, {}));
       rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{v, l, r, opC, rangeC});
@@ -3481,9 +3439,7 @@ struct AwlStwDivLowering : public OpConversionPattern<awl::StwDivOp> {
       auto i64 = rewriter.getI64Type();
       Value d = convertScalarTo(rewriter, loc, adaptor.getDivisor(), i64);
       Value r = convertScalarTo(rewriter, loc, adaptor.getResult(), i64);
-      Value rng = rewriter.create<arith::ConstantOp>(
-          loc, rewriter.getI32Type(),
-          rewriter.getI32IntegerAttr(op.getRange()));
+      Value rng = constInt(rewriter, loc, rewriter.getI32Type(), op.getRange());
       auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_stw_div_i",
                                   rewriter.getFunctionType({i64, i64, rewriter.getI32Type()}, {}));
       rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{d, r, rng});
@@ -3506,8 +3462,7 @@ struct AwlF2ILowering : public OpConversionPattern<awl::F2IOp> {
     auto i8 = rewriter.getI8Type();
     Value v = convertScalarTo(rewriter, loc, adaptor.getValue(), f64);
     Value orig = convertScalarTo(rewriter, loc, adaptor.getOrig(), i64);
-    Value modeC = rewriter.create<arith::ConstantOp>(
-        loc, i8, rewriter.getI8IntegerAttr(op.getMode()));
+    Value modeC = constInt(rewriter, loc, i8, op.getMode());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_f2i",
                                 rewriter.getFunctionType({f64, i64, i8}, {i64}));
     Value r = rewriter.create<func::CallOp>(loc, fn, TypeRange{i64},
@@ -3530,11 +3485,9 @@ struct AwlTimerStartLowering : public OpConversionPattern<awl::TimerStartOp> {
       ModuleOp module = op->getParentOfType<ModuleOp>();
       auto i8 = rewriter.getI8Type();
       auto i64 = rewriter.getI64Type();
-      auto modeC = rewriter.create<arith::ConstantOp>(
-          loc, i8, rewriter.getI8IntegerAttr(op.getMode()));
+      auto modeC = constInt(rewriter, loc, i8, op.getMode());
       Value durC = convertScalarTo(rewriter, loc, adaptor.getDur(), i64);
-      Value inC = rewriter.create<arith::ConstantOp>(loc, i8,
-                                                     rewriter.getI8IntegerAttr(1));
+      Value inC = constInt(rewriter, loc, i8, 1);
       if (adaptor.getIn())
         inC = rewriter.create<arith::ExtUIOp>(loc, i8, adaptor.getIn());
       auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_timer_start_ptr",
@@ -3548,17 +3501,14 @@ struct AwlTimerStartLowering : public OpConversionPattern<awl::TimerStartOp> {
     if (!dt)
       return rewriter.notifyMatchFailure(op, "timer_start needs a direct operand");
     auto loc = op.getLoc();
-    ModuleOp module = op->template getParentOfType<ModuleOp>();
+    ModuleOp module = moduleOf(op);
     auto i8 = rewriter.getI8Type();
     auto i32 = rewriter.getI32Type();
     auto i64 = rewriter.getI64Type();
-    Value timerC = rewriter.create<arith::ConstantOp>(
-        loc, i32, rewriter.getI32IntegerAttr(dt.getByte()));
-    Value modeC = rewriter.create<arith::ConstantOp>(
-        loc, i8, rewriter.getI8IntegerAttr(op.getMode()));
+    Value timerC = constInt(rewriter, loc, i32, dt.getByte());
+    Value modeC = constInt(rewriter, loc, i8, op.getMode());
     Value dur = convertScalarTo(rewriter, loc, adaptor.getDur(), i64);
-    Value inC = rewriter.create<arith::ConstantOp>(loc, i8,
-                                                   rewriter.getI8IntegerAttr(1));
+    Value inC = constInt(rewriter, loc, i8, 1);
     if (adaptor.getIn())
       inC = rewriter.create<arith::ExtUIOp>(loc, i8, adaptor.getIn());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_timer_start",
@@ -3592,8 +3542,7 @@ struct AwlTimerResetLowering : public OpConversionPattern<awl::TimerResetOp> {
     auto loc = op.getLoc();
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto i32 = rewriter.getI32Type();
-    Value timerC = rewriter.create<arith::ConstantOp>(
-        loc, i32, rewriter.getI32IntegerAttr(dt.getByte()));
+    Value timerC = constInt(rewriter, loc, i32, dt.getByte());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_timer_reset",
                                 rewriter.getFunctionType({i32}, {}));
     rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{timerC});
@@ -3612,8 +3561,7 @@ struct AwlFrOpLowering : public OpConversionPattern<awl::FrOp> {
       auto loc = op.getLoc();
       ModuleOp module = op->getParentOfType<ModuleOp>();
       auto i8 = rewriter.getI8Type();
-      Value inC = rewriter.create<arith::ConstantOp>(loc, i8,
-                                                     rewriter.getI8IntegerAttr(1));
+      Value inC = constInt(rewriter, loc, i8, 1);
       if (adaptor.getIn())
         inC = rewriter.create<arith::ExtUIOp>(loc, i8, adaptor.getIn());
       auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_fr_ptr",
@@ -3631,10 +3579,8 @@ struct AwlFrOpLowering : public OpConversionPattern<awl::FrOp> {
     auto i8 = rewriter.getI8Type();
     auto i32 = rewriter.getI32Type();
     auto i64 = rewriter.getI64Type();
-    Value idxC = rewriter.create<arith::ConstantOp>(
-        loc, i32, rewriter.getI32IntegerAttr(dt.getByte()));
-    Value inC = rewriter.create<arith::ConstantOp>(loc, i8,
-                                                   rewriter.getI8IntegerAttr(1));
+    Value idxC = constInt(rewriter, loc, i32, dt.getByte());
+    Value inC = constInt(rewriter, loc, i8, 1);
     if (adaptor.getIn())
       inC = rewriter.create<arith::ExtUIOp>(loc, i8, adaptor.getIn());
     if (dt.getArea() == scl::DirectArea::Timer) {
@@ -3642,10 +3588,8 @@ struct AwlFrOpLowering : public OpConversionPattern<awl::FrOp> {
                                   rewriter.getFunctionType({i32, i8}, {}));
       rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{idxC, inC});
     } else if (dt.getArea() == scl::DirectArea::Counter) {
-      Value opC = rewriter.create<arith::ConstantOp>(
-          loc, i8, rewriter.getI8IntegerAttr(4 /* SCL_RT_COUNTER_FR */));
-      Value zero = rewriter.create<arith::ConstantOp>(
-          loc, i64, rewriter.getI64IntegerAttr(0));
+      Value opC = constInt(rewriter, loc, i8, 4 /* SCL_RT_COUNTER_FR */);
+      Value zero = constInt(rewriter, loc, i64, 0);
       auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_counter_op",
                                   rewriter.getFunctionType({i32, i8, i64, i8}, {}));
       rewriter.create<func::CallOp>(loc, fn, TypeRange{},
@@ -3666,8 +3610,7 @@ struct AwlSleepOpLowering : public OpConversionPattern<awl::SleepOp> {
     auto loc = op.getLoc();
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto i32 = rewriter.getI32Type();
-    Value msC = rewriter.create<arith::ConstantOp>(
-        loc, i32, rewriter.getI32IntegerAttr(op.getMs()));
+    Value msC = constInt(rewriter, loc, i32, op.getMs());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_sleep",
                                 rewriter.getFunctionType({i32}, {}));
     rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{msC});
@@ -3687,11 +3630,9 @@ struct AwlPackAreaOpLowering : public OpConversionPattern<awl::PackAreaOp> {
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto i8 = rewriter.getI8Type();
     auto i32 = rewriter.getI32Type();
-    auto areaC = rewriter.create<arith::ConstantOp>(
-        loc, i8, rewriter.getI8IntegerAttr(op.getArea()));
+    auto areaC = constInt(rewriter, loc, i8, op.getArea());
     auto byteC = convertScalarTo(rewriter, loc, adaptor.getByte(), i32);
-    auto bitC = rewriter.create<arith::ConstantOp>(
-        loc, i8, rewriter.getI8IntegerAttr(op.getBit()));
+    auto bitC = constInt(rewriter, loc, i8, op.getBit());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_pack_area",
                                 rewriter.getFunctionType({i8, i32, i8}, {rewriter.getI64Type()}));
     rewriter.replaceOpWithNewOp<func::CallOp>(
@@ -3707,15 +3648,13 @@ struct AwlCounterOpLowering : public OpConversionPattern<awl::CounterOp> {
   matchAndRewrite(awl::CounterOp op, awl::CounterOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    ModuleOp module = op->template getParentOfType<ModuleOp>();
+    ModuleOp module = moduleOf(op);
     auto i8 = rewriter.getI8Type();
     auto i32 = rewriter.getI32Type();
     auto i64 = rewriter.getI64Type();
-    auto opC0 = rewriter.create<arith::ConstantOp>(
-        loc, i8, rewriter.getI8IntegerAttr(op.getOp()));
+    auto opC0 = constInt(rewriter, loc, i8, op.getOp());
     Value val0 = convertScalarTo(rewriter, loc, adaptor.getValue(), i64);
-    Value inC0 = rewriter.create<arith::ConstantOp>(loc, i8,
-                                                    rewriter.getI8IntegerAttr(0));
+    Value inC0 = constInt(rewriter, loc, i8, 0);
     if (adaptor.getIn())
       inC0 = rewriter.create<arith::ExtUIOp>(loc, i8, adaptor.getIn());
     if (adaptor.getCounter().getType().isInteger(64)) {
@@ -3731,8 +3670,7 @@ struct AwlCounterOpLowering : public OpConversionPattern<awl::CounterOp> {
     auto dt = llvm::dyn_cast<scl::DirectType>(op.getCounter().getType());
     if (!dt)
       return rewriter.notifyMatchFailure(op, "counter needs a direct operand");
-    Value cntC = rewriter.create<arith::ConstantOp>(
-        loc, i32, rewriter.getI32IntegerAttr(dt.getByte()));
+    Value cntC = constInt(rewriter, loc, i32, dt.getByte());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_counter_op",
                                 rewriter.getFunctionType({i32, i8, i64, i8}, {}));
     rewriter.create<func::CallOp>(loc, fn, TypeRange{},
@@ -3754,10 +3692,8 @@ struct AwlSetDbSizeOpLowering : public OpConversionPattern<awl::SetDbSizeOp> {
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto i32 = rewriter.getI32Type();
     auto i64 = rewriter.getI64Type();
-    Value dbC = rewriter.create<arith::ConstantOp>(
-        loc, i32, rewriter.getI32IntegerAttr(op.getDb()));
-    Value szC = rewriter.create<arith::ConstantOp>(
-        loc, i64, rewriter.getI64IntegerAttr(op.getBytes()));
+    Value dbC = constInt(rewriter, loc, i32, op.getDb());
+    Value szC = constInt(rewriter, loc, i64, op.getBytes());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_sim_set_db_size",
                                 rewriter.getFunctionType({i32, i64}, {}));
     rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{dbC, szC});
@@ -3776,10 +3712,8 @@ struct AwlSetDbRefOpLowering : public OpConversionPattern<awl::SetDbRefOp> {
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto i32 = rewriter.getI32Type();
     auto i64 = rewriter.getI64Type();
-    Value dbC = rewriter.create<arith::ConstantOp>(
-        loc, i32, rewriter.getI32IntegerAttr(op.getDb()));
-    Value szC = rewriter.create<arith::ConstantOp>(
-        loc, i64, rewriter.getI64IntegerAttr(op.getBytes()));
+    Value dbC = constInt(rewriter, loc, i32, op.getDb());
+    Value szC = constInt(rewriter, loc, i64, op.getBytes());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_sim_db_ref",
                                 rewriter.getFunctionType({i32, i64}, {}));
     rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{dbC, szC});
@@ -3797,10 +3731,8 @@ struct AwlFeatureOpLowering : public OpConversionPattern<awl::FeatureOp> {
     auto loc = op.getLoc();
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto i32 = rewriter.getI32Type();
-    Value tC = rewriter.create<arith::ConstantOp>(
-        loc, i32, rewriter.getI32IntegerAttr(op.getTarget()));
-    Value vC = rewriter.create<arith::ConstantOp>(
-        loc, i32, rewriter.getI32IntegerAttr(op.getValue()));
+    Value tC = constInt(rewriter, loc, i32, op.getTarget());
+    Value vC = constInt(rewriter, loc, i32, op.getValue());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_feature",
                                 rewriter.getFunctionType({i32, i32}, {i32}));
     auto call = rewriter.create<func::CallOp>(loc, fn, TypeRange{i32},
@@ -3819,10 +3751,8 @@ struct AwlDbInfoOpLowering : public OpConversionPattern<awl::DbInfoOp> {
     auto loc = op.getLoc();
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto i32 = rewriter.getI32Type();
-    Value kindC = rewriter.create<arith::ConstantOp>(
-        loc, i32, rewriter.getI32IntegerAttr(op.getKind()));
-    Value dbC = rewriter.create<arith::ConstantOp>(
-        loc, i32, rewriter.getI32IntegerAttr(op.getDb()));
+    Value kindC = constInt(rewriter, loc, i32, op.getKind());
+    Value dbC = constInt(rewriter, loc, i32, op.getDb());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_db_info",
                                 rewriter.getFunctionType({i32, i32}, {rewriter.getI64Type()}));
     rewriter.replaceOpWithNewOp<func::CallOp>(
@@ -3840,8 +3770,7 @@ struct AwlSetDbOpLowering : public OpConversionPattern<awl::SetDbOp> {
     auto loc = op.getLoc();
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto i32 = rewriter.getI32Type();
-    Value dbC = rewriter.create<arith::ConstantOp>(
-        loc, i32, rewriter.getI32IntegerAttr(op.getDb()));
+    Value dbC = constInt(rewriter, loc, i32, op.getDb());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_set_current_db",
                                 rewriter.getFunctionType({i32}, {}));
     rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{dbC});
@@ -3859,8 +3788,7 @@ struct AwlSetDiOpLowering : public OpConversionPattern<awl::SetDiOp> {
     auto loc = op.getLoc();
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto i32 = rewriter.getI32Type();
-    Value dbC = rewriter.create<arith::ConstantOp>(
-        loc, i32, rewriter.getI32IntegerAttr(op.getDb()));
+    Value dbC = constInt(rewriter, loc, i32, op.getDb());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_set_current_di",
                                 rewriter.getFunctionType({i32}, {}));
     rewriter.create<func::CallOp>(loc, fn, TypeRange{}, ValueRange{dbC});
@@ -3883,8 +3811,7 @@ struct AwlPackPtrOpLowering : public OpConversionPattern<awl::PackPtrOp> {
     if (!dbV.getType().isInteger(32))
       dbV = rewriter.create<arith::TruncIOp>(loc, i32, dbV);
     auto mk = [&](int32_t v) {
-      return rewriter.create<arith::ConstantOp>(
-          loc, i32, rewriter.getI32IntegerAttr(v));
+      return constInt(rewriter, loc, i32, v);
     };
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_pack_s7",
                                 rewriter.getFunctionType({i32, i32, i32, i32},
@@ -3946,8 +3873,7 @@ struct AwlArSetOpLowering : public OpConversionPattern<awl::ArSetOp> {
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto i8 = rewriter.getI8Type();
     auto i64 = rewriter.getI64Type();
-    Value arC = rewriter.create<arith::ConstantOp>(
-        loc, i8, rewriter.getI8IntegerAttr(op.getAr()));
+    Value arC = constInt(rewriter, loc, i8, op.getAr());
     // a !scl.direct operand arrives already converted to the packed i64
     Value ptr = adaptor.getPtr();
     if (ptr.getType() != i64)
@@ -3969,8 +3895,7 @@ struct AwlArGetOpLowering : public OpConversionPattern<awl::ArGetOp> {
     auto loc = op.getLoc();
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto i8 = rewriter.getI8Type();
-    Value arC = rewriter.create<arith::ConstantOp>(
-        loc, i8, rewriter.getI8IntegerAttr(op.getAr()));
+    Value arC = constInt(rewriter, loc, i8, op.getAr());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_ar_get",
                                 rewriter.getFunctionType({i8}, {rewriter.getI64Type()}));
     rewriter.replaceOpWithNewOp<func::CallOp>(
@@ -3988,8 +3913,7 @@ struct AwlArRawOpLowering : public OpConversionPattern<awl::ArRawOp> {
     auto loc = op.getLoc();
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto i8 = rewriter.getI8Type();
-    Value arC = rewriter.create<arith::ConstantOp>(
-        loc, i8, rewriter.getI8IntegerAttr(op.getAr()));
+    Value arC = constInt(rewriter, loc, i8, op.getAr());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_ar_raw",
                                 rewriter.getFunctionType({i8}, {rewriter.getI32Type()}));
     rewriter.replaceOpWithNewOp<func::CallOp>(
@@ -4008,10 +3932,8 @@ struct AwlIndirectOpLowering : public OpConversionPattern<awl::IndirectOp> {
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto i8 = rewriter.getI8Type();
     auto i32 = rewriter.getI32Type();
-    Value arC = rewriter.create<arith::ConstantOp>(
-        loc, i8, rewriter.getI8IntegerAttr(op.getAr()));
-    Value offC = rewriter.create<arith::ConstantOp>(
-        loc, i32, rewriter.getI32IntegerAttr(op.getOffBits()));
+    Value arC = constInt(rewriter, loc, i8, op.getAr());
+    Value offC = constInt(rewriter, loc, i32, op.getOffBits());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_ar_add",
                                 rewriter.getFunctionType({i8, i32}, {rewriter.getI64Type()}));
     rewriter.replaceOpWithNewOp<func::CallOp>(
@@ -4030,8 +3952,7 @@ struct AwlArAddOpLowering : public OpConversionPattern<awl::ArAddOp> {
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto i8 = rewriter.getI8Type();
     auto i32 = rewriter.getI32Type();
-    Value arC = rewriter.create<arith::ConstantOp>(
-        loc, i8, rewriter.getI8IntegerAttr(op.getAr()));
+    Value arC = constInt(rewriter, loc, i8, op.getAr());
     Value offC = rewriter.create<arith::TruncIOp>(loc, i32, adaptor.getOff());
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_ar_add",
                                 rewriter.getFunctionType({i8, i32}, {rewriter.getI64Type()}));
@@ -4052,8 +3973,7 @@ struct AwlLoadIndirectOpLowering
     auto loc = op.getLoc();
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto i8 = rewriter.getI8Type();
-    Value widthC = rewriter.create<arith::ConstantOp>(
-        loc, i8, rewriter.getI8IntegerAttr(op.getWidthBits() / 8));
+    Value widthC = constInt(rewriter, loc, i8, op.getWidthBits() / 8);
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_read_indirect",
                                 rewriter.getFunctionType({rewriter.getI64Type(), i8},
                                                          {rewriter.getI64Type()}));
@@ -4077,8 +3997,7 @@ struct AwlStoreIndirectOpLowering
     auto i8 = rewriter.getI8Type();
     auto i64 = rewriter.getI64Type();
     Value v = convertScalarTo(rewriter, loc, adaptor.getValue(), i64);
-    Value widthC = rewriter.create<arith::ConstantOp>(
-        loc, i8, rewriter.getI8IntegerAttr(op.getWidthBits() / 8));
+    Value widthC = constInt(rewriter, loc, i8, op.getWidthBits() / 8);
     auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_write_indirect",
                                 rewriter.getFunctionType({i64, i64, i8}, {}));
     rewriter.create<func::CallOp>(loc, fn, TypeRange{},
@@ -4257,9 +4176,7 @@ struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
         rewriter.setInsertionPointToEnd(b);
         mlir::Value cond = be.getRlo();
         if (be.getNegate().has_value()) {
-          auto one = rewriter.create<arith::ConstantOp>(
-              loc, rewriter.getI1Type(), rewriter.getIntegerAttr(
-                                             rewriter.getI1Type(), 1));
+          auto one = constInt(rewriter, loc, rewriter.getI1Type(), 1);
           cond = rewriter.create<arith::XOrIOp>(loc, cond, one);
         }
         rewriter.create<cf::CondBranchOp>(loc, cond, retB, ValueRange{}, fall,
@@ -4297,8 +4214,7 @@ struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
       int32_t paramBytes =
           op.getParamBytes() ? (int32_t)op.getParamBytes().value() : 0;
       rewriter.setInsertionPointToStart(&func.getBody().front());
-      auto frameC = rewriter.create<arith::ConstantOp>(
-          loc, i32, rewriter.getI32IntegerAttr(frameSize));
+      auto frameC = constInt(rewriter, loc, i32, frameSize);
       auto pushCall =
           rewriter.create<func::CallOp>(loc, pushFn, TypeRange{}, ValueRange{frameC});
       // awlsim adds the AR2 base to DI-area accesses only inside FBs
@@ -4306,8 +4222,7 @@ struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
         auto i8 = rewriter.getI8Type();
         auto fbFn = getOrInsertRtFunc(rewriter, module, "scl_rt_frame_set_fb",
                                       rewriter.getFunctionType({i8}, {}));
-        auto fbC = rewriter.create<arith::ConstantOp>(
-            loc, i8, rewriter.getI8IntegerAttr(op.getFb() ? 1 : 0));
+        auto fbC = constInt(rewriter, loc, i8, op.getFb() ? 1 : 0);
         rewriter.create<func::CallOp>(loc, fbFn, TypeRange{}, ValueRange{fbC});
       }
       // OB entry: write the S7 OB-temp preset header into the new frame
@@ -4316,8 +4231,7 @@ struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
         auto obFn = getOrInsertRtFunc(rewriter, module, "scl_rt_ob_start",
                                       rewriter.getFunctionType({i32}, {}));
         rewriter.setInsertionPointAfter(pushCall);
-        auto obC = rewriter.create<arith::ConstantOp>(
-            loc, i32, rewriter.getI32IntegerAttr(obNum));
+        auto obC = constInt(rewriter, loc, i32, obNum);
         rewriter.create<func::CallOp>(loc, obFn, TypeRange{}, ValueRange{obC});
       }
       // FC interface parameters: copy the caller frame's parameter area into
@@ -4328,8 +4242,7 @@ struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
         auto inFn = getOrInsertRtFunc(rewriter, module, "scl_rt_param_in",
                                       rewriter.getFunctionType({i32}, {}));
         rewriter.setInsertionPointAfter(pushCall);
-        auto pC = rewriter.create<arith::ConstantOp>(
-            loc, i32, rewriter.getI32IntegerAttr(paramBytes));
+        auto pC = constInt(rewriter, loc, i32, paramBytes);
         inCall = rewriter.create<func::CallOp>(loc, inFn, TypeRange{},
                                                ValueRange{pC});
       }
@@ -4341,8 +4254,7 @@ struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
               auto outFn = getOrInsertRtFunc(
                   rewriter, module, "scl_rt_param_out",
                   rewriter.getFunctionType({i32}, {}));
-              auto pC = rewriter.create<arith::ConstantOp>(
-                  loc, i32, rewriter.getI32IntegerAttr(paramBytes));
+              auto pC = constInt(rewriter, loc, i32, paramBytes);
               rewriter.create<func::CallOp>(loc, outFn, TypeRange{},
                                             ValueRange{pC});
             }
