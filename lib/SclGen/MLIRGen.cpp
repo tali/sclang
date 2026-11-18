@@ -723,7 +723,7 @@ private:
         // Mirror mlirGen(IndexedVariableAST): a plain array base yields a
         // typed element address (no attr); a byte-view base (array member of
         // a FB/struct) yields an i8 view with the array type recorded.
-        mlir::Type baseElem = llvm::cast<AddressType>(addr.getType()).getElementType();
+        mlir::Type baseElem = addrElemTy(addr);
         bool byteBase = llvm::isa<IntegerType>(baseElem) &&
                         llvm::cast<IntegerType>(baseElem).getWidth() == 8;
         mlir::TypeAttr attr;
@@ -1554,7 +1554,7 @@ private:
   ArrayType arrayTypeOfAddress(mlir::Value addr) {
     if (!addr || !llvm::isa<AddressType>(addr.getType()))
       return nullptr;
-    auto elem = llvm::cast<AddressType>(addr.getType()).getElementType();
+    auto elem = addrElemTy(addr);
     if (auto at = llvm::dyn_cast<ArrayType>(elem))
       return at;
     auto it = byteViewTypes.find(addr);
@@ -1773,7 +1773,7 @@ private:
     mlir::Value lhs = mlirGenLValue(lvalue);
     if (!lhs)
       return mlir::failure();
-    auto baseElem = llvm::cast<AddressType>(lhs.getType()).getElementType();
+    auto baseElem = addrElemTy(lhs);
     // A string member (byte view of an array type) takes the whole literal;
     // only a plain char target gets just the first byte (char := 'A').
     ArrayType arrTy;
@@ -1929,7 +1929,7 @@ private:
     // Implicit integer conversion on assignment (e.g. char -> int). For
     // byte-view member addresses use the declared member type, not the i8
     // address element type.
-    auto lhsElem = llvm::cast<AddressType>(lhs.getType()).getElementType();
+    auto lhsElem = addrElemTy(lhs);
     auto bvIt = byteViewTypes.find(lhs);
     mlir::Type declared = bvIt != byteViewTypes.end() ? bvIt->second : lhsElem;
     // Implicit integer conversion on width mismatch. byte/word/dword are
@@ -2053,7 +2053,7 @@ private:
       if (!addr)
         return nullptr;
       auto directTy = llvm::cast<DirectType>(
-          llvm::cast<AddressType>(addr.getType()).getElementType());
+          addrElemTy(addr));
       return builder.create<LoadOp>(loc(expr->loc()), directTy.getValueType(),
                                     addr);
     }
@@ -2396,7 +2396,7 @@ private:
 
   /// The declared type of a struct/IDB member (used to type loads).
   mlir::Type memberDeclaredType(mlir::Value base, StringRef name) {
-    auto baseTy = llvm::cast<AddressType>(base.getType()).getElementType();
+    auto baseTy = addrElemTy(base);
     if (auto idbTy = llvm::dyn_cast<InstanceDbType>(baseTy)) {
       auto fbName = mlir::StringAttr::get(theModule->getContext(),
                                           idbTy.getFbSymbol());
@@ -2454,7 +2454,7 @@ private:
                           << name << "'";
       return nullptr;
     }
-    mlir::Type baseType = llvm::cast<AddressType>(address.getType()).getElementType();
+    mlir::Type baseType = addrElemTy(address);
     auto i8 = IntegerType::get(builder.getContext(), 8);
     mlir::Type resultType = AddressType::get(i8);
 
@@ -2503,7 +2503,7 @@ private:
                               << "' in builtin FB '" << fbName << "'";
           return nullptr;
         }
-        auto addrElem = llvm::cast<AddressType>(address.getType()).getElementType();
+        auto addrElem = addrElemTy(address);
         mlir::Value result;
         if (addrElem == idbType) {
           // Direct instance-DB address: GetVariableOp can be lowered.
@@ -2548,7 +2548,7 @@ private:
         return nullptr;
       }
       // Address the member as an i8 view into the instance byte buffer.
-      auto addrElem = llvm::cast<AddressType>(address.getType()).getElementType();
+      auto addrElem = addrElemTy(address);
       if (addrElem == idbType) {
         // Direct access through the FB's own instance-DB argument ($self).
         auto result = builder.create<GetVariableOp>(location, resultType, address, name);
@@ -2667,7 +2667,7 @@ private:
     mlir::Value base = mlirGen(expr->getBase());
     if (!base)
       return nullptr;
-    auto baseElem = llvm::cast<AddressType>(base.getType()).getElementType();
+    auto baseElem = addrElemTy(base);
     mlir::Type resultElem;
     mlir::TypeAttr arrayTypeAttr;
     ArrayType arrayTy;
@@ -3065,7 +3065,7 @@ private:
     if (fb.empty()) {
       // global instance DB: the address element type is the IDB type
       if (auto idb = llvm::dyn_cast<InstanceDbType>(
-              llvm::cast<AddressType>(addr.getType()).getElementType()))
+              addrElemTy(addr)))
         fb = unquote(idb.getFbSymbol());
     }
     if (fb.empty()) {
@@ -3915,7 +3915,7 @@ private:
         return s;
       }
       // scalar address (char var / member): load with the declared type
-      mlir::Type vt = llvm::cast<AddressType>(v.getType()).getElementType();
+      mlir::Type vt = addrElemTy(v);
       auto it = byteViewTypes.find(v);
       if (it != byteViewTypes.end())
         vt = it->second;
@@ -5279,7 +5279,7 @@ private:
           auto it = byteViewTypes.find(elem);
           mlir::Type ty = it != byteViewTypes.end()
                                ? it->second
-                               : llvm::cast<AddressType>(target.getType()).getElementType();
+                               : addrElemTy(target);
           outBindings.push_back({elem, target, ty});
         }
     }
@@ -5318,7 +5318,7 @@ private:
         auto it = byteViewTypes.find(elem);
         mlir::Type ty = it != byteViewTypes.end()
                              ? it->second
-                             : llvm::cast<AddressType>(target.getType()).getElementType();
+                             : addrElemTy(target);
         outBindings.push_back({elem, target, ty});
         return mlir::success();
       })))
@@ -5426,6 +5426,11 @@ private:
 
   /// Shorthand: scl integer constant with result type `sclTy` and an
   /// integer attribute of the given bit `width`.
+  /// The element type of an scl address value (`!scl.address<T>` -> T).
+  static mlir::Type addrElemTy(mlir::Value addr) {
+    return addrElemTy(addr);
+  }
+
   ConstantOp intConst(mlir::Location loc, mlir::Type sclTy, unsigned width,
                      int64_t v) {
     return builder.create<ConstantOp>(
