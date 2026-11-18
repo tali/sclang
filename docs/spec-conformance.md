@@ -57,68 +57,68 @@ plus the lit tests under `test/` and the external corpus tests listed in
 
 | language | spec reference | status | code |
 |---|---|---|---|
-| AWL | IEC 61131-3 STL block end (BE/BEA/BEU), Siemens AWL manual "Block end" | full | [lib/AwlGen/AwlGen.cpp:2793](../lib/AwlGen/AwlGen.cpp#L2793) |
-| AWL | IEC 61131-3 STL conditional block end (BEB/BEC), Siemens AWL manual | full | [lib/AwlGen/AwlGen.cpp:2799](../lib/AwlGen/AwlGen.cpp#L2799) |
-| AWL | IEC 61131-3 STL no-operation (NOP) | full | [lib/AwlGen/AwlGen.cpp:2810](../lib/AwlGen/AwlGen.cpp#L2810) |
-| AWL | IEC 61131-3 STL load (L), Siemens AWL manual "Load and transfer" — see parseLoad | full | [lib/AwlGen/AwlGen.cpp:2818](../lib/AwlGen/AwlGen.cpp#L2818) |
-| AWL | IEC 61131-3 STL transfer (T), Siemens AWL manual "Load and transfer" — see parseStore | full | [lib/AwlGen/AwlGen.cpp:2821](../lib/AwlGen/AwlGen.cpp#L2821) |
-| AWL | IEC 61131-3 STL boolean logic ops (U/UN/A/AN/O/ON) + STW comparisons (U ==0 etc.), Siemens AWL manual "Logic operations" | full | [lib/AwlGen/AwlGen.cpp:2824](../lib/AwlGen/AwlGen.cpp#L2824) |
-| AWL | IEC 61131-3 STL NOT (negate RLO) | full | [lib/AwlGen/AwlGen.cpp:2874](../lib/AwlGen/AwlGen.cpp#L2874) |
-| AWL | IEC 61131-3 STL SET (RLO := 1) | full | [lib/AwlGen/AwlGen.cpp:2886](../lib/AwlGen/AwlGen.cpp#L2886) |
-| AWL | IEC 61131-3 STL CLR (RLO := 0) | full | [lib/AwlGen/AwlGen.cpp:2896](../lib/AwlGen/AwlGen.cpp#L2896) |
-| AWL | Siemens AWL manual "Opening a data block" (AUF/OPN DB/DI, incl. AUF DB [LW n]) | full | [lib/AwlGen/AwlGen.cpp:2906](../lib/AwlGen/AwlGen.cpp#L2906) |
-| AWL | Siemens AWL manual "Address register instructions" (LAR1/LAR2/+ARn; LAR loads the operand content as pointer, awlsim insn_larN) | full | [lib/AwlGen/AwlGen.cpp:2942](../lib/AwlGen/AwlGen.cpp#L2942) |
-| AWL | Siemens AWL manual "Address register instructions" (TAR1/TAR2/TAR; TAR stores the AR as a raw S7 pointer, awlsim insn_tarN) | full | [lib/AwlGen/AwlGen.cpp:3022](../lib/AwlGen/AwlGen.cpp#L3022) |
-| AWL | IEC 61131-3 STL bit set/reset (S/R), Siemens AWL manual "Bit logic" | full | [lib/AwlGen/AwlGen.cpp:3131](../lib/AwlGen/AwlGen.cpp#L3131) |
-| AWL | IEC 61131-3 STL word/dword logic (AW/OW/XOW/AD/OD/XOD), Siemens AWL manual "Word logic" | full | [lib/AwlGen/AwlGen.cpp:3136](../lib/AwlGen/AwlGen.cpp#L3136) |
-| AWL | Siemens AWL manual "Timer instructions" (SP/SE/SS/SV/SI/SD, S5TIME), runtime scl_rt_timer_* | full | [lib/AwlGen/AwlGen.cpp:3140](../lib/AwlGen/AwlGen.cpp#L3140) |
-| AWL | Siemens AWL manual "Counter instructions" (ZV/ZR/CU/CD), runtime scl_rt_counter_op | full | [lib/AwlGen/AwlGen.cpp:3144](../lib/AwlGen/AwlGen.cpp#L3144) |
-| AWL | IEC 61131-3 STL unconditional/conditional jumps (SPA/SPB/SPN/SPBN/JU/JB/JNB/JBI/JC/LOOP), Siemens AWL manual "Jumps" | full | [lib/AwlGen/AwlGen.cpp:3147](../lib/AwlGen/AwlGen.cpp#L3147) |
-| AWL | Siemens AWL manual "SAVE" (RLO -> BR status bit) | full | [lib/AwlGen/AwlGen.cpp:3150](../lib/AwlGen/AwlGen.cpp#L3150) |
-| AWL | Siemens AWL manual S5-compat SF (english alias of SA, off-delay timer start — awlsim english2german "SF" -> "SA") | full | [lib/AwlGen/AwlGen.cpp:3160](../lib/AwlGen/AwlGen.cpp#L3160) |
-| AWL | IEC 61131-3 STL TAK (exchange accumulators), Siemens AWL manual "Accumulator instructions" | full | [lib/AwlGen/AwlGen.cpp:3163](../lib/AwlGen/AwlGen.cpp#L3163) |
-| AWL | IEC 61131-3 STL NEGI/NEGD (two's-complement ACCU1); awlsim | full | [lib/AwlGen/AwlGen.cpp:3169](../lib/AwlGen/AwlGen.cpp#L3169) |
-| AWL | Siemens AWL manual "Shift and rotate" (SLW/SRW/SSI/SSD/SLD/SRD/RLD/RRD/RLDA/RRDA), awl.shift | full | [lib/AwlGen/AwlGen.cpp:3223](../lib/AwlGen/AwlGen.cpp#L3223) |
-| AWL | Siemens AWL manual "Real math" (ABS/NEGR/SIN/COS/TAN/...), awl.real_math (approx: float32 host math) | approx | [lib/AwlGen/AwlGen.cpp:3228](../lib/AwlGen/AwlGen.cpp#L3228) |
-| AWL | Siemens AWL manual "Value conversions" TRUNC/RND (approx: truncation) | approx | [lib/AwlGen/AwlGen.cpp:3233](../lib/AwlGen/AwlGen.cpp#L3233) |
-| AWL | Siemens AWL manual "Value conversions" DTR (dword->real), plus BTI/BTD/ITB/DTB BCD and ITD/DTI/INVI/INVD below | full | [lib/AwlGen/AwlGen.cpp:3265](../lib/AwlGen/AwlGen.cpp#L3265) |
-| AWL | Siemens AWL manual "Enabling" FR (timer/counter), runtime scl_rt_timer_fr | full | [lib/AwlGen/AwlGen.cpp:3271](../lib/AwlGen/AwlGen.cpp#L3271) |
-| AWL | Siemens AWL manual TDB (swap DB/DI registers) (approx: not modelled) | approx | [lib/AwlGen/AwlGen.cpp:3281](../lib/AwlGen/AwlGen.cpp#L3281) |
-| AWL | Siemens AWL manual "Opening a data block" OPN (= AUF) | full | [lib/AwlGen/AwlGen.cpp:3292](../lib/AwlGen/AwlGen.cpp#L3292) |
-| AWL | awlsim test directive __STWRST (reset status word) | full | [lib/AwlGen/AwlGen.cpp:3325](../lib/AwlGen/AwlGen.cpp#L3325) |
-| AWL | awlsim test directive __FEATURE t [, v] (nrAccus / OB-temp presets), runtime scl_rt_feature | full | [lib/AwlGen/AwlGen.cpp:3337](../lib/AwlGen/AwlGen.cpp#L3337) |
-| AWL | awlsim test directive __SLEEP ms (advance virtual clock), runtime scl_rt_sleep | full | [lib/AwlGen/AwlGen.cpp:3358](../lib/AwlGen/AwlGen.cpp#L3358) |
-| AWL | Siemens AWL manual LC (load timer/counter current value, BCD-coded) | full | [lib/AwlGen/AwlGen.cpp:3368](../lib/AwlGen/AwlGen.cpp#L3368) |
-| AWL | Siemens AWL manual FP/FN edge memory — the operand bit itself is the edge flag (awlsim insn_FP/FN): store flag := RLO, then new RLO = RLO & !oldFlag (FP) / !RLO & oldFlag (FN) | full | [lib/AwlGen/AwlGen.cpp:3387](../lib/AwlGen/AwlGen.cpp#L3387) |
-| AWL | Siemens AWL manual MCR (master control relay) — MCRA/MCRD set the (compile-time tracked) mcrActive flag; SAVE (RLO -> BR) stays a no-op | full | [lib/AwlGen/AwlGen.cpp:3413](../lib/AwlGen/AwlGen.cpp#L3413) |
-| AWL | Siemens AWL manual BLD <n> (display code — no-op) | full | [lib/AwlGen/AwlGen.cpp:3424](../lib/AwlGen/AwlGen.cpp#L3424) |
-| AWL | Siemens AWL manual MCR( / MCR ) nesting — the pushed VKE (savedRlo of the isMcr bracket) gates stores via mcrOn()/gatedRlo() | full | [lib/AwlGen/AwlGen.cpp:3430](../lib/AwlGen/AwlGen.cpp#L3430) |
-| AWL | IEC 61131-3 STL SPBB/SPB-branch save (save RLO into BR) | full | [lib/AwlGen/AwlGen.cpp:3456](../lib/AwlGen/AwlGen.cpp#L3456) |
-| AWL | Siemens AWL manual ENT/PUSH (push accumulators), POP/LEAVE below | full | [lib/AwlGen/AwlGen.cpp:3459](../lib/AwlGen/AwlGen.cpp#L3459) |
-| AWL | Siemens AWL manual POP/LEAVE (pop accumulators) | full | [lib/AwlGen/AwlGen.cpp:3469](../lib/AwlGen/AwlGen.cpp#L3469) |
-| AWL | Siemens AWL manual INC/DEC (ACCU1 +/- n) | full | [lib/AwlGen/AwlGen.cpp:3480](../lib/AwlGen/AwlGen.cpp#L3480) |
-| AWL | Siemens AWL manual INC/DEC n — byte op on ACCU1 (awlsim setByte) | full | [lib/AwlGen/AwlGen.cpp:3481](../lib/AwlGen/AwlGen.cpp#L3481) |
-| AWL | Siemens AWL manual "Value conversions" ITD/DTI — ITD sign-extends the low word of ACCU1 to a dword (awlsim setDWord(getSignedWord)) | full | [lib/AwlGen/AwlGen.cpp:3502](../lib/AwlGen/AwlGen.cpp#L3502) |
-| AWL | Siemens AWL manual INVI/INVD (one's complement) — INVI inverts the low word keeping the high word (awlsim setWord), INVD inverts the full dword | full | [lib/AwlGen/AwlGen.cpp:3512](../lib/AwlGen/AwlGen.cpp#L3512) |
-| AWL | Siemens AWL manual MOD (remainder) | full | [lib/AwlGen/AwlGen.cpp:3531](../lib/AwlGen/AwlGen.cpp#L3531) |
-| AWL | Siemens AWL manual TAD (dword accumulator exchange) | full | [lib/AwlGen/AwlGen.cpp:3556](../lib/AwlGen/AwlGen.cpp#L3556) |
-| AWL | Siemens AWL manual TAD (swapEndianDWord(ACCU1): reverse all four bytes — awlsim insn_TAD) | full | [lib/AwlGen/AwlGen.cpp:3557](../lib/AwlGen/AwlGen.cpp#L3557) |
-| AWL | IEC 61131-3 STL X/XN (XOR RLO with bit) | full | [lib/AwlGen/AwlGen.cpp:3599](../lib/AwlGen/AwlGen.cpp#L3599) |
-| AWL | Siemens AWL manual SPL (jump to label via ACCU1) | full | [lib/AwlGen/AwlGen.cpp:3627](../lib/AwlGen/AwlGen.cpp#L3627) |
-| AWL | IEC 61131-3 STL conditional jumps JNB/JBI/SPBNB/SPBI/SPBIN (with BR save) | full | [lib/AwlGen/AwlGen.cpp:3661](../lib/AwlGen/AwlGen.cpp#L3661) |
-| AWL | IEC 61131-3 STL conditional jumps JB/JBI/JC (RLO/BR conditions) | full | [lib/AwlGen/AwlGen.cpp:3665](../lib/AwlGen/AwlGen.cpp#L3665) |
-| AWL | IEC 61131-3 STL LOOP (decrement ACCU1, jump if != 0) | full | [lib/AwlGen/AwlGen.cpp:3668](../lib/AwlGen/AwlGen.cpp#L3668) |
-| AWL | IEC 61131-3 STL zero/plus/minus jumps (SPZ/SPPZ/SPMZ/SPS/SPP/SPM) | full | [lib/AwlGen/AwlGen.cpp:3700](../lib/AwlGen/AwlGen.cpp#L3700) |
-| AWL | Siemens AWL manual "Value conversions" BTI/BTD (BCD -> binary); | full | [lib/AwlGen/AwlGen.cpp:3735](../lib/AwlGen/AwlGen.cpp#L3735) |
-| AWL | Siemens AWL manual "Value conversions" ITB/DTB (binary -> BCD); | full | [lib/AwlGen/AwlGen.cpp:3769](../lib/AwlGen/AwlGen.cpp#L3769) |
-| AWL | Siemens AWL manual TAW (swap the two bytes of ACCU1's low word — awlsim insn_TAW: accu1 = (accu1 & 0xFFFF0000) | swapEndianWord(accu1 & 0xFFFF)) | full | [lib/AwlGen/AwlGen.cpp:3810](../lib/AwlGen/AwlGen.cpp#L3810) |
-| AWL | awlsim test directive __ASSERT<cmp> (value oracles, runtime scl_rt_assert_cmp[_r]) | full | [lib/AwlGen/AwlGen.cpp:3833](../lib/AwlGen/AwlGen.cpp#L3833) |
-| AWL | IEC 61131-3 STL block calls (CALL/UC/CC, incl. parameterized CALL and indirect UC FC [MW x]), see parseCall | full | [lib/AwlGen/AwlGen.cpp:3836](../lib/AwlGen/AwlGen.cpp#L3836) |
-| AWL | Siemens AWL manual "Indirect addressing" ([AR1, P#x.y] area-relative, memory-indirect [LD n]/[#var] base = operand value, T/Z [..] = block number) | full | [lib/AwlGen/AwlGen.cpp:4260](../lib/AwlGen/AwlGen.cpp#L4260) |
-| AWL | IEC 61131-3 STL / Siemens AWL manual "Addressing modes": absolute (M 10.0, DB1.DBW 4), indirect ([AR1, P#x.y], [LD n], [#var]), symbolic, P# pointer literals | full | [lib/AwlGen/AwlGen.cpp:4412](../lib/AwlGen/AwlGen.cpp#L4412) |
-| AWL | Siemens AWL manual symbolic DB members (DBn.SYMBOL...) resolved through the DATA_BLOCK layout (approx: a member missing from a declared DB resolves to DBW 0/DBX 0.0 of that DB) | approx | [lib/AwlGen/AwlGen.cpp:6250](../lib/AwlGen/AwlGen.cpp#L6250) |
-| AWL | Siemens AWL manual symbolic DB members of undeclared DBs, auto-assigned offsets in order of first use (awlsim symbol tables) -> autoDbCursor branch of resolveDbMember (approx: DB contents are runtime memory, so the synthetic offset only fixes the address, not the value) | approx | [lib/AwlGen/AwlGen.cpp:6269](../lib/AwlGen/AwlGen.cpp#L6269) |
-| AWL | Siemens AWL manual "Calling blocks" (CALL/UC/CC with parameter lists := / =>, FB instance DB, multi-instance via AR2) | full | [lib/AwlGen/AwlGen.cpp:6920](../lib/AwlGen/AwlGen.cpp#L6920) |
+| AWL | IEC 61131-3 STL block end (BE/BEA/BEU), Siemens AWL manual "Block end" | full | [lib/AwlGen/AwlGen.cpp:2799](../lib/AwlGen/AwlGen.cpp#L2799) |
+| AWL | IEC 61131-3 STL conditional block end (BEB/BEC), Siemens AWL manual | full | [lib/AwlGen/AwlGen.cpp:2805](../lib/AwlGen/AwlGen.cpp#L2805) |
+| AWL | IEC 61131-3 STL no-operation (NOP) | full | [lib/AwlGen/AwlGen.cpp:2816](../lib/AwlGen/AwlGen.cpp#L2816) |
+| AWL | IEC 61131-3 STL load (L), Siemens AWL manual "Load and transfer" — see parseLoad | full | [lib/AwlGen/AwlGen.cpp:2824](../lib/AwlGen/AwlGen.cpp#L2824) |
+| AWL | IEC 61131-3 STL transfer (T), Siemens AWL manual "Load and transfer" — see parseStore | full | [lib/AwlGen/AwlGen.cpp:2827](../lib/AwlGen/AwlGen.cpp#L2827) |
+| AWL | IEC 61131-3 STL boolean logic ops (U/UN/A/AN/O/ON) + STW comparisons (U ==0 etc.), Siemens AWL manual "Logic operations" | full | [lib/AwlGen/AwlGen.cpp:2830](../lib/AwlGen/AwlGen.cpp#L2830) |
+| AWL | IEC 61131-3 STL NOT (negate RLO) | full | [lib/AwlGen/AwlGen.cpp:2880](../lib/AwlGen/AwlGen.cpp#L2880) |
+| AWL | IEC 61131-3 STL SET (RLO := 1) | full | [lib/AwlGen/AwlGen.cpp:2892](../lib/AwlGen/AwlGen.cpp#L2892) |
+| AWL | IEC 61131-3 STL CLR (RLO := 0) | full | [lib/AwlGen/AwlGen.cpp:2902](../lib/AwlGen/AwlGen.cpp#L2902) |
+| AWL | Siemens AWL manual "Opening a data block" (AUF/OPN DB/DI, incl. AUF DB [LW n]) | full | [lib/AwlGen/AwlGen.cpp:2912](../lib/AwlGen/AwlGen.cpp#L2912) |
+| AWL | Siemens AWL manual "Address register instructions" (LAR1/LAR2/+ARn; LAR loads the operand content as pointer, awlsim insn_larN) | full | [lib/AwlGen/AwlGen.cpp:2948](../lib/AwlGen/AwlGen.cpp#L2948) |
+| AWL | Siemens AWL manual "Address register instructions" (TAR1/TAR2/TAR; TAR stores the AR as a raw S7 pointer, awlsim insn_tarN) | full | [lib/AwlGen/AwlGen.cpp:3028](../lib/AwlGen/AwlGen.cpp#L3028) |
+| AWL | IEC 61131-3 STL bit set/reset (S/R), Siemens AWL manual "Bit logic" | full | [lib/AwlGen/AwlGen.cpp:3137](../lib/AwlGen/AwlGen.cpp#L3137) |
+| AWL | IEC 61131-3 STL word/dword logic (AW/OW/XOW/AD/OD/XOD), Siemens AWL manual "Word logic" | full | [lib/AwlGen/AwlGen.cpp:3142](../lib/AwlGen/AwlGen.cpp#L3142) |
+| AWL | Siemens AWL manual "Timer instructions" (SP/SE/SS/SV/SI/SD, S5TIME), runtime scl_rt_timer_* | full | [lib/AwlGen/AwlGen.cpp:3146](../lib/AwlGen/AwlGen.cpp#L3146) |
+| AWL | Siemens AWL manual "Counter instructions" (ZV/ZR/CU/CD), runtime scl_rt_counter_op | full | [lib/AwlGen/AwlGen.cpp:3150](../lib/AwlGen/AwlGen.cpp#L3150) |
+| AWL | IEC 61131-3 STL unconditional/conditional jumps (SPA/SPB/SPN/SPBN/JU/JB/JNB/JBI/JC/LOOP), Siemens AWL manual "Jumps" | full | [lib/AwlGen/AwlGen.cpp:3153](../lib/AwlGen/AwlGen.cpp#L3153) |
+| AWL | Siemens AWL manual "SAVE" (RLO -> BR status bit) | full | [lib/AwlGen/AwlGen.cpp:3156](../lib/AwlGen/AwlGen.cpp#L3156) |
+| AWL | Siemens AWL manual S5-compat SF (english alias of SA, off-delay timer start — awlsim english2german "SF" -> "SA") | full | [lib/AwlGen/AwlGen.cpp:3166](../lib/AwlGen/AwlGen.cpp#L3166) |
+| AWL | IEC 61131-3 STL TAK (exchange accumulators), Siemens AWL manual "Accumulator instructions" | full | [lib/AwlGen/AwlGen.cpp:3169](../lib/AwlGen/AwlGen.cpp#L3169) |
+| AWL | IEC 61131-3 STL NEGI/NEGD (two's-complement ACCU1); awlsim | full | [lib/AwlGen/AwlGen.cpp:3175](../lib/AwlGen/AwlGen.cpp#L3175) |
+| AWL | Siemens AWL manual "Shift and rotate" (SLW/SRW/SSI/SSD/SLD/SRD/RLD/RRD/RLDA/RRDA), awl.shift | full | [lib/AwlGen/AwlGen.cpp:3229](../lib/AwlGen/AwlGen.cpp#L3229) |
+| AWL | Siemens AWL manual "Real math" (ABS/NEGR/SIN/COS/TAN/...), awl.real_math (approx: float32 host math) | approx | [lib/AwlGen/AwlGen.cpp:3234](../lib/AwlGen/AwlGen.cpp#L3234) |
+| AWL | Siemens AWL manual "Value conversions" TRUNC/RND (approx: truncation) | approx | [lib/AwlGen/AwlGen.cpp:3239](../lib/AwlGen/AwlGen.cpp#L3239) |
+| AWL | Siemens AWL manual "Value conversions" DTR (dword->real), plus BTI/BTD/ITB/DTB BCD and ITD/DTI/INVI/INVD below | full | [lib/AwlGen/AwlGen.cpp:3271](../lib/AwlGen/AwlGen.cpp#L3271) |
+| AWL | Siemens AWL manual "Enabling" FR (timer/counter), runtime scl_rt_timer_fr | full | [lib/AwlGen/AwlGen.cpp:3277](../lib/AwlGen/AwlGen.cpp#L3277) |
+| AWL | Siemens AWL manual TDB (swap DB/DI registers) (approx: not modelled) | approx | [lib/AwlGen/AwlGen.cpp:3287](../lib/AwlGen/AwlGen.cpp#L3287) |
+| AWL | Siemens AWL manual "Opening a data block" OPN (= AUF) | full | [lib/AwlGen/AwlGen.cpp:3298](../lib/AwlGen/AwlGen.cpp#L3298) |
+| AWL | awlsim test directive __STWRST (reset status word) | full | [lib/AwlGen/AwlGen.cpp:3331](../lib/AwlGen/AwlGen.cpp#L3331) |
+| AWL | awlsim test directive __FEATURE t [, v] (nrAccus / OB-temp presets), runtime scl_rt_feature | full | [lib/AwlGen/AwlGen.cpp:3343](../lib/AwlGen/AwlGen.cpp#L3343) |
+| AWL | awlsim test directive __SLEEP ms (advance virtual clock), runtime scl_rt_sleep | full | [lib/AwlGen/AwlGen.cpp:3364](../lib/AwlGen/AwlGen.cpp#L3364) |
+| AWL | Siemens AWL manual LC (load timer/counter current value, BCD-coded) | full | [lib/AwlGen/AwlGen.cpp:3374](../lib/AwlGen/AwlGen.cpp#L3374) |
+| AWL | Siemens AWL manual FP/FN edge memory — the operand bit itself is the edge flag (awlsim insn_FP/FN): store flag := RLO, then new RLO = RLO & !oldFlag (FP) / !RLO & oldFlag (FN) | full | [lib/AwlGen/AwlGen.cpp:3393](../lib/AwlGen/AwlGen.cpp#L3393) |
+| AWL | Siemens AWL manual MCR (master control relay) — MCRA/MCRD set the (compile-time tracked) mcrActive flag; SAVE (RLO -> BR) stays a no-op | full | [lib/AwlGen/AwlGen.cpp:3419](../lib/AwlGen/AwlGen.cpp#L3419) |
+| AWL | Siemens AWL manual BLD <n> (display code — no-op) | full | [lib/AwlGen/AwlGen.cpp:3430](../lib/AwlGen/AwlGen.cpp#L3430) |
+| AWL | Siemens AWL manual MCR( / MCR ) nesting — the pushed VKE (savedRlo of the isMcr bracket) gates stores via mcrOn()/gatedRlo() | full | [lib/AwlGen/AwlGen.cpp:3436](../lib/AwlGen/AwlGen.cpp#L3436) |
+| AWL | IEC 61131-3 STL SPBB/SPB-branch save (save RLO into BR) | full | [lib/AwlGen/AwlGen.cpp:3462](../lib/AwlGen/AwlGen.cpp#L3462) |
+| AWL | Siemens AWL manual ENT/PUSH (push accumulators), POP/LEAVE below | full | [lib/AwlGen/AwlGen.cpp:3465](../lib/AwlGen/AwlGen.cpp#L3465) |
+| AWL | Siemens AWL manual POP/LEAVE (pop accumulators) | full | [lib/AwlGen/AwlGen.cpp:3475](../lib/AwlGen/AwlGen.cpp#L3475) |
+| AWL | Siemens AWL manual INC/DEC (ACCU1 +/- n) | full | [lib/AwlGen/AwlGen.cpp:3486](../lib/AwlGen/AwlGen.cpp#L3486) |
+| AWL | Siemens AWL manual INC/DEC n — byte op on ACCU1 (awlsim setByte) | full | [lib/AwlGen/AwlGen.cpp:3487](../lib/AwlGen/AwlGen.cpp#L3487) |
+| AWL | Siemens AWL manual "Value conversions" ITD/DTI — ITD sign-extends the low word of ACCU1 to a dword (awlsim setDWord(getSignedWord)) | full | [lib/AwlGen/AwlGen.cpp:3508](../lib/AwlGen/AwlGen.cpp#L3508) |
+| AWL | Siemens AWL manual INVI/INVD (one's complement) — INVI inverts the low word keeping the high word (awlsim setWord), INVD inverts the full dword | full | [lib/AwlGen/AwlGen.cpp:3518](../lib/AwlGen/AwlGen.cpp#L3518) |
+| AWL | Siemens AWL manual MOD (remainder) | full | [lib/AwlGen/AwlGen.cpp:3537](../lib/AwlGen/AwlGen.cpp#L3537) |
+| AWL | Siemens AWL manual TAD (dword accumulator exchange) | full | [lib/AwlGen/AwlGen.cpp:3562](../lib/AwlGen/AwlGen.cpp#L3562) |
+| AWL | Siemens AWL manual TAD (swapEndianDWord(ACCU1): reverse all four bytes — awlsim insn_TAD) | full | [lib/AwlGen/AwlGen.cpp:3563](../lib/AwlGen/AwlGen.cpp#L3563) |
+| AWL | IEC 61131-3 STL X/XN (XOR RLO with bit) | full | [lib/AwlGen/AwlGen.cpp:3605](../lib/AwlGen/AwlGen.cpp#L3605) |
+| AWL | Siemens AWL manual SPL (jump to label via ACCU1) | full | [lib/AwlGen/AwlGen.cpp:3633](../lib/AwlGen/AwlGen.cpp#L3633) |
+| AWL | IEC 61131-3 STL conditional jumps JNB/JBI/SPBNB/SPBI/SPBIN (with BR save) | full | [lib/AwlGen/AwlGen.cpp:3667](../lib/AwlGen/AwlGen.cpp#L3667) |
+| AWL | IEC 61131-3 STL conditional jumps JB/JBI/JC (RLO/BR conditions) | full | [lib/AwlGen/AwlGen.cpp:3671](../lib/AwlGen/AwlGen.cpp#L3671) |
+| AWL | IEC 61131-3 STL LOOP (decrement ACCU1, jump if != 0) | full | [lib/AwlGen/AwlGen.cpp:3674](../lib/AwlGen/AwlGen.cpp#L3674) |
+| AWL | IEC 61131-3 STL zero/plus/minus jumps (SPZ/SPPZ/SPMZ/SPS/SPP/SPM) | full | [lib/AwlGen/AwlGen.cpp:3706](../lib/AwlGen/AwlGen.cpp#L3706) |
+| AWL | Siemens AWL manual "Value conversions" BTI/BTD (BCD -> binary); | full | [lib/AwlGen/AwlGen.cpp:3741](../lib/AwlGen/AwlGen.cpp#L3741) |
+| AWL | Siemens AWL manual "Value conversions" ITB/DTB (binary -> BCD); | full | [lib/AwlGen/AwlGen.cpp:3775](../lib/AwlGen/AwlGen.cpp#L3775) |
+| AWL | Siemens AWL manual TAW (swap the two bytes of ACCU1's low word — awlsim insn_TAW: accu1 = (accu1 & 0xFFFF0000) | swapEndianWord(accu1 & 0xFFFF)) | full | [lib/AwlGen/AwlGen.cpp:3816](../lib/AwlGen/AwlGen.cpp#L3816) |
+| AWL | awlsim test directive __ASSERT<cmp> (value oracles, runtime scl_rt_assert_cmp[_r]) | full | [lib/AwlGen/AwlGen.cpp:3839](../lib/AwlGen/AwlGen.cpp#L3839) |
+| AWL | IEC 61131-3 STL block calls (CALL/UC/CC, incl. parameterized CALL and indirect UC FC [MW x]), see parseCall | full | [lib/AwlGen/AwlGen.cpp:3842](../lib/AwlGen/AwlGen.cpp#L3842) |
+| AWL | Siemens AWL manual "Indirect addressing" ([AR1, P#x.y] area-relative, memory-indirect [LD n]/[#var] base = operand value, T/Z [..] = block number) | full | [lib/AwlGen/AwlGen.cpp:4272](../lib/AwlGen/AwlGen.cpp#L4272) |
+| AWL | IEC 61131-3 STL / Siemens AWL manual "Addressing modes": absolute (M 10.0, DB1.DBW 4), indirect ([AR1, P#x.y], [LD n], [#var]), symbolic, P# pointer literals | full | [lib/AwlGen/AwlGen.cpp:4424](../lib/AwlGen/AwlGen.cpp#L4424) |
+| AWL | Siemens AWL manual symbolic DB members (DBn.SYMBOL...) resolved through the DATA_BLOCK layout (approx: a member missing from a declared DB resolves to DBW 0/DBX 0.0 of that DB) | approx | [lib/AwlGen/AwlGen.cpp:6262](../lib/AwlGen/AwlGen.cpp#L6262) |
+| AWL | Siemens AWL manual symbolic DB members of undeclared DBs, auto-assigned offsets in order of first use (awlsim symbol tables) -> autoDbCursor branch of resolveDbMember (approx: DB contents are runtime memory, so the synthetic offset only fixes the address, not the value) | approx | [lib/AwlGen/AwlGen.cpp:6281](../lib/AwlGen/AwlGen.cpp#L6281) |
+| AWL | Siemens AWL manual "Calling blocks" (CALL/UC/CC with parameter lists := / =>, FB instance DB, multi-instance via AR2) | full | [lib/AwlGen/AwlGen.cpp:6932](../lib/AwlGen/AwlGen.cpp#L6932) |
 | AWL | Siemens AWL manual "Addressing": absolute memory operand -> !scl.direct<area, db, byte, bit, width> (see docs/design/memory-areas.md) | full | [include/sclang/AwlDialect/AwlOps.td:51](../include/sclang/AwlDialect/AwlOps.td#L51) |
 | AWL | IEC 61131-3 STL load (L) / status-word reads -> awl.load | full | [include/sclang/AwlDialect/AwlOps.td:94](../include/sclang/AwlDialect/AwlOps.td#L94) |
 | AWL | IEC 61131-3 STL transfer (T) / bit set-reset (S/R) -> awl.store | full | [include/sclang/AwlDialect/AwlOps.td:107](../include/sclang/AwlDialect/AwlOps.td#L107) |

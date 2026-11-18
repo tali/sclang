@@ -1690,6 +1690,12 @@ private:
   // The other three are parse-time SSA values too (null = default: OR=0,
   // STA=1, NER=0 — the state after BE / at block start).
   llvm::SmallVector<mlir::Value, 4> acc;
+  // SSA value currently believed to sit in each runtime ACCU register
+  // (syncedAcc[0] = ACCU1 ... syncedAcc[3] = ACCU4; null = unknown, e.g.
+  // after a CALL whose callee may have clobbered the runtime ACCUs).
+  // Lets syncAcc() skip AccuSetOps whose value is already in place, so a
+  // statement that does not touch an ACCU costs no runtime call for it.
+  mlir::Value syncedAcc[4] = {nullptr, nullptr, nullptr, nullptr};
   mlir::Value rlo;        // VKE
   mlir::Value stOr, stSta, stNer; // OR/STA/NER (null = default)
   bool rloActive = false;
@@ -3975,20 +3981,26 @@ private:
   // write the parse-time acc stack into the runtime ACCU registers
   // (acc.back() = ACCU1; acc[0] = ACCU4 when the stack is full)
   void syncAcc() {
-    padAcc(); // all four ACCU registers are always written
+    padAcc();
     size_t n = std::min(acc.size(), (size_t)4);
     for (size_t k = 0; k < n; ++k) {
       mlir::Value v = accuBits(acc[acc.size() - 1 - k]);
+      if (syncedAcc[k] == v)
+        continue; // runtime ACCU k+1 already holds this exact SSA value
       builder.create<awl::AccuSetOp>(
           loc(), builder.getI32IntegerAttr((int32_t)(k + 1)), v);
+      syncedAcc[k] = v;
     }
   }
   // reload the parse-time acc stack from the runtime ACCU registers
   void reloadAcc() {
     acc.clear();
-    for (int32_t i = 4; i >= 1; --i)
-      acc.push_back(builder.create<awl::AccuGetOp>(
-          loc(), builder.getI32Type(), builder.getI32IntegerAttr(i)));
+    for (int32_t i = 4; i >= 1; --i) {
+      mlir::Value v = builder.create<awl::AccuGetOp>(
+          loc(), builder.getI32Type(), builder.getI32IntegerAttr(i));
+      acc.push_back(v);
+      syncedAcc[i - 1] = v;
+    }
   }
 
   // BCD <-> binary conversion built from awl arith ops (the awl dialect has
@@ -6920,6 +6932,10 @@ private:
   // SPEC[AWL] Siemens AWL manual "Calling blocks" (CALL/UC/CC with parameter lists := / =>, FB instance DB, multi-instance via AR2)
   bool parseCall(bool cond) {
     // CALL/UC/CC FC n | CALL/UC/CC FB n, DB m ; CC calls only if RLO = 1
+    // The callee runs its own syncAcc/reloadAcc on the runtime ACCUs, so the
+    // synced-value tracking is no longer valid after the call.
+    for (auto &s : syncedAcc)
+      s = nullptr;
     mlir::Value rloVal;
     if (cond) {
       if (!ensureRlo())
