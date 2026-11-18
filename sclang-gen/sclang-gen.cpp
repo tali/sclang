@@ -40,6 +40,7 @@
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Support/Timing.h"
 #include "mlir/Transforms/Passes.h"
 
 #include "llvm/ADT/StringRef.h"
@@ -101,6 +102,10 @@ static cl::opt<enum Action> emitAction(
                           "output MLIR bytecode (faster to re-parse than text)")));
 
 static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
+// Verify the IR after every pass (default on; disable with
+// --verify-each=0 to speed up large compilations, see AGENTS.md).
+static cl::opt<bool> verifyEach("verify-each",
+    cl::desc("Verify the IR after each pass"), cl::init(true));
 
 /// Returns a SCL AST resulting from parsing the file or a nullptr on error.
 std::unique_ptr<sclang::ModuleAST> parseInputFile(llvm::StringRef filename) {
@@ -169,6 +174,9 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
   mlir::PassManager pm(&context);
   // Apply any generic pass manager command line options and run the pipeline.
   applyPassManagerCLOptions(pm);
+  // Dev-only pass timing: --mlir-timing (see AGENTS.md).
+  applyDefaultTimingPassManagerCLOptions(pm);
+  pm.enableVerifier(verifyEach);
 
   // Check to see what granularity of MLIR we are compiling to.
   bool isLoweringToStd = emitAction == Action::DumpMLIRStd;
@@ -236,6 +244,7 @@ int dumpAST() {
 
 int main(int argc, char **argv) {
   mlir::registerPassManagerCLOptions();
+  mlir::registerDefaultTimingManagerCLOptions();
   cl::ParseCommandLineOptions(argc, argv, "SCL compiler\n");
 
   if (emitAction == Action::DumpAST)

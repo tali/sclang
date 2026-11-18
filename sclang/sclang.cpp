@@ -50,6 +50,7 @@
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Support/Timing.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
@@ -143,6 +144,10 @@ static cl::opt<enum Action> emitAction(
                           "round-trip used by --emit=awl + -x=awl)")));
 
 static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
+// Verify the IR after every pass (default on; disable with
+// --verify-each=0 to speed up large compilations, see AGENTS.md).
+static cl::opt<bool> verifyEach("verify-each",
+    cl::desc("Verify the IR after each pass"), cl::init(true));
 
 /// Size of a simulated memory area in bytes, e.g. `--area-size M=1024` or
 /// `--area-size DB1=4096` (areas I/Q/M/T/C; DBs grow on demand if unset).
@@ -392,6 +397,9 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
   mlir::PassManager pm(&context);
   // Apply any generic pass manager command line options and run the pipeline.
   applyPassManagerCLOptions(pm);
+  // Dev-only pass timing: --mlir-timing (see AGENTS.md).
+  applyDefaultTimingPassManagerCLOptions(pm);
+  pm.enableVerifier(verifyEach);
 
   // Check to see what granularity of MLIR we are compiling to.
   bool isLoweringToStd = emitAction >= Action::DumpMLIRStd;
@@ -828,6 +836,7 @@ int main(int argc, char **argv) {
   mlir::registerAsmPrinterCLOptions();
   mlir::registerMLIRContextCLOptions();
   mlir::registerPassManagerCLOptions();
+  mlir::registerDefaultTimingManagerCLOptions();
 
   cl::ParseCommandLineOptions(argc, argv, "SCL compiler\n");
 

@@ -200,11 +200,33 @@ Assertions are OFF because the system libc++ rejects `_LIBCPP_ENABLE_HARDENED_MO
 cmake is at `/opt/homebrew/bin/cmake`. Host quirks: BSD `sed` needs `sed -i ''` and
 has no `\b` — use python3 for regex edits.
 
+## Performance
+
+- Compile-time profiling: both tools register MLIR's default timing manager,
+  so `--mlir-timing` prints a per-pass execution-time report, and
+  `--mlir-pass-statistics` prints per-pass IR-change stats. `--verify-each=0`
+  disables the (default-on) verifier run after every pass — on the 100k-line
+  `nop100k.awl` corpus this cuts compile time by ~35% (2.9s -> 2.0s with
+  `--opt`); keep it on for normal development. Measured baselines (arm64):
+  100k-line AWL parses+lowers in ~0.08s; small files are dominated by ~10ms
+  process/JIT startup. JIT scan runtime: `--opt` (MLIR opt pipeline + LLVM O3)
+  is ~2x faster per scan than the default O0 path on array-heavy code
+  (~2.0 vs ~3.7 ns per element access); both are correct.
+- The AWL frontend tracks which SSA value each runtime ACCU register holds
+  (`syncedAcc` in `lib/AwlGen/AwlGen.cpp`) and `syncAcc()` only emits
+  `awl.accu_set` for registers whose value actually changed since the last
+  sync/reload. This makes ACCU-preserving statements (NOP, T, ...) emit no
+  runtime ACCU calls at all: the 100k-NOP corpus went from 400k `accu_set` ops
+  (4 runtime calls per NOP) to 4 `accu_get` total, and lowering it dropped
+  from 1.4s to 0.08s. The tracking is invalidated after CALL/UC/CC (the callee
+  may clobber the runtime ACCUs) and refreshed by `reloadAcc()` at labels and
+  block entries.
+
 ## Tests
 
 - Test methodology and the rationale for each tier (lit / corpora / JIT smoke
   / awlsim oracle / ST traces / differential cross / fuzz, plus the
-  `jit_edge_*` scenario rationale) are in `docs/testing.md`. Current: 131
+  `jit_edge_*` scenario rationale) are in `docs/testing.md`. Current: 133
   lit tests, 92/92 ST traces with cross.
 - lit tests live in `test/SclGen/Parse`, `test/SclGen/MLIR`, `test/SclTransforms`,
   `test/AwlGen`, `test/sclang`; BUILD files glob `*.scl` (sclang dir also `*.awl`),
