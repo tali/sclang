@@ -717,11 +717,7 @@ private:
           int64_t idx = count > 0 ? rem % count : 0;
           rem = count > 0 ? rem / count : 0;
           indices.insert(indices.begin(),
-                         builder.create<ConstantOp>(
-                             location, intTy,
-                             builder.getIntegerAttr(
-                                 builder.getIntegerType(16),
-                                 (int64_t)(dims[d].first + idx)))
+                         intConst(location, intTy, 16, (int64_t)(dims[d].first + idx))
                              .getResult());
         }
         // Mirror mlirGen(IndexedVariableAST): a plain array base yields a
@@ -858,11 +854,7 @@ private:
   mlir::Value defaultInitValue(mlir::Location location, mlir::Type type) {
     auto *ctx = builder.getContext();
     auto zeroInt = [&](int width) {
-      return builder
-          .create<ConstantOp>(location, type,
-                              builder.getIntegerAttr(builder.getIntegerType(width),
-                                                     0))
-          .getResult();
+      return intConst(location, type, width, 0).getResult();
     };
     if (auto it = llvm::dyn_cast<IntegerType>(type))
       return zeroInt(it.getWidth());
@@ -1796,10 +1788,7 @@ private:
       // char := 'A': a string literal assigns its first byte to a char
       if (auto it8 = llvm::dyn_cast<IntegerType>(baseElem)) {
         if (it8.getWidth() == 8 && !str->getValue().empty()) {
-          auto byteVal = builder.create<ConstantOp>(
-              location, baseElem,
-              builder.getIntegerAttr(builder.getIntegerType(8),
-                                     (uint8_t)str->getValue()[0]));
+          auto byteVal = intConst(location, baseElem, 8, (uint8_t)str->getValue()[0]);
           builder.create<StoreOp>(location, lhs, byteVal);
           return mlir::success();
         }
@@ -1922,18 +1911,12 @@ private:
                 cast.setZextAttr(builder.getUnitAttr());
               bitVal = cast.getResult();
             }
-            auto scaleC = builder.create<ConstantOp>(
-                location, i8,
-                builder.getIntegerAttr(builder.getIntegerType(8),
-                                       (int64_t)(1 << bit)));
+            auto scaleC = intConst(location, i8, 8, (int64_t)(1 << bit));
             auto set = builder.create<MulOp>(location, bitVal, scaleC.getResult());
             auto byteVal = builder.create<LoadOp>(location, byteTy, lhs).getResult();
             auto byteI8 = builder.create<IntegerCastOp>(location, i8, byteVal);
             byteI8.setZextAttr(builder.getUnitAttr());
-            auto maskC = builder.create<ConstantOp>(
-                location, i8,
-                builder.getIntegerAttr(builder.getIntegerType(8),
-                                       (int64_t)(uint8_t)~(1 << bit)));
+            auto maskC = intConst(location, i8, 8, (int64_t)(uint8_t)~(1 << bit));
             auto cleared = builder.create<AndOp>(location, byteI8.getResult(), maskC.getResult());
             auto newByte = builder.create<OrOp>(location, cleared.getResult(), set.getResult());
             builder.create<StoreOp>(location, lhs, newByte.getResult());
@@ -2108,14 +2091,9 @@ private:
           if (std::string(dir->getArea()) == "X") {
             auto byteTy = LogicalType::get(builder.getContext(), 8);
             auto byteVal = builder.create<LoadOp>(location, byteTy, addr).getResult();
-            auto divC = builder.create<ConstantOp>(
-                location, byteTy,
-                builder.getIntegerAttr(builder.getIntegerType(8),
-                                       (int64_t)(1 << dir->getBit())));
+            auto divC = intConst(location, byteTy, 8, (int64_t)(1 << dir->getBit()));
             auto shifted = builder.create<DivOp>(location, byteVal, divC.getResult());
-            auto modC = builder.create<ConstantOp>(
-                location, byteTy,
-                builder.getIntegerAttr(builder.getIntegerType(8), (int64_t)2));
+            auto modC = intConst(location, byteTy, 8, (int64_t)2);
             return builder.create<ModOp>(location, shifted.getResult(), modC.getResult()).getResult();
           }
           // base.%Bn/.%Wn/.%Dn: load with the recorded access width
@@ -2225,10 +2203,7 @@ private:
     // (e.g. comparing a CHAR with 'x').
     if (expr->getValue().size() == 1) {
       auto i8 = IntegerType::get(builder.getContext(), 8);
-      return builder.create<ConstantOp>(
-          loc(expr->loc()), i8,
-          builder.getIntegerAttr(builder.getIntegerType(8),
-                                 (uint8_t)expr->getValue()[0]));
+      return intConst(loc(expr->loc()), i8, 8, (uint8_t)expr->getValue()[0]);
     }
     // Multi-char literal in a plain value position (e.g. via a constant
     // symbol): materialize a temp String[254] and return the array value.
@@ -2309,23 +2284,19 @@ private:
     else if (auto lt = llvm::dyn_cast<LogicalType>(resTy))
       width = lt.getWidth();
     if (auto *ic = llvm::dyn_cast<IntegerConstantAST>(ce))
-      return builder.create<ConstantOp>(
-          location, resTy,
-          builder.getIntegerAttr(builder.getIntegerType(width), ic->getValue()));
+      return intConst(location, resTy, width, ic->getValue());
     if (llvm::isa<RealConstantAST>(ce) || llvm::isa<TimeConstantAST>(ce))
       return mlirGen(ce);
     if (llvm::isa<StringConstantAST>(ce)) {
       emitWarning(location) << "string constant '" << name
                             << "' used as a value, assuming 0";
-      return builder.create<ConstantOp>(
-          location, getType(tok_int), builder.getIntegerAttr(builder.getIntegerType(16), 0));
+      return intConst(location, getType(tok_int), 16, 0);
     }
     // constant expression (e.g. A + B): fold to an integer
     int64_t v = 0;
     if (mlir::failed(foldConstIntAST(ce, v)))
       v = 0;
-    return builder.create<ConstantOp>(
-        location, resTy, builder.getIntegerAttr(builder.getIntegerType(width), v));
+    return intConst(location, resTy, width, v);
   }
 
   mlir::Value mlirGenVariable(mlir::Location location, StringRef name) {
@@ -2377,9 +2348,7 @@ private:
       auto it = enumConsts.find(up);
       if (it != enumConsts.end()) {
         auto i16 = getType(tok_int);
-        return builder.create<ConstantOp>(
-            location, i16, builder.getIntegerAttr(builder.getIntegerType(16),
-                                                   it->second));
+        return intConst(location, i16, 16, it->second);
       }
     }
     // IEC VAR_EXTERNAL (ADR 004): a member of the configuration's global DB.
@@ -2411,9 +2380,7 @@ private:
         mlir::SymbolTable::lookupNearestSymbolFrom<DataBlockOp>(theModule, nameAttr);
     if (!db) {
       emitWarning(location) << "unknown symbol '" << name << "', assuming 1";
-      return builder.create<ConstantOp>(
-          location, getType(tok_int),
-          builder.getIntegerAttr(builder.getIntegerType(16), 1));
+      return intConst(location, getType(tok_int), 16, 1);
     }
     mlir::Type type = db.getType();
     mlir::Type address = AddressType::get(type);
@@ -2815,10 +2782,7 @@ private:
         auto flip = [&](mlir::Value v) {
           return builder.create<XOrOp>(
               location, v,
-              builder
-                  .create<ConstantOp>(location, v.getType(),
-                                       builder.getIntegerAttr(
-                                           builder.getIntegerType(16), 0x8000))
+                         intConst(location, v.getType(), 16, 0x8000)
                   .getResult());
         };
         lhs = flip(lhs);
@@ -2830,11 +2794,7 @@ private:
           mlir::Value c = builder.create<IntegerCastOp>(location, i64, v).getResult();
           return builder.create<XOrOp>(
               location, c,
-              builder
-                  .create<ConstantOp>(location, i64,
-                                       builder.getIntegerAttr(
-                                           builder.getIntegerType(64),
-                                           (int64_t)0x8000000000000000LL))
+                         intConst(location, i64, 64, (int64_t)0x8000000000000000LL)
                   .getResult());
         };
         lhs = flip(lhs);
@@ -3237,10 +3197,7 @@ private:
     // NB: the attr must be typed with an mlir::IntegerType (IntegerAttr
     // requires it); the op result keeps the scl !scl.dint type.
     auto i64 = IntegerType::get(builder.getContext(), 64);
-    return builder
-        .create<ConstantOp>(loc, i64,
-                            builder.getIntegerAttr(builder.getIntegerType(64),
-                                                   v))
+    return  intConst(loc, i64, 64, v)
         .getResult();
   }
   mlir::Value dtAdd(mlir::Location loc, mlir::Value a, mlir::Value b) {
@@ -3583,10 +3540,7 @@ private:
     auto i64Const = [&](int64_t v) {
       // NB: the attr must be typed with an mlir::IntegerType (IntegerAttr
       // requires it); the op result keeps the scl !scl.dint type.
-      return builder
-          .create<ConstantOp>(location, i64,
-                              builder.getIntegerAttr(builder.getIntegerType(64),
-                                                     v))
+      return    intConst(location, i64, 64, v)
           .getResult();
     };
     if (byteIdx == -2) {
@@ -3702,9 +3656,7 @@ private:
     // string/array source (e.g. CHAR_TO_INT(s) on a string): approximate as 0
     if (llvm::isa<ArrayType>(arg.getType())) {
       emitWarning(location) << "conversion of a string value, assuming 0";
-      return builder.create<ConstantOp>(
-          location, resTy,
-          builder.getIntegerAttr(builder.getIntegerType(16), 0));
+      return intConst(location, resTy, 16, 0);
     }
     // REAL/LREAL source: dialect-cast straight to the target (fptosi/… at
     // lowering); REAL <-> LREAL is an fpext/fptrunc.
@@ -3803,8 +3755,7 @@ private:
       width = it.getWidth();
     else if (auto lt = llvm::dyn_cast<LogicalType>(ty))
       width = lt.getWidth();
-    return builder.create<ConstantOp>(
-        location, ty, builder.getIntegerAttr(builder.getIntegerType(width), v));
+    return intConst(location, ty, width, v);
   }
   mlir::Value boolConst(mlir::Location location, bool v) {
     return builder.create<ConstantOp>(
@@ -5471,6 +5422,14 @@ private:
                               eb.getIntegerAttr(eb.getI1Type(), 0)));
     enoCells[key] = cell;
     return cell;
+  }
+
+  /// Shorthand: scl integer constant with result type `sclTy` and an
+  /// integer attribute of the given bit `width`.
+  ConstantOp intConst(mlir::Location loc, mlir::Type sclTy, unsigned width,
+                     int64_t v) {
+    return builder.create<ConstantOp>(
+        loc, sclTy, builder.getIntegerAttr(builder.getIntegerType(width), v));
   }
 
   mlir::Type getType(Token token) {
