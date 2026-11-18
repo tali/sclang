@@ -86,6 +86,13 @@ one-line pointer here.
   the `_mlir_ciface_OB1` wrapper (`engine->invoke("OB1")` resolves
   `_mlir_ciface_OB1`), which calls `function OB1` (see test/sclang/jit.scl) —
   JIT tests must define that wrapper.
+- Helper conventions (keep using/extending these instead of raw boilerplate):
+  `constInt(b, loc, ty, v)` / `constIndex(b, loc, v)` / `moduleOf(op)` /
+  `addrElemTy(addr)` in LowerToStd.cpp and LowerToAWL.cpp; `intConst(loc,
+  sclTy, width, v)` / `addrElemTy(v)` member helpers in MLIRGen.cpp
+  (MLIRGenImpl); `constInt(ty, v)` in AwlGen.cpp. When adding a helper with a
+  mechanical rewrite, make sure the rewrite does not rewrite the helper body
+  into a self-call (bit us twice — the lit suite catches it as a segfault).
 - MLIR/LLVM-23 feature audit (what we adopted vs. what turned out to be
   already covered downstream — verified, not assumed):
   adopted: SCCP/mem2reg/LICM/symbol-dce in `--opt`, reconcile-unrealized-casts,
