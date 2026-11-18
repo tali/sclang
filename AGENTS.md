@@ -86,7 +86,12 @@ one-line pointer here.
   the `_mlir_ciface_OB1` wrapper (`engine->invoke("OB1")` resolves
   `_mlir_ciface_OB1`), which calls `function OB1` (see test/sclang/jit.scl) —
   JIT tests must define that wrapper.
-- `--opt` enables canonicalizer/CSE between stages.
+- `--opt` enables canonicalizer/CSE between stages, plus after LowerToStd
+  (func level): SCCP, canonicalizer, CSE, mem2reg, LICM, affine loop
+  fusion/SROA, canonicalizer, CSE; and symbol-dce at module level. After the
+  LLVM lowering, reconcile-unrealized-casts always runs. The JIT also runs
+  `makeOptimizingTransformer(O3)` on the LLVM module. mem2reg+SCCP measurably
+  shrink JIT code (jit_for.scl: 66 -> 4 LLVM instrs, 4 -> 0 allocas).
 - Memory areas: the JIT binds `@scl_rt_*` to the sim runtime
   (`lib/Runtime/SimRuntime.cpp`) via `ExecutionEngine::registerSymbols`;
   `--area-size M=1024` / `--area-size DB1=4096` configure simulated area/DB
@@ -787,7 +792,8 @@ has no `\b` — use python3 for regex edits.
   variadic regions, last = else) -> `cf.switch`. `goto`/labels -> real blocks +
   `cf.br` emitted in MLIRGen (forward gotos create the label block on demand; code
   after a goto lands in a fresh unreachable block). OB -> `func.func` returning void.
-- `--emit=mlir-std` always runs canonicalizer+CSE after LowerToStd, so
+- `--emit=mlir-std` always runs canonicalizer+CSE after LowerToStd (the
+  extra opt passes above only with `--opt`), so
   single-predecessor blocks (e.g. a forward goto) are folded away; test irreducible
   CFGs (backward gotos) if you want `cf.br` to survive in CHECK lines.
 - **AWL frontend (ADR 003, implemented)**: `.awl` / `-x awl` in both drivers ->

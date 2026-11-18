@@ -194,8 +194,20 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
 
     // Add optimizations if enabled.
     if (enableOpt) {
+      // SCCP folds the scan-cycle/timer scaffolding constants; mem2reg
+      // promotes the scalar-local memref allocas to SSA registers; LICM
+      // hoists loop-invariant ops (Pure ops are speculatable in MLIR 23).
+      optPM.addPass(mlir::createSCCPPass());
+      optPM.addPass(mlir::createCanonicalizerPass());
+      optPM.addPass(mlir::createCSEPass());
+      optPM.addPass(mlir::createMem2Reg());
+      optPM.addPass(mlir::createLoopInvariantCodeMotionPass());
       optPM.addPass(mlir::affine::createLoopFusionPass());
       optPM.addPass(mlir::affine::createAffineScalarReplacementPass());
+      optPM.addPass(mlir::createCanonicalizerPass());
+      optPM.addPass(mlir::createCSEPass());
+      // Drop functions/blocks that became dead during optimization.
+      pm.addPass(mlir::createSymbolDCEPass());
     }
   }
 

@@ -53,6 +53,7 @@
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
+#include "mlir/Conversion/Passes.h"
 #include "mlir/Transforms/Passes.h"
 
 #include "llvm/ADT/StringRef.h"
@@ -419,14 +420,27 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
 
     // Add optimizations if enabled.
     if (enableOpt) {
+      // SCCP folds the scan-cycle/timer scaffolding constants; mem2reg
+      // promotes the scalar-local memref allocas to SSA registers; LICM
+      // hoists loop-invariant ops (Pure ops are speculatable in MLIR 23).
+      optPM.addPass(mlir::createSCCPPass());
+      optPM.addPass(mlir::createCanonicalizerPass());
+      optPM.addPass(mlir::createCSEPass());
+      optPM.addPass(mlir::createMem2Reg());
+      optPM.addPass(mlir::createLoopInvariantCodeMotionPass());
       optPM.addPass(mlir::affine::createLoopFusionPass());
       optPM.addPass(mlir::affine::createAffineScalarReplacementPass());
+      optPM.addPass(mlir::createCanonicalizerPass());
+      optPM.addPass(mlir::createCSEPass());
+      // Drop functions/blocks that became dead during optimization.
+      pm.addPass(mlir::createSymbolDCEPass());
     }
   }
 
   if (isLoweringToLLVM) {
     // Finish lowering the toy IR to the LLVM dialect.
     pm.addPass(mlir::sclang::createLowerToLLVMPass());
+    pm.addPass(mlir::createReconcileUnrealizedCastsPass());
   }
 
   if (mlir::failed(pm.run(*module)))
