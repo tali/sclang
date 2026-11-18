@@ -211,7 +211,12 @@ has no `\b` — use python3 for regex edits.
   100k-line AWL parses+lowers in ~0.08s; small files are dominated by ~10ms
   process/JIT startup. JIT scan runtime: `--opt` (MLIR opt pipeline + LLVM O3)
   is ~2x faster per scan than the default O0 path on array-heavy code
-  (~2.0 vs ~3.7 ns per element access); both are correct.
+  (~2.0 vs ~3.7 ns per element access); both are correct. On small
+  scan-style programs O0 and O3 are at parity (~0.55 us/scan), so the
+  default stays unoptimized. SCL array literals unroll per element
+  (~4 IR ops/element): a synthetic 100k-element literal costs ~0.5s to
+  generate and JITs in 87s at O0 vs 13s with `--opt` — realistic SCL
+  initializers are far smaller, so this is accepted as-is.
 - The AWL frontend tracks which SSA value each runtime ACCU register holds
   (`syncedAcc` in `lib/AwlGen/AwlGen.cpp`) and `syncAcc()` only emits
   `awl.accu_set` for registers whose value actually changed since the last
