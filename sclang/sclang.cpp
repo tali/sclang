@@ -62,6 +62,9 @@
 #include "llvm/ExecutionEngine/Orc/Shared/ExecutorAddress.h"
 #include "llvm/ExecutionEngine/Orc/Shared/ExecutorSymbolDef.h"
 #include "llvm/IR/Module.h"
+#include "llvm/MC/TargetRegistry.h"
+#include "llvm/TargetParser/Triple.h"
+#include "llvm/Target/TargetMachine.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -462,6 +465,22 @@ int dumpAST() {
   return 0;
 }
 
+/// Create a TargetMachine for the host so the LLVM optimization pipeline is
+/// target-aware (enables e.g. AArch64-specific IR opts) instead of running
+/// with a null target machine.
+static std::unique_ptr<llvm::TargetMachine> createHostTargetMachine() {
+  llvm::Triple triple(llvm::sys::getProcessTriple());
+  std::string error;
+  const llvm::Target *target =
+      llvm::TargetRegistry::lookupTarget(triple, error);
+  if (!target)
+    return nullptr;
+  llvm::TargetOptions options;
+  return std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
+      triple, llvm::sys::getHostCPUName(), /*features=*/"", options,
+      llvm::Reloc::PIC_));
+}
+
 int dumpLLVMIR(mlir::ModuleOp module) {
   // Register the translation to LLVM IR with the MLIR context.
   mlir::registerBuiltinDialectTranslation(*module->getContext());
@@ -480,9 +499,10 @@ int dumpLLVMIR(mlir::ModuleOp module) {
   llvm::InitializeNativeTargetAsmPrinter();
 
   /// Optionally run an optimization pipeline over the llvm module.
+  auto targetMachine = createHostTargetMachine();
   auto optPipeline = mlir::makeOptimizingTransformer(
       /*optLevel=*/enableOpt ? 3 : 0, /*sizeLevel=*/0,
-      /*targetMachine=*/nullptr);
+      /*targetMachine=*/targetMachine.get());
   if (auto err = optPipeline(llvmModule.get())) {
     llvm::errs() << "Failed to optimize LLVM IR " << err << "\n";
     return -1;
@@ -658,9 +678,10 @@ int runJit(mlir::ModuleOp module) {
 
 
   // An optimization pipeline to use within the execution engine.
+  auto targetMachine = createHostTargetMachine();
   auto optPipeline = mlir::makeOptimizingTransformer(
       /*optLevel=*/enableOpt ? 3 : 0, /*sizeLevel=*/0,
-      /*targetMachine=*/nullptr);
+      /*targetMachine=*/targetMachine.get());
 
   // Create an MLIR execution engine. The execution engine eagerly JIT-compiles
   // the module.

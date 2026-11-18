@@ -100,7 +100,9 @@ one-line pointer here.
   (func level): SCCP, canonicalizer, CSE, mem2reg, LICM, affine loop
   fusion/SROA, canonicalizer, CSE; and symbol-dce at module level. After the
   LLVM lowering, reconcile-unrealized-casts always runs. The JIT also runs
-  `makeOptimizingTransformer(O3)` on the LLVM module. mem2reg+SCCP measurably
+  `makeOptimizingTransformer(O3)` on the LLVM module, now with a host
+  `TargetMachine` (`createHostTargetMachine` in `sclang/sclang.cpp`) so the
+  LLVM IR pipeline is target-aware (AArch64 opts). mem2reg+SCCP measurably
   shrink JIT code (jit_for.scl: 66 -> 4 LLVM instrs, 4 -> 0 allocas).
 - Memory areas: the JIT binds `@scl_rt_*` to the sim runtime
   (`lib/Runtime/SimRuntime.cpp`) via `ExecutionEngine::registerSymbols`;
