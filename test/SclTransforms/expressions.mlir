@@ -30,7 +30,7 @@ scl.function @add_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.dint {
 }
 
 // CHECK-LABEL: func.func @add_f32
-// CHECK:       arith.addf %arg0, %arg1 : f32
+// CHECK:       arith.addf %arg0, %arg1 fastmath<contract> : f32
 scl.function @add_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.real {
   %res = scl.add %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.real>
@@ -69,7 +69,7 @@ scl.function @sub_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.dint {
 }
 
 // CHECK-LABEL: func.func @sub_f32
-// CHECK:       arith.subf %arg0, %arg1 : f32
+// CHECK:       arith.subf %arg0, %arg1 fastmath<contract> : f32
 scl.function @sub_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.real {
   %res = scl.sub %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.real>
@@ -108,7 +108,7 @@ scl.function @mul_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.dint {
 }
 
 // CHECK-LABEL: func.func @mul_f32
-// CHECK:       arith.mulf %arg0, %arg1 : f32
+// CHECK:       arith.mulf %arg0, %arg1 fastmath<contract> : f32
 scl.function @mul_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.real {
   %res = scl.mul %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.real>
@@ -147,7 +147,7 @@ scl.function @div_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.dint {
 }
 
 // CHECK-LABEL: func.func @div_f32
-// CHECK:       arith.divf %arg0, %arg1 : f32
+// CHECK:       arith.divf %arg0, %arg1 fastmath<contract> : f32
 scl.function @div_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.real {
   %res = scl.div %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.real>
@@ -186,7 +186,7 @@ scl.function @mod_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.dint {
 }
 
 // CHECK-LABEL: func.func @mod_f32
-// CHECK:       arith.remf %arg0, %arg1 : f32
+// CHECK:       arith.remf %arg0, %arg1 fastmath<contract> : f32
 scl.function @mod_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.real {
   %res = scl.mod %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.real>
@@ -225,7 +225,7 @@ scl.function @cmpeq_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
 }
 
 // CHECK-LABEL: func.func @cmpeq_f32
-// CHECK:       arith.cmpf ueq, %arg0, %arg1 : f32
+// CHECK:       arith.cmpf ueq, %arg0, %arg1 fastmath<contract> : f32
 scl.function @cmpeq_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
   %res = scl.cmpeq %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -264,7 +264,7 @@ scl.function @cmpne_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
 }
 
 // CHECK-LABEL: func.func @cmpne_f32
-// CHECK:       arith.cmpf une, %arg0, %arg1 : f32
+// CHECK:       arith.cmpf une, %arg0, %arg1 fastmath<contract> : f32
 scl.function @cmpne_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
   %res = scl.cmpne %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -303,7 +303,7 @@ scl.function @cmpge_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
 }
 
 // CHECK-LABEL: func.func @cmpge_f32
-// CHECK:       arith.cmpf uge, %arg0, %arg1 : f32
+// CHECK:       arith.cmpf uge, %arg0, %arg1 fastmath<contract> : f32
 scl.function @cmpge_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
   %res = scl.cmpge %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -342,7 +342,7 @@ scl.function @cmpgt_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
 }
 
 // CHECK-LABEL: func.func @cmpgt_f32
-// CHECK:       arith.cmpf ugt, %arg0, %arg1 : f32
+// CHECK:       arith.cmpf ugt, %arg0, %arg1 fastmath<contract> : f32
 scl.function @cmpgt_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
   %res = scl.cmpgt %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -381,7 +381,7 @@ scl.function @cmple_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
 }
 
 // CHECK-LABEL: func.func @cmple_f32
-// CHECK:       arith.cmpf ule, %arg0, %arg1 : f32
+// CHECK:       arith.cmpf ule, %arg0, %arg1 fastmath<contract> : f32
 scl.function @cmple_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
   %res = scl.cmple %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>
@@ -420,7 +420,7 @@ scl.function @cmplt_i32(%arg0: !scl.dint, %arg1: !scl.dint) -> !scl.bool {
 }
 
 // CHECK-LABEL: func.func @cmplt_f32
-// CHECK:       arith.cmpf ult, %arg0, %arg1 : f32
+// CHECK:       arith.cmpf ult, %arg0, %arg1 fastmath<contract> : f32
 scl.function @cmplt_f32(%arg0: !scl.real, %arg1: !scl.real) -> !scl.bool {
   %res = scl.cmplt %arg0, %arg1 : !scl.real
   %return = scl.tmpvar "return" : !scl.address<!scl.bool>

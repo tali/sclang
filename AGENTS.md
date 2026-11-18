@@ -86,6 +86,16 @@ one-line pointer here.
   the `_mlir_ciface_OB1` wrapper (`engine->invoke("OB1")` resolves
   `_mlir_ciface_OB1`), which calls `function OB1` (see test/sclang/jit.scl) —
   JIT tests must define that wrapper.
+- `--fp-mode=none|contract|fast` (default **contract**) sets the fastmath
+  attribute on arith float ops we generate (cmpf/negf/addf/... — see
+  `mlir::sclang::withFPFastMath` in `include/sclang/SclDialect/Dialect.h`).
+  `contract` = FMA contraction only (last-ulp differences possible);
+  `fast` = reassociation+NaN/Inf assumptions (results can change); `none` =
+  strict IEEE. Like clang `-ffp-contract` + `-ffast-math`. IEC 61131-3 leaves
+  REAL evaluation order implementation-defined, so contract is in-spec.
+  User-level REAL +,-,*,/ route through the `scl_rt_arith_f` runtime helper
+  (double precision) and are unaffected. Verified in LLVM IR: default emits
+  `fcmp contract` / `fneg contract`.
 - `--opt` enables canonicalizer/CSE between stages, plus after LowerToStd
   (func level): SCCP, canonicalizer, CSE, mem2reg, LICM, affine loop
   fusion/SROA, canonicalizer, CSE; and symbol-dce at module level. After the

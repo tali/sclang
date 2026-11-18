@@ -4548,7 +4548,7 @@ private:
             {"GE", mlir::arith::CmpFPredicate::OGE},
             {"EQ", mlir::arith::CmpFPredicate::OEQ},
             {"NE", mlir::arith::CmpFPredicate::ONE}};
-        res = builder.create<mlir::arith::CmpFOp>(location, cmpFFns.at(up), a, b)
+        res = mlir::sclang::withFPFastMath(builder.create<mlir::arith::CmpFOp>(location, cmpFFns.at(up), a, b))
                   .getResult();
       } else {
         res = builder.create<mlir::arith::CmpIOp>(location, it->second, a, b)
@@ -4568,10 +4568,10 @@ private:
         mlir::Value v = toStd(args[i], stdTy);
         if (llvm::isa<mlir::FloatType>(stdTy)) {
           switch (it->second) {
-          case 0: acc = builder.create<mlir::arith::AddFOp>(location, acc, v).getResult(); break;
-          case 1: acc = builder.create<mlir::arith::SubFOp>(location, acc, v).getResult(); break;
-          case 2: acc = builder.create<mlir::arith::MulFOp>(location, acc, v).getResult(); break;
-          default: acc = builder.create<mlir::arith::DivFOp>(location, acc, v).getResult(); break;
+          case 0: acc = mlir::sclang::withFPFastMath(builder.create<mlir::arith::AddFOp>(location, acc, v)).getResult(); break;
+          case 1: acc = mlir::sclang::withFPFastMath(builder.create<mlir::arith::SubFOp>(location, acc, v)).getResult(); break;
+          case 2: acc = mlir::sclang::withFPFastMath(builder.create<mlir::arith::MulFOp>(location, acc, v)).getResult(); break;
+          default: acc = mlir::sclang::withFPFastMath(builder.create<mlir::arith::DivFOp>(location, acc, v)).getResult(); break;
           }
         } else {
           switch (it->second) {
@@ -4694,8 +4694,8 @@ private:
         // max/min are order-insensitive for values, so arg order is fine.
         if (isFloat)
           acc = it->second
-                    ? builder.create<mlir::arith::MaximumFOp>(location, acc, v).getResult()
-                    : builder.create<mlir::arith::MinimumFOp>(location, acc, v).getResult();
+                    ? mlir::sclang::withFPFastMath(builder.create<mlir::arith::MaximumFOp>(location, acc, v)).getResult()
+                    : mlir::sclang::withFPFastMath(builder.create<mlir::arith::MinimumFOp>(location, acc, v)).getResult();
         else
           acc = it->second
                     ? builder.create<mlir::arith::MaxSIOp>(location, acc, v).getResult()
@@ -4733,11 +4733,11 @@ private:
                   mx = toStd(args[2], stdTy);
       mlir::Value r;
       if (isFloat)
-        r = builder.create<mlir::arith::MaximumFOp>(location, in, mn).getResult();
+        r = mlir::sclang::withFPFastMath(builder.create<mlir::arith::MaximumFOp>(location, in, mn)).getResult();
       else
         r = builder.create<mlir::arith::MaxSIOp>(location, in, mn).getResult();
       if (isFloat)
-        r = builder.create<mlir::arith::MinimumFOp>(location, r, mx).getResult();
+        r = mlir::sclang::withFPFastMath(builder.create<mlir::arith::MinimumFOp>(location, r, mx)).getResult();
       else
         r = builder.create<mlir::arith::MinSIOp>(location, r, mx).getResult();
       return fromStd(r, args[1].getType());

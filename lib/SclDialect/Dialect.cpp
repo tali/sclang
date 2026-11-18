@@ -23,11 +23,45 @@
 #include "sclang/SclDialect/Dialect.h"
 
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/CommandLine.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectImplementation.h"
 
 using namespace mlir;
+
+namespace {
+enum class FpMode { None, Contract, Fast };
+llvm::cl::opt<FpMode> fpModeOpt(
+    "fp-mode",
+    llvm::cl::desc("Floating-point fast-math mode for generated arith float ops"),
+    llvm::cl::values(
+        clEnumValN(FpMode::None, "none",
+                   "no fast-math flags (strict IEEE 754)"),
+        clEnumValN(FpMode::Contract, "contract",
+                   "allow FMA contraction only (default; like clang "
+                   "-ffp-contract=on)"),
+        clEnumValN(FpMode::Fast, "fast",
+                   "all fast-math flags incl. reassociation (like "
+                   "-ffast-math)")),
+    llvm::cl::init(FpMode::Contract));
+} // namespace
+
+namespace mlir {
+namespace sclang {
+arith::FastMathFlags fpFastMathFlags() {
+  switch (fpModeOpt) {
+  case FpMode::None:
+    return arith::FastMathFlags::none;
+  case FpMode::Contract:
+    return arith::FastMathFlags::contract;
+  case FpMode::Fast:
+    return arith::FastMathFlags::fast;
+  }
+  llvm_unreachable("bad fp-mode");
+}
+} // namespace sclang
+} // namespace mlir
 using namespace mlir::scl;
 
 #include "sclang/SclDialect/Dialect.cpp.inc"

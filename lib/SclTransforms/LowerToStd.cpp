@@ -633,8 +633,8 @@ struct CompareOpLowering : public OpConversionPattern<CompareOp> {
   matchAndRewrite(CompareOp op, typename CompareOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     if (all_of_type<FloatType>(adaptor.getOperands())) {
-      rewriter.replaceOpWithNewOp<CmpFOp>(op, predF, adaptor.getLhs(),
-                                          adaptor.getRhs());
+      mlir::sclang::withFPFastMath(rewriter.replaceOpWithNewOp<CmpFOp>(
+      op, predF, adaptor.getLhs(), adaptor.getRhs()));
       return success();
     }
     if (all_of_type<IntegerType>(adaptor.getOperands())) {
@@ -945,7 +945,8 @@ struct NumericOpLowering : public OpConversionPattern<SclOp> {
     auto operands = adaptor.getOperands();
 
     if (all_of_type<FloatType>(operands)) {
-      rewriter.replaceOpWithNewOp<LoweredFloatOp>(op, operands[0], operands[1]);
+      mlir::sclang::withFPFastMath(rewriter.replaceOpWithNewOp<LoweredFloatOp>(
+          op, operands[0], operands[1]));
       return success();
     }
     if (all_of_type<IntegerType>(operands)) {
@@ -1183,7 +1184,7 @@ struct UnaryMinusOpLowering
     auto elementType = adaptor.getRhs().getType();
     return TypeSwitch<Type, LogicalResult>(elementType)
         .Case<FloatType>([&](auto elementType) {
-          rewriter.replaceOpWithNewOp<NegFOp>(op, adaptor.getRhs());
+          mlir::sclang::withFPFastMath(rewriter.replaceOpWithNewOp<NegFOp>(op, adaptor.getRhs()));
           return success();
         })
         .Case<IntegerType>([&](auto elementType) {
@@ -1876,7 +1877,7 @@ struct ForDoOpLowering : public OpConversionPattern<scl::ForDoOp> {
     if (!iv2)
       return failure();
     Value next = llvm::isa<FloatType>(iv2.getType())
-                     ? (Value)rewriter.create<arith::AddFOp>(loc, iv2, step)
+                     ? (Value)mlir::sclang::withFPFastMath(rewriter.create<arith::AddFOp>(loc, iv2, step))
                      : (Value)rewriter.create<arith::AddIOp>(loc, iv2, step);
     if (failed(storeToByteBuffer(rewriter, loc, next, var)))
       return failure();
@@ -2437,9 +2438,9 @@ static Value convertScalarTo(OpBuilder &b, Location loc, Value v, Type ty,
     return v;
   if (llvm::isa<FloatType>(src) && llvm::isa<FloatType>(ty)) {
     if (src.getIntOrFloatBitWidth() < ty.getIntOrFloatBitWidth())
-      return b.create<arith::ExtFOp>(loc, ty, v);
+      return mlir::sclang::withFPFastMath(b.create<arith::ExtFOp>(loc, ty, v));
     if (src.getIntOrFloatBitWidth() > ty.getIntOrFloatBitWidth())
-      return b.create<arith::TruncFOp>(loc, ty, v);
+      return mlir::sclang::withFPFastMath(b.create<arith::TruncFOp>(loc, ty, v));
     return v;
   }
   if (llvm::isa<FloatType>(src) && llvm::isa<IntegerType>(ty))
@@ -2652,7 +2653,8 @@ struct AwlArithLowering : public OpConversionPattern<AwlOp> {
         rewriter.replaceOp(op, res);
         return success();
       }
-      rewriter.replaceOpWithNewOp<LoweredFloatOp>(op, resTy, l, r);
+      mlir::sclang::withFPFastMath(
+          rewriter.replaceOpWithNewOp<LoweredFloatOp>(op, resTy, l, r));
     } else {
       rewriter.replaceOpWithNewOp<LoweredIntOp>(op, resTy, l, r);
     }
@@ -2772,7 +2774,7 @@ struct AwlRealMathOpLowering : public OpConversionPattern<awl::RealMathOp> {
       r = rewriter.create<math::AbsFOp>(loc, f32, v);
     } else if (k == "negr") {
       // awlsim insn_negr: pure sign-bit XOR, no STW change
-      r = rewriter.create<arith::NegFOp>(loc, f32, v);
+      r = mlir::sclang::withFPFastMath(rewriter.create<arith::NegFOp>(loc, f32, v));
     } else {
       // sin/cos/tan/asin/acos/atan/sqrt/exp/ln/sqr: route through the
       // runtime, which replicates the awlsim instruction exactly (NaN/inf
@@ -2797,10 +2799,10 @@ struct AwlRealMathOpLowering : public OpConversionPattern<awl::RealMathOp> {
                                   rewriter.getFunctionType({i8, f64}, {f64}));
       Value opcC = rewriter.create<arith::ConstantOp>(
           loc, i8, rewriter.getI8IntegerAttr(opc));
-      Value d = rewriter.create<arith::ExtFOp>(loc, f64, v);
+      Value d = mlir::sclang::withFPFastMath(rewriter.create<arith::ExtFOp>(loc, f64, v));
       Value rd = rewriter.create<func::CallOp>(loc, fn, TypeRange{f64},
                                                ValueRange{opcC, d}).getResult(0);
-      r = rewriter.create<arith::TruncFOp>(loc, f32, rd);
+      r = mlir::sclang::withFPFastMath(rewriter.create<arith::TruncFOp>(loc, f32, rd));
     }
     rewriter.replaceOp(op, r);
     return success();
@@ -2817,7 +2819,7 @@ struct AwlNegOpLowering : public OpConversionPattern<awl::NegOp> {
     if (!v)
       return failure();
     if (llvm::isa<FloatType>(resTy)) {
-      rewriter.replaceOpWithNewOp<arith::NegFOp>(op, resTy, v);
+      mlir::sclang::withFPFastMath(rewriter.replaceOpWithNewOp<arith::NegFOp>(op, resTy, v));
     } else {
       auto zero = rewriter.create<arith::ConstantOp>(
           op.getLoc(), resTy, rewriter.getIntegerAttr(resTy, 0));
@@ -2872,7 +2874,7 @@ struct AwlCmpLowering : public OpConversionPattern<AwlOp> {
         return failure();
     }
     if (llvm::isa<FloatType>(l.getType()))
-      rewriter.replaceOpWithNewOp<arith::CmpFOp>(op, predF, l, r);
+      mlir::sclang::withFPFastMath(rewriter.replaceOpWithNewOp<arith::CmpFOp>(op, predF, l, r));
     else
       rewriter.replaceOpWithNewOp<arith::CmpIOp>(op, predI, l, r);
     return success();

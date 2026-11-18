@@ -1,0 +1,25 @@
+// RUN: sclang-gen --emit=mlir-std %s | FileCheck %s --check-prefix=CONTRACT
+// RUN: sclang-gen --fp-mode=none --emit=mlir-std %s | FileCheck %s --check-prefix=NONE
+// RUN: sclang-gen --fp-mode=fast --emit=mlir-std %s | FileCheck %s --check-prefix=FAST
+
+// Fast-math configuration (--fp-mode, default contract): float comparisons
+// and negation carry the fastmath attribute of the selected mode.
+// CONTRACT: arith.cmpf ult, {{.*}} fastmath<contract> : f32
+// CONTRACT: arith.negf {{.*}} fastmath<contract> : f32
+// NONE-NOT: fastmath
+// NONE: arith.cmpf ult, {{.*}} : f32
+// NONE: arith.negf {{.*}} : f32
+// FAST: arith.cmpf ult, {{.*}} fastmath<fast> : f32
+// FAST: arith.negf {{.*}} fastmath<fast> : f32
+function f : real
+var_input
+  a : real;
+  b : real;
+end_var
+begin
+  if a < b then
+    f := a;
+  else
+    f := -b;
+  end_if;
+end_function

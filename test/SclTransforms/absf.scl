@@ -13,17 +13,17 @@ begin
 // CHECK: memref.store %arg0, [[INVAR:%[a-z_0-9]+]][] : memref<f32, strided<[]>>
 
 // CHECK: [[IN:%[0-9]+]] = memref.load [[INVAR]]
-// CHECK: [[LT:%[0-9]+]] = arith.cmpf ult, [[IN]], [[C0]]
+// CHECK: [[LT:%[0-9]+]] = arith.cmpf ult, [[IN]], [[C0]] fastmath<contract>
 // CHECK: cf.cond_br [[LT]]
   if in < 0.0 then
 
 // CHECK:   [[IN:%[0-9]+]] = memref.load [[INVAR]]
-// CHECK:   [[NEG:%[0-9]+]] = arith.negf [[IN]] : f32
+// CHECK:   [[NEG:%[0-9]+]] = arith.negf [[IN]] fastmath<contract> : f32
 // CHECK:   memref.store [[NEG]], [[ABS:%[a-z_0-9]+]][] : memref<f32, strided<[]>>
     abs := -in;
 
 // CHECK:   [[IN:%[0-9]+]] = memref.load [[INVAR]]
-// CHECK:   [[GT:%[0-9]+]] = arith.cmpf ugt, [[IN]], [[C0]]
+// CHECK:   [[GT:%[0-9]+]] = arith.cmpf ugt, [[IN]], [[C0]] fastmath<contract>
 // CHECK: cf.cond_br [[GT]]
   elsif in > 0.0 then
 

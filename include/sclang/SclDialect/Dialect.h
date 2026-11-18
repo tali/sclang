@@ -34,6 +34,7 @@
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 
 /// Include the auto-generated header file containing the declaration of the SCL dialect.
 #include "sclang/SclDialect/Dialect.h.inc"
@@ -42,5 +43,38 @@
 /// SCL operations.
 #define GET_OP_CLASSES
 #include "sclang/SclDialect/SclOps.h.inc"
+
+namespace mlir {
+namespace sclang {
+
+/// Fast-math mode selected by the `--fp-mode` command line option
+/// (default: contract, i.e. FMA contraction only; `fast` additionally
+/// allows reassociation and NaN/Inf assumptions, `none` is strict IEEE).
+/// Mirrors clang/gcc `-ffp-contract` + `-ffast-math` configuration.
+arith::FastMathFlags fpFastMathFlags();
+
+/// Detects whether an op class carries a fastmath attribute.
+template <typename OpTy, typename = void>
+struct HasFastmathAttrName : std::false_type {};
+template <typename OpTy>
+struct HasFastmathAttrName<
+    OpTy, std::void_t<decltype(std::declval<OpTy>().getFastmathAttrName())>>
+    : std::true_type {};
+
+/// Set the fastmath attribute on an op that carries one (arith float ops),
+/// according to the selected --fp-mode. No-op for ops without the attribute.
+template <typename OpTy>
+OpTy withFPFastMath(OpTy op) {
+  auto flags = fpFastMathFlags();
+  if constexpr (HasFastmathAttrName<OpTy>::value) {
+    if (flags != arith::FastMathFlags::none)
+      op->setAttr(op.getFastmathAttrName(),
+                  arith::FastMathFlagsAttr::get(op->getContext(), flags));
+  }
+  return op;
+}
+
+} // namespace sclang
+} // namespace mlir
 
 #endif // SCLANG_DIALECT_H_
