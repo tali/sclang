@@ -48,23 +48,23 @@ def Scl_Dialect : Dialect {
   }];
 }
 
-def Scl_AddressType : Type<CPred<"$_self.isa<scl::AddressType>()">, "AddressType">;
-def Scl_ArrayType : Type<CPred<"$_self.isa<scl::ArrayType>()">, "ArrayType">;
-def Scl_DateType : Type<CPred<"$_self.isa<scl::DateType>()">, "DateType">;
-def Scl_DateAndTimeType : Type<CPred<"$_self.isa<scl::DateAndTimeType>()">, "DateAndTimeType">;
-def Scl_InstanceDbType : Type<CPred<"$_self.isa<scl::InstanceDbType>()">, "IDB">;
-def Scl_IntegerType : Type<CPred<"$_self.isa<scl::IntegerType>()">, "IntegerType">;
-def Scl_LogicalType : Type<CPred<"$_self.isa<scl::LogicalType>()">, "LogicalType">;
-def Scl_RealType : Type<CPred<"$_self.isa<scl::RealType>()">, "RealType">;
-def Scl_LrealType : Type<CPred<"$_self.isa<scl::LrealType>()">, "LrealType">;
-def Scl_BuiltinIntegerType : Type<CPred<"$_self.isa<::mlir::IntegerType>()">, "builtin-integer">;
-def Scl_StructType : Type<CPred<"$_self.isa<scl::StructType>()">, "StructType">;
-def Scl_S5TimeType : Type<CPred<"$_self.isa<scl::S5TimeType>()">, "S5TimeType">;
-def Scl_TimeType : Type<CPred<"$_self.isa<scl::TimeType>()">, "TimeType">;
-def Scl_TimeOfDayType : Type<CPred<"$_self.isa<scl::TimeOfDayType>()">, "TimeOfDayType">;
+def Scl_AddressType : Type<CPred<"::llvm::isa<scl::AddressType>($_self)">, "AddressType">;
+def Scl_ArrayType : Type<CPred<"::llvm::isa<scl::ArrayType>($_self)">, "ArrayType">;
+def Scl_DateType : Type<CPred<"::llvm::isa<scl::DateType>($_self)">, "DateType">;
+def Scl_DateAndTimeType : Type<CPred<"::llvm::isa<scl::DateAndTimeType>($_self)">, "DateAndTimeType">;
+def Scl_InstanceDbType : Type<CPred<"::llvm::isa<scl::InstanceDbType>($_self)">, "IDB">;
+def Scl_IntegerType : Type<CPred<"::llvm::isa<scl::IntegerType>($_self)">, "IntegerType">;
+def Scl_LogicalType : Type<CPred<"::llvm::isa<scl::LogicalType>($_self)">, "LogicalType">;
+def Scl_RealType : Type<CPred<"::llvm::isa<scl::RealType>($_self)">, "RealType">;
+def Scl_LrealType : Type<CPred<"::llvm::isa<scl::LrealType>($_self)">, "LrealType">;
+def Scl_BuiltinIntegerType : Type<CPred<"::llvm::isa<::mlir::IntegerType>($_self)">, "builtin-integer">;
+def Scl_StructType : Type<CPred<"::llvm::isa<scl::StructType>($_self)">, "StructType">;
+def Scl_S5TimeType : Type<CPred<"::llvm::isa<scl::S5TimeType>($_self)">, "S5TimeType">;
+def Scl_TimeType : Type<CPred<"::llvm::isa<scl::TimeType>($_self)">, "TimeType">;
+def Scl_TimeOfDayType : Type<CPred<"::llvm::isa<scl::TimeOfDayType>($_self)">, "TimeOfDayType">;
 
 def Scl_Bool :
-  Type<CPred<"$_self.isa<::LogicalType>() && $_self.cast<::LogicalType>().getWidth() == 1">, "bool">,
+  Type<CPred<"::llvm::isa<::LogicalType>($_self) && ::llvm::cast<::LogicalType>($_self).getWidth() == 1">, "bool">,
   BuildableType<"LogicalType::get($_builder.getContext(), 1)">;
 
 // Any SCL type which can be used for function arguments

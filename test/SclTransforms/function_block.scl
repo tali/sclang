@@ -1,6 +1,6 @@
 // RUN: sclang-gen --emit=mlir-std %s | FileCheck %s
 
-// CHECK: func.func @fb1(%arg0: memref<?xi8, strided<[1], offset: ?>>)
+// CHECK: func.func @fb1(%arg0: memref<?xi8, strided<[?], offset: ?>>)
 function_block fb1
 var_input
   in : int;
@@ -23,8 +23,8 @@ end_data_block
 
 // CHECK-LABEL: func.func @fc1
 // CHECK:         %[[DB:[0-9]+]] = memref.get_global @db1 : memref<6xi8>
-// CHECK:         %[[V:[a-z_0-9]+]] = memref.cast %[[DB]] : memref<6xi8> to memref<?xi8, strided<[1], offset: ?>>
-// CHECK:         call @fb1(%[[V]]) : (memref<?xi8, strided<[1], offset: ?>>) -> ()
+// CHECK:         %[[V:[a-z_0-9]+]] = memref.cast %[[DB]] : memref<6xi8> to memref<?xi8, strided<[?], offset: ?>>
+// CHECK:         call @fb1(%[[V]]) : (memref<?xi8, strided<[?], offset: ?>>) -> ()
 function fc1 : int
 begin
   "db1".in := 1;

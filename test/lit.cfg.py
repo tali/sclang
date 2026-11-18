@@ -11,7 +11,8 @@ from lit.llvm import llvm_config
 # name: The name of this test suite.
 config.name = 'SCLANG'
 
-config.test_format = lit.formats.ShTest(not llvm_config.use_lit_shell)
+# LLVM 23: use the internal lit shell (execute_external is deprecated).
+config.test_format = lit.formats.ShTest(execute_external=False)
 
 # suffixes: A list of file extensions to treat as test files.
 config.suffixes = ['.mlir', '.scl', '.awl', '.ll']

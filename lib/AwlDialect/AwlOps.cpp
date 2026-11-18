@@ -40,7 +40,7 @@ void DirectOp::build(OpBuilder &builder, OperationState &state,
 }
 
 LogicalResult DirectOp::verify() {
-  auto dt = getResult().getType().dyn_cast<mlir::scl::DirectType>();
+  auto dt = llvm::dyn_cast<mlir::scl::DirectType>(getResult().getType());
   if (!dt)
     return emitOpError("result must be !scl.direct");
   auto area = mlir::scl::DirectType::areaFromName(getArea());
@@ -86,7 +86,7 @@ void DirectOp::print(OpAsmPrinter &printer) {
 // MARK: LoadOp
 
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value addr) {
-  auto dt = addr.getType().cast<mlir::scl::DirectType>();
+  auto dt = llvm::cast<mlir::scl::DirectType>(addr.getType());
   Type resTy = dt.getWidth() == 1
                    ? (Type)builder.getI1Type()
                    : (Type)builder.getIntegerType(dt.getWidth());
@@ -104,10 +104,14 @@ CallInterfaceCallable CallOp::getCallableForCallee() {
 }
 
 Operation::operand_range CallOp::getArgOperands() {
-  // no variadic call arguments yet (FC parameters unsupported); the optional
-  // rlo operand of CC is not a call argument
-  return Operation::operand_range(getOperation()->operand_begin(),
-                                  getOperation()->operand_begin());
+  // no variadic call arguments yet (FC parameters unsupported); the only
+  // operand is the optional rlo of CC
+  return getOperation()->getOperands();
+}
+
+MutableOperandRange CallOp::getArgOperandsMutable() {
+  return MutableOperandRange(getOperation(), 0,
+                             getOperation()->getNumOperands());
 }
 
 // MARK: TableGen'd op method definitions

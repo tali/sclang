@@ -47,23 +47,23 @@ Operation *SclDialect::materializeConstant(OpBuilder &builder, Attribute value,
                                            Type type, Location loc) {
   return llvm::TypeSwitch<Type, Operation*>(type)
   .Case<S5TimeType>([&](auto type) {
-    IntegerAttr intAttr = value.cast<IntegerAttr>();
+    IntegerAttr intAttr = llvm::cast<IntegerAttr>(value);
     return builder.create<ConstantS5TimeOp>(loc, type, intAttr);
   })
   .Case<TimeType>([&](auto type) {
-    IntegerAttr intAttr = value.cast<IntegerAttr>();
+    IntegerAttr intAttr = llvm::cast<IntegerAttr>(value);
     return builder.create<ConstantTimeOp>(loc, type, intAttr);
   })
   .Case<TimeOfDayType>([&](auto type) {
-    IntegerAttr intAttr = value.cast<IntegerAttr>();
+    IntegerAttr intAttr = llvm::cast<IntegerAttr>(value);
     return builder.create<ConstantTimeOfDayOp>(loc, type, intAttr);
   })
   .Case<DateType>([&](auto type) {
-    IntegerAttr intAttr = value.cast<IntegerAttr>();
+    IntegerAttr intAttr = llvm::cast<IntegerAttr>(value);
     return builder.create<ConstantDateOp>(loc, type, intAttr);
   })
   .Case<DateAndTimeType>([&](auto type) {
-    IntegerAttr intAttr = value.cast<IntegerAttr>();
+    IntegerAttr intAttr = llvm::cast<IntegerAttr>(value);
     return builder.create<ConstantDateAndTimeOp>(loc, type, intAttr);
   })
   .Default([&](auto type) {

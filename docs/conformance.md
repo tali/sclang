@@ -12,7 +12,7 @@ when they are absent.
 ## Running
 
 ```
-python3 test/conformance/run_conformance.py --sclang build.release/bin/sclang
+python3 test/conformance/run_conformance.py --sclang build.23/bin/sclang
 # or via lit (runs in `ninja check-sclang`):
 #   test/conformance/conformance.mlir
 ```
@@ -69,7 +69,7 @@ function (documented approximation; system blocks SFC/SFB included).
 
 Totals: 22 `.scl` files (17 project dirs), 116 `.awl` files.
 
-## Current results (LLVM 17 build, this writing)
+## Current results (LLVM 23 build, this writing)
 
 - AWL compile: **116/116 pass (100%)**
 - SCL single file: **15/15 pass (100%)**

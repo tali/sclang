@@ -73,7 +73,8 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
     auto argNamesAttr = ArrayAttr::get(context, argNames);
 
     rewriter.replaceOpWithNewOp<scl::CallFcOp>(op, op.getType(), op.getCallee(),
-                                               op.getArguments(), argNamesAttr);
+                                               op.getArguments(), argNamesAttr,
+                                               nullptr, nullptr);
 
     return success();
   }
@@ -82,7 +83,7 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
   mlir::LogicalResult
   canonicalizeArguments(scl::CallFcOp op, scl::FunctionOp func, PatternRewriter &rewriter) const {
     auto context = op->getContext();
-    auto funcType = func.getFunctionType().cast<FunctionType>();
+    auto funcType = llvm::cast<FunctionType>(func.getFunctionType());
 
     auto argCallNames = op.getArgNames().getValue();
     SmallBitVector argUsed(argCallNames.size());
@@ -106,7 +107,7 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
       StringRef name = nameAttr.getValue();
       bool found = false;
       for (unsigned j = 0; j < argCallNames.size(); j++) {
-        auto argCallNameAttr = argCallNames[j].dyn_cast<StringAttr>();
+        auto argCallNameAttr = llvm::dyn_cast<StringAttr>(argCallNames[j]);
         if (!argCallNameAttr)
           return failure();
         auto argCallName = argCallNameAttr.getValue();
@@ -140,7 +141,8 @@ struct CanonicalizeCallArguments : public OpRewritePattern<scl::CallFcOp> {
 
     auto argNamesAttr = ArrayAttr::get(context, argNames);
     rewriter.replaceOpWithNewOp<scl::CallFcOp>(op, op.getType(), op.getCallee(),
-                                               arguments, argNamesAttr);
+                                               arguments, argNamesAttr,
+                                               nullptr, nullptr);
 
     return success();
   }

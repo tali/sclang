@@ -43,7 +43,7 @@ namespace {
 
 /// Return `true` if all elements are of the given type.
 template <typename U> bool all_of_type(ValueRange range) {
-  return all_of(range, [](Value elem) { return elem.getType().isa<U>(); });
+  return all_of(range, [](Value elem) { return llvm::isa<U>(elem.getType()); });
 }
 
 // MARK: FB/struct layout
@@ -68,36 +68,36 @@ using FbLayoutCache = llvm::StringMap<FbLayout>;
 
 /// Size of a type in bytes.
 static int64_t byteSize(Type type, const FbLayoutCache &layouts) {
-  if (auto intTy = type.dyn_cast<scl::IntegerType>())
+  if (auto intTy = llvm::dyn_cast<scl::IntegerType>(type))
     return (intTy.getWidth() + 7) / 8;
-  if (auto logTy = type.dyn_cast<scl::LogicalType>())
+  if (auto logTy = llvm::dyn_cast<scl::LogicalType>(type))
     return (logTy.getWidth() + 7) / 8;
-  if (type.isa<scl::RealType>())
+  if (llvm::isa<scl::RealType>(type))
     return 4;
-  if (type.isa<scl::LrealType>())
+  if (llvm::isa<scl::LrealType>(type))
     return 8;
-  if (auto arrTy = type.dyn_cast<scl::ArrayType>()) {
+  if (auto arrTy = llvm::dyn_cast<scl::ArrayType>(type)) {
     int64_t count = 1;
     for (auto &dim : arrTy.getDimensions())
       count *= dim.second - dim.first + 1;
     return count * byteSize(arrTy.getElementType(), layouts);
   }
-  if (auto structTy = type.dyn_cast<scl::StructType>()) {
+  if (auto structTy = llvm::dyn_cast<scl::StructType>(type)) {
     int64_t size = 0;
     for (auto elem : structTy.getElementTypes())
       size += byteSize(elem, layouts);
     return size;
   }
-  if (auto idbTy = type.dyn_cast<scl::InstanceDbType>()) {
+  if (auto idbTy = llvm::dyn_cast<scl::InstanceDbType>(type)) {
     auto it = layouts.find(idbTy.getFbSymbol());
     return it != layouts.end() ? it->second.size : 0;
   }
   // date/time types
-  if (type.isa<scl::S5TimeType>() || type.isa<scl::DateType>())
+  if (llvm::isa<scl::S5TimeType>(type) || llvm::isa<scl::DateType>(type))
     return 2;
-  if (type.isa<scl::TimeType>() || type.isa<scl::TimeOfDayType>())
+  if (llvm::isa<scl::TimeType>(type) || llvm::isa<scl::TimeOfDayType>(type))
     return 4;
-  if (type.isa<scl::DateAndTimeType>())
+  if (llvm::isa<scl::DateAndTimeType>(type))
     return 8;
   return 0;
 }
@@ -110,9 +110,9 @@ static std::optional<llvm::APInt> foldConstBits(Value v, unsigned width) {
   if (!def)
     return std::nullopt;
   if (auto c = llvm::dyn_cast<scl::ConstantOp>(def)) {
-    if (auto ia = c.getValue().dyn_cast<IntegerAttr>())
+    if (auto ia = llvm::dyn_cast<IntegerAttr>(c.getValue()))
       return ia.getValue().sextOrTrunc(width);
-    if (auto fa = c.getValue().dyn_cast<FloatAttr>())
+    if (auto fa = llvm::dyn_cast<FloatAttr>(c.getValue()))
       return fa.getValue().bitcastToAPInt().sextOrTrunc(width);
     return std::nullopt;
   }
@@ -181,17 +181,17 @@ static FbLayoutCache computeFbLayouts(ModuleOp module) {
           member.initBits = ia.getValue();
         } else if (Value init = var.getInit()) {
           unsigned width = 64;
-          if (auto it = var.getType().dyn_cast<scl::IntegerType>())
+          if (auto it = llvm::dyn_cast<scl::IntegerType>(var.getType()))
             width = it.getWidth();
-          else if (auto lt = var.getType().dyn_cast<scl::LogicalType>())
+          else if (auto lt = llvm::dyn_cast<scl::LogicalType>(var.getType()))
             width = lt.getWidth();
-          else if (var.getType().isa<scl::RealType>())
+          else if (llvm::isa<scl::RealType>(var.getType()))
             width = 32;
-          else if (var.getType().isa<scl::TimeType>() ||
-                   var.getType().isa<scl::TimeOfDayType>())
+          else if (llvm::isa<scl::TimeType>(var.getType()) ||
+                   llvm::isa<scl::TimeOfDayType>(var.getType()))
             width = 32;
-          else if (var.getType().isa<scl::S5TimeType>() ||
-                   var.getType().isa<scl::DateType>())
+          else if (llvm::isa<scl::S5TimeType>(var.getType()) ||
+                   llvm::isa<scl::DateType>(var.getType()))
             width = 16;
           if (auto bits = foldConstBits(init, width))
             member.initBits = *bits;
@@ -274,7 +274,7 @@ public:
       // A direct address (memory area / DB operand) converts to a packed i64
       // placeholder; loads/stores through it lower to runtime C ABI calls
       // (ADR 002) and never touch this value.
-      if (elem.isa<scl::DirectType>())
+      if (llvm::isa<scl::DirectType>(elem))
         return (Type)IntegerType::get(type.getContext(), 64);
       // An instance DB address is a rank-1 i8 view of the instance buffer
       // with a dynamic offset (like any other byte view). Keeping the view
@@ -283,14 +283,14 @@ public:
       // and no reinterpret_cast chaining (whose fold would drop the inner
       // offset). Global instance DBs are get_global'ed as plain memrefs and
       // memref.cast to this view type in GetGlobalOpLowering.
-      if (auto idbTy = elem.dyn_cast<scl::InstanceDbType>()) {
+      if (auto idbTy = llvm::dyn_cast<scl::InstanceDbType>(elem)) {
         auto it = fbLayouts.find(idbTy.getFbSymbol());
         if (it == fbLayouts.end())
           return Type();
         return (Type)mlir::MemRefType::get(
             {ShapedType::kDynamic}, IntegerType::get(type.getContext(), 8),
             StridedLayoutAttr::get(type.getContext(), ShapedType::kDynamic,
-                                   {1}));
+                                   {ShapedType::kDynamic}));
       }
       auto celem = convertType(elem);
       if (!celem)
@@ -299,13 +299,13 @@ public:
       // (static size, dynamic offset), so that getelement/getindex on
       // struct array elements chain through resolveByteViewRoot with a
       // dynamic offset.
-      if (auto st = elem.dyn_cast<scl::StructType>())
+      if (auto st = llvm::dyn_cast<scl::StructType>(elem))
         return (Type)mlir::MemRefType::get(
             {byteSize(st, fbLayouts)}, IntegerType::get(type.getContext(), 8),
             StridedLayoutAttr::get(type.getContext(), ShapedType::kDynamic,
                                    {1}));
       // An address of a composite (array/IDB) IS the buffer memref.
-      if (celem.isa<MemRefType>())
+      if (llvm::isa<MemRefType>(celem))
         return celem;
       // An i8 address is a rank-1 byte view into a byte buffer (FB/struct
       // members). It must not be chained through another reinterpret_cast:
@@ -318,7 +318,7 @@ public:
         return (Type)mlir::MemRefType::get(
             {ShapedType::kDynamic}, celem,
             StridedLayoutAttr::get(type.getContext(), ShapedType::kDynamic,
-                                   {1}));
+                                   {ShapedType::kDynamic}));
       return (Type)mlir::MemRefType::get(
           {}, celem,
           StridedLayoutAttr::get(type.getContext(), ShapedType::kDynamic, {}));
@@ -330,10 +330,10 @@ public:
       return IntegerType::get(type.getContext(), type.getWidth());
     });
     addConversion([&](scl::RealType type) {
-      return FloatType::getF32(type.getContext());
+      return Float32Type::get(type.getContext());
     });
     addConversion([&](scl::LrealType type) {
-      return FloatType::getF64(type.getContext());
+      return Float64Type::get(type.getContext());
     });
     addConversion([&](scl::DirectType type) {
       return IntegerType::get(type.getContext(), 64);
@@ -348,7 +348,7 @@ public:
       // An array of composites (struct/array elements) is a flat byte
       // buffer, so that element addresses take the byte-view path in
       // GetIndexOpLowering (a memref<N x memref<…>> would not).
-      if (elem.isa<MemRefType>())
+      if (llvm::isa<MemRefType>(elem))
         return (Type)MemRefType::get(
             {byteSize(type, fbLayouts)}, IntegerType::get(type.getContext(), 8));
       return (Type)MemRefType::get(shape, elem);
@@ -393,17 +393,17 @@ public:
     // SCL types persist after conversion to Std.
     addSourceMaterialization([&](OpBuilder &builder, Type resultType,
                                  ValueRange inputs,
-                                 Location loc) -> std::optional<Value> {
+                                 Location loc) -> Value {
       if (inputs.size() != 1)
-        return std::nullopt;
-      auto op = builder.create<scl::DialectCastOp>(loc, resultType, inputs[0]);
-      return op.getResult();
+        return nullptr;
+      return builder.create<scl::DialectCastOp>(loc, resultType, inputs[0])
+          .getResult();
     });
     addTargetMaterialization([&](OpBuilder &builder, Type resultType,
                                  ValueRange inputs,
-                                 Location loc) -> std::optional<Value> {
+                                 Location loc) -> Value {
       if (inputs.size() != 1)
-        return std::nullopt;
+        return nullptr;
       return builder.create<scl::DialectCastOp>(loc, resultType, inputs[0])
           .getResult();
     });
@@ -440,7 +440,7 @@ static Value directDbValue(OpBuilder &b, Location loc, scl::DirectType dt,
   }
   if (op && dt.getArea() == scl::DirectArea::DataBlock && dt.getDb() == 0) {
     if (auto func = op->template getParentOfType<func::FuncOp>()) {
-      if (func.getSymName().startswith("FB") && func.getNumArguments() == 1 &&
+      if (func.getSymName().starts_with("FB") && func.getNumArguments() == 1 &&
           func.getBody().front().getNumArguments() == 1)
         return func.getBody().front().getArgument(0);
     }
@@ -481,7 +481,7 @@ static Value lowerDirectLoad(OpBuilder &b, Location loc, scl::DirectType dt,
                 .getResult(0);
   if (resTy == i64)
     return v;
-  if (resTy.isa<FloatType>()) {
+  if (llvm::isa<FloatType>(resTy)) {
     // REAL load: reinterpret the bits, do not convert the value
     Value iv = b.create<arith::TruncIOp>(
         loc, b.getIntegerType(resTy.getIntOrFloatBitWidth()), v);
@@ -530,7 +530,7 @@ static LogicalResult lowerDirectStore(OpBuilder &b, Location loc,
     return success();
   }
   Value v = value;
-  if (v.getType().isa<FloatType>()) {
+  if (llvm::isa<FloatType>(v.getType())) {
     auto intTy = b.getIntegerType(v.getType().getIntOrFloatBitWidth());
     v = b.create<arith::BitcastOp>(loc, intTy, v);
   }
@@ -547,6 +547,19 @@ static LogicalResult lowerDirectStore(OpBuilder &b, Location loc,
   b.create<func::CallOp>(loc, fn, TypeRange{},
                          ValueRange{areaC, dbC, byteC, widthC, v});
   return success();
+}
+
+/// Offset OpFoldResult for a reinterpret_cast whose result type is `resTy`:
+/// when the result layout offset is static, the op's static_offsets attribute
+/// must equal it (MLIR verifier), so use a static attribute; otherwise a
+/// dynamic offset operand is fine.
+static OpFoldResult rcOffsetOfr(OpBuilder &b, MemRefType resTy, Value dynOff) {
+  int64_t off = 0;
+  SmallVector<int64_t, 4> strides;
+  (void)resTy.getStridesAndOffset(strides, off);
+  if (ShapedType::isDynamic(off))
+    return OpFoldResult(dynOff);
+  return OpFoldResult(b.getIndexAttr(off));
 }
 
 // MARK: CallFcOpLowering
@@ -571,8 +584,8 @@ struct CallFcOpLowering : public OpConversionPattern<scl::CallFcOp> {
         if (i >= fnTy.getNumInputs())
           break;
         auto target = fnTy.getInput(i);
-        auto argMem = arg.getType().dyn_cast<MemRefType>();
-        auto tgtMem = target.dyn_cast<MemRefType>();
+        auto argMem = llvm::dyn_cast<MemRefType>(arg.getType());
+        auto tgtMem = llvm::dyn_cast<MemRefType>(target);
         if (!argMem || !tgtMem || arg.getType() == target)
           continue;
         auto loc = op.getLoc();
@@ -582,8 +595,24 @@ struct CallFcOpLowering : public OpConversionPattern<scl::CallFcOp> {
           sizes.push_back(rewriter.getIndexAttr(d));
           strides.push_back(rewriter.getIndexAttr(1));
         }
+        // The offset operand is dynamic, so the result type must carry a
+        // dynamic offset too (MLIR verifier); rebuild an identity/static
+        // layout as strided with dynamic offset.
+        MemRefType rcTy = tgtMem;
+        {
+          int64_t tyOff = 0;
+          SmallVector<int64_t, 4> tyStrides;
+          (void)tgtMem.getStridesAndOffset(tyStrides, tyOff);
+          if (!ShapedType::isDynamic(tyOff)) {
+            SmallVector<int64_t, 4> ones(tgtMem.getRank(), 1);
+            rcTy = MemRefType::get(tgtMem.getShape(), tgtMem.getElementType(),
+                                   StridedLayoutAttr::get(rewriter.getContext(),
+                                                          ShapedType::kDynamic,
+                                                          ones));
+          }
+        }
         args[i] = rewriter.create<memref::ReinterpretCastOp>(
-            loc, tgtMem, meta.getBaseBuffer(), meta.getOffset(), sizes,
+            loc, rcTy, meta.getBaseBuffer(), meta.getOffset(), sizes,
             strides);
       }
     }
@@ -645,11 +674,11 @@ struct ConstantOpLowering : public OpConversionPattern<scl::ConstantOp> {
     auto resTy = getTypeConverter()->convertType(op.getType());
     if (!resTy)
       return failure();
-    auto attr = op.getValue().cast<TypedAttr>();
+    auto attr = llvm::cast<TypedAttr>(op.getValue());
     if (attr.getType() != resTy) {
-      if (auto ia = attr.dyn_cast<IntegerAttr>())
+      if (auto ia = llvm::dyn_cast<IntegerAttr>(attr))
         attr = rewriter.getIntegerAttr(resTy, ia.getValue());
-      else if (auto fa = attr.dyn_cast<FloatAttr>())
+      else if (auto fa = llvm::dyn_cast<FloatAttr>(attr))
         attr = rewriter.getFloatAttr(resTy, fa.getValue());
       else
         return failure();
@@ -676,7 +705,7 @@ struct DialectCastOpLowering : public OpConversionPattern<scl::DialectCastOp> {
       // A byte view (converted !scl.address) cast to i64 yields its raw data
       // pointer: aligned base plus the view offset (same extraction the
       // builtin-FB lowerings use to pass instance DBs to the runtime).
-      if (value.getType().isa<MemRefType>() && targetTy.isInteger(64)) {
+      if (llvm::isa<MemRefType>(value.getType()) && targetTy.isInteger(64)) {
         auto loc = op.getLoc();
         auto meta =
             rewriter.create<memref::ExtractStridedMetadataOp>(loc, value);
@@ -690,8 +719,8 @@ struct DialectCastOpLowering : public OpConversionPattern<scl::DialectCastOp> {
       }
       // real -> integer with `round` (IEC 61131-3 ed.3 table 22): round to
       // the nearest integer first, then fptosi
-      if (op.getRoundAttr() && value.getType().isa<FloatType>() &&
-          targetTy.isa<IntegerType>()) {
+      if (op.getRoundAttr() && llvm::isa<FloatType>(value.getType()) &&
+          llvm::isa<IntegerType>(targetTy)) {
         Value rounded =
             rewriter.create<math::RoundOp>(op.getLoc(), value).getResult();
         rewriter.replaceOpWithNewOp<arith::FPToSIOp>(op, targetTy, rounded);
@@ -789,24 +818,23 @@ struct FunctionOpLowering : public OpConversionPattern<scl::FunctionOp> {
 /// i8 view (FB/struct members in a byte buffer).
 static Value loadFromByteBuffer(OpBuilder &b, Location loc, Value addr,
                                 Type resTy) {
-  auto memTy = addr.getType().cast<MemRefType>();
+  auto memTy = llvm::cast<MemRefType>(addr.getType());
   // Whole-buffer load (array value): the address of an array IS the buffer
   // memref, so the load is the address itself.
-  if (resTy.isa<MemRefType>()) {
+  if (llvm::isa<MemRefType>(resTy)) {
     if (resTy == memTy)
       return addr;
     // Byte view (array/struct member of an FB/IDB): cast the view to the
     // requested buffer type using the result's static size.
-    auto rm = resTy.cast<MemRefType>();
+    auto rm = llvm::cast<MemRefType>(resTy);
     auto zero = b.create<arith::ConstantIndexOp>(loc, 0);
     if (memTy.getRank() == 1 && memTy.getElementType().isInteger(8) &&
         rm.getRank() == 1 && rm.getElementType().isInteger(8) &&
         rm.getShape()[0] != ShapedType::kDynamic) {
-      auto n = b.create<arith::ConstantIndexOp>(loc, rm.getShape()[0]);
-      auto one = b.create<arith::ConstantIndexOp>(loc, 1);
-      return b.create<memref::ReinterpretCastOp>(loc, rm, addr, zero,
-                                                 ValueRange{n},
-                                                 ValueRange{one});
+      return b.create<memref::ReinterpretCastOp>(
+          loc, rm, addr, rcOffsetOfr(b, rm, zero),
+          ArrayRef<OpFoldResult>{b.getIndexAttr(rm.getShape()[0])},
+          ArrayRef<OpFoldResult>{b.getIndexAttr(1)});
     }
     return nullptr;
   }
@@ -831,7 +859,7 @@ static Value loadFromByteBuffer(OpBuilder &b, Location loc, Value addr,
     auto zero = b.create<arith::ConstantOp>(loc, i8, b.getIntegerAttr(i8, 0));
     return b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne, byte, zero);
   }
-  auto accTy = resTy.isa<FloatType>()
+  auto accTy = llvm::isa<FloatType>(resTy)
                    ? IntegerType::get(b.getContext(), nbytes <= 4 ? 32 : 64)
                    : resTy;
   // addr is a rank-1 i8 view starting at the value (FB/struct member);
@@ -852,7 +880,7 @@ static Value loadFromByteBuffer(OpBuilder &b, Location loc, Value addr,
     }
     acc = b.create<arith::OrIOp>(loc, acc, ext);
   }
-  if (resTy.isa<FloatType>())
+  if (llvm::isa<FloatType>(resTy))
     return b.create<arith::BitcastOp>(loc, resTy, acc);
   if (accTy != resTy)
     return b.create<arith::TruncIOp>(loc, resTy, acc);
@@ -869,8 +897,7 @@ struct LoadOpLowering : public OpConversionPattern<scl::LoadOp> {
     if (!resTy)
       return failure();
     // Direct address (memory area / DB): runtime C ABI call (ADR 002).
-    if (auto dt = op.getAddress().getType().cast<scl::AddressType>()
-                      .getElementType().dyn_cast<scl::DirectType>()) {
+    if (auto dt = llvm::dyn_cast<scl::DirectType>(llvm::cast<scl::AddressType>(op.getAddress().getType()).getElementType())) {
       Value loaded = lowerDirectLoad(rewriter, op.getLoc(), dt, resTy,
                                      op->template getParentOfType<ModuleOp>());
       rewriter.replaceOp(op, loaded);
@@ -972,32 +999,32 @@ struct ReturnValueOpLowering : public OpConversionPattern<scl::ReturnValueOp> {
 /// Store `value` at `addr`, splitting into bytes if the address is an i8 view.
 static LogicalResult storeToByteBuffer(OpBuilder &b, Location loc, Value value,
                                        Value addr) {
-  auto memTy = addr.getType().cast<MemRefType>();
+  auto memTy = llvm::cast<MemRefType>(addr.getType());
   auto zero = b.create<arith::ConstantIndexOp>(loc, 0);
   // Whole-buffer assignment (array/struct value stored into its buffer).
-  if (value.getType().isa<MemRefType>() && addr.getType().isa<MemRefType>()) {
+  if (llvm::isa<MemRefType>(value.getType()) && llvm::isa<MemRefType>(addr.getType())) {
     Value src = value;
-    auto am = addr.getType().cast<MemRefType>();
+    auto am = llvm::cast<MemRefType>(addr.getType());
     if (src.getType() != addr.getType()) {
-      auto sm = src.getType().cast<MemRefType>();
+      auto sm = llvm::cast<MemRefType>(src.getType());
       if (sm.getRank() != 1 || sm.getElementType() != am.getElementType())
         return failure();
       if (am.getRank() == 1 && am.getElementType().isInteger(8) &&
           am.getShape()[0] != ShapedType::kDynamic) {
         // struct window address: cast the buffer to the window type first
-        auto n = b.create<arith::ConstantIndexOp>(loc, am.getShape()[0]);
-        auto one = b.create<arith::ConstantIndexOp>(loc, 1);
-        src = b.create<memref::ReinterpretCastOp>(loc, am, value, zero,
-                                                 ValueRange{n}, ValueRange{one});
+        src = b.create<memref::ReinterpretCastOp>(
+            loc, am, value, rcOffsetOfr(b, am, zero),
+            ArrayRef<OpFoldResult>{b.getIndexAttr(am.getShape()[0])},
+            ArrayRef<OpFoldResult>{b.getIndexAttr(1)});
       } else if (am.getRank() == 1 && am.getElementType().isInteger(8) &&
                  am.getShape()[0] == ShapedType::kDynamic &&
                  sm.getShape()[0] != ShapedType::kDynamic) {
         // dynamic byte view (array/struct member of an FB/IDB): cast the
         // source buffer to the view type using the source's static size
-        auto n = b.create<arith::ConstantIndexOp>(loc, sm.getShape()[0]);
-        auto one = b.create<arith::ConstantIndexOp>(loc, 1);
-        src = b.create<memref::ReinterpretCastOp>(loc, am, src, zero,
-                                                 ValueRange{n}, ValueRange{one});
+        src = b.create<memref::ReinterpretCastOp>(
+            loc, am, src, rcOffsetOfr(b, am, zero),
+            ArrayRef<OpFoldResult>{b.getIndexAttr(sm.getShape()[0])},
+            ArrayRef<OpFoldResult>{b.getIndexAttr(1)});
       } else {
         return failure();
       }
@@ -1026,11 +1053,11 @@ static LogicalResult storeToByteBuffer(OpBuilder &b, Location loc, Value value,
     b.create<memref::StoreOp>(loc, byte, addr, ValueRange{idx0});
     return success();
   }
-  auto accTy = valTy.isa<FloatType>()
+  auto accTy = llvm::isa<FloatType>(valTy)
                    ? IntegerType::get(b.getContext(), nbytes <= 4 ? 32 : 64)
                    : valTy;
   Value acc = value;
-  if (valTy.isa<FloatType>())
+  if (llvm::isa<FloatType>(valTy))
     acc = b.create<arith::BitcastOp>(loc, accTy, value);
   else if (accTy != valTy)
     acc = b.create<arith::ExtSIOp>(loc, accTy, value);
@@ -1067,8 +1094,7 @@ struct StoreOpLowering : public OpConversionPattern<scl::StoreOp> {
   matchAndRewrite(scl::StoreOp op, scl::StoreOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // Direct address (memory area / DB): runtime C ABI call (ADR 002).
-    if (auto dt = op.getLhs().getType().cast<scl::AddressType>()
-                      .getElementType().dyn_cast<scl::DirectType>()) {
+    if (auto dt = llvm::dyn_cast<scl::DirectType>(llvm::cast<scl::AddressType>(op.getLhs().getType()).getElementType())) {
       if (failed(lowerDirectStore(rewriter, op.getLoc(), dt, adaptor.getRhs(),
                                   op->template getParentOfType<ModuleOp>(), op)))
         return failure();
@@ -1093,7 +1119,7 @@ struct TempVariableOpLowering
   matchAndRewrite(scl::TempVariableOp op, scl::TempVariableOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto resultType = getTypeConverter()->convertType(op.getResult().getType());
-    auto memref = resultType.dyn_cast<MemRefType>();
+    auto memref = llvm::dyn_cast<MemRefType>(resultType);
     if (!memref)
       return failure();
     auto loc = op.getLoc();
@@ -1112,19 +1138,16 @@ struct TempVariableOpLowering
         auto plain = MemRefType::get({memref.getShape()[0]},
                                      memref.getElementType());
         auto alloca = rewriter.create<memref::AllocaOp>(loc, plain);
-        auto n = rewriter.create<arith::ConstantIndexOp>(loc, memref.getShape()[0]);
-        auto one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
         rewriter.replaceOpWithNewOp<memref::ReinterpretCastOp>(
-            op, memref, alloca, zero, ValueRange{n}, ValueRange{one});
+            op, memref, alloca, rcOffsetOfr(rewriter, memref, zero),
+            ArrayRef<OpFoldResult>{rewriter.getIndexAttr(memref.getShape()[0])},
+            ArrayRef<OpFoldResult>{rewriter.getIndexAttr(1)});
         return success();
       }
       // i8 address: rank-1 byte view holding a single byte. An instance-DB
       // address allocates the FB's whole instance buffer instead.
       int64_t allocSize = 1;
-      if (auto idbTy = op.getResult().getType()
-                           .cast<scl::AddressType>()
-                           .getElementType()
-                           .dyn_cast<scl::InstanceDbType>()) {
+      if (auto idbTy = llvm::dyn_cast<scl::InstanceDbType>(llvm::cast<scl::AddressType>(op.getResult().getType()).getElementType())) {
         auto &layouts =
             static_cast<const SclTypeConverter *>(typeConverter)->fbLayouts;
         auto it = layouts.find(idbTy.getFbSymbol());
@@ -1133,16 +1156,17 @@ struct TempVariableOpLowering
       }
       auto plain = MemRefType::get({allocSize}, memref.getElementType());
       auto alloca = rewriter.create<memref::AllocaOp>(loc, plain);
-      auto one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
-      auto n = rewriter.create<arith::ConstantIndexOp>(loc, allocSize);
       rewriter.replaceOpWithNewOp<memref::ReinterpretCastOp>(
-          op, memref, alloca, zero, ValueRange{n}, ValueRange{one});
+          op, memref, alloca, rcOffsetOfr(rewriter, memref, zero),
+          ArrayRef<OpFoldResult>{rewriter.getIndexAttr(allocSize)},
+          ArrayRef<OpFoldResult>{rewriter.getIndexAttr(1)});
       return success();
     }
     auto plain = MemRefType::get({}, memref.getElementType());
     auto alloca = rewriter.create<memref::AllocaOp>(loc, plain);
     rewriter.replaceOpWithNewOp<memref::ReinterpretCastOp>(
-        op, memref, alloca, zero, ValueRange{}, ValueRange{});
+        op, memref, alloca, rcOffsetOfr(rewriter, memref, zero),
+        ArrayRef<OpFoldResult>{}, ArrayRef<OpFoldResult>{});
     return success();
   }
 };
@@ -1164,7 +1188,7 @@ struct UnaryMinusOpLowering
         })
         .Case<IntegerType>([&](auto elementType) {
           auto loc = op.getLoc();
-          auto zero = rewriter.create<ConstantIntOp>(loc, 0, elementType);
+          auto zero = rewriter.create<ConstantIntOp>(loc, elementType, 0);
           rewriter.replaceOpWithNewOp<SubIOp>(op, zero, adaptor.getRhs());
           return success();
         })
@@ -1188,14 +1212,14 @@ struct UnaryNotOpLowering : public OpConversionPattern<scl::UnaryNotOp> {
     if (v.getType().isInteger(1)) {
       // logical NOT on a bool
       auto i1 = rewriter.getIntegerType(1);
-      auto falseVal = rewriter.create<ConstantIntOp>(loc, 0, i1);
-      auto trueVal = rewriter.create<ConstantIntOp>(loc, 1, i1);
+      auto falseVal = rewriter.create<ConstantIntOp>(loc, i1, 0);
+      auto trueVal = rewriter.create<ConstantIntOp>(loc, i1, 1);
       rewriter.replaceOpWithNewOp<SelectOp>(op, v, falseVal, trueVal);
       return success();
     }
     // bitwise NOT on a bit string (BYTE/WORD/DWORD): x XOR all-ones
     auto allOnes = rewriter.create<ConstantIntOp>(
-        loc, -1, v.getType().cast<IntegerType>().getWidth());
+        loc, -1, llvm::cast<IntegerType>(v.getType()).getWidth());
     rewriter.replaceOpWithNewOp<XOrIOp>(op, v, allOnes);
     return success();
   }
@@ -1229,7 +1253,7 @@ struct DataBlockOpLowering : public OpConversionPattern<scl::DataBlockOp> {
         static_cast<const SclTypeConverter *>(typeConverter)->fbLayouts;
     mlir::Type memrefTy;
     scl::InstanceDbType idbTyVal;
-    if (auto idbTy = op.getType().dyn_cast<scl::InstanceDbType>()) {
+    if (auto idbTy = llvm::dyn_cast<scl::InstanceDbType>(op.getType())) {
       // An instance DB of a FB is a flat byte buffer sized by the FB layout.
       auto it = layouts.find(idbTy.getFbSymbol());
       if (it == layouts.end())
@@ -1246,7 +1270,7 @@ struct DataBlockOpLowering : public OpConversionPattern<scl::DataBlockOp> {
       // because the LLVM lowering of memref.global requires identity maps;
       // memref.get_global results that need a strided window type are cast in
       // GetGlobalOpLowering.
-      if (elemTy.isa<MemRefType>())
+      if (llvm::isa<MemRefType>(elemTy))
         memrefTy = elemTy;
       else
         memrefTy = MemRefType::get({}, elemTy);
@@ -1256,10 +1280,10 @@ struct DataBlockOpLowering : public OpConversionPattern<scl::DataBlockOp> {
     // DenseElementsAttr over the equivalent ranked tensor type. For an
     // instance DB, bake the FB members' cold-start initial values into the
     // byte buffer; everything else is zero-filled.
-    auto memref = memrefTy.cast<MemRefType>();
+    auto memref = llvm::cast<MemRefType>(memrefTy);
     Attribute initValue = nullptr;
     if (memref.getElementType().isIntOrFloat() ||
-        memref.getElementType().isa<IndexType>()) {
+        llvm::isa<IndexType>(memref.getElementType())) {
       auto tensorTy = RankedTensorType::get(memref.getShape(),
                                             memref.getElementType());
       if (memref.getElementType().isInteger(8) && idbTyVal) {
@@ -1273,7 +1297,7 @@ struct DataBlockOpLowering : public OpConversionPattern<scl::DataBlockOp> {
         std::function<void(const FbLayout &, int64_t)> bake =
             [&](const FbLayout &lay, int64_t baseOff) {
           for (auto &m : lay.members) {
-            if (auto idbM = m.type.dyn_cast<scl::InstanceDbType>()) {
+            if (auto idbM = llvm::dyn_cast<scl::InstanceDbType>(m.type)) {
               auto it = layouts.find(idbM.getFbSymbol());
               if (it != layouts.end())
                 bake(it->second, baseOff + m.offset);
@@ -1297,9 +1321,9 @@ struct DataBlockOpLowering : public OpConversionPattern<scl::DataBlockOp> {
             } else if (m.initStr) {
               // String member (flat char array): store the literal chars,
               // zero-padded (the buffer starts zeroed).
-              if (auto arrTy = m.type.dyn_cast<scl::ArrayType>())
-                if (arrTy.getElementType().isa<scl::IntegerType>() &&
-                    arrTy.getElementType().cast<scl::IntegerType>().getWidth() == 8) {
+              if (auto arrTy = llvm::dyn_cast<scl::ArrayType>(m.type))
+                if (llvm::isa<scl::IntegerType>(arrTy.getElementType()) &&
+                    llvm::cast<scl::IntegerType>(arrTy.getElementType()).getWidth() == 8) {
                   int64_t count = 1;
                   for (auto &dim : arrTy.getDimensions())
                     count *= dim.second - dim.first + 1;
@@ -1314,10 +1338,10 @@ struct DataBlockOpLowering : public OpConversionPattern<scl::DataBlockOp> {
         // DB-level initial values (scl.db `init` attr) override the FB
         // members' cold-start values.
         if (auto initOpt = op.getInit()) {
-          if (auto initDict = initOpt->dyn_cast<mlir::DictionaryAttr>()) {
+          if (auto initDict = llvm::dyn_cast<mlir::DictionaryAttr>(*initOpt)) {
             for (auto na : initDict.getValue()) {
               std::string mname = na.getName().str();
-              auto ia = na.getValue().dyn_cast<IntegerAttr>();
+              auto ia = llvm::dyn_cast<IntegerAttr>(na.getValue());
               if (!ia)
                 continue;
               for (auto &m : layout.members) {
@@ -1343,8 +1367,8 @@ struct DataBlockOpLowering : public OpConversionPattern<scl::DataBlockOp> {
         // ADR 004) can carry `init` entries too: bake them big-endian into
         // the zero-filled byte buffer at the members' struct offsets.
         if (auto initOpt = op.getInit())
-          if (auto st = op.getType().dyn_cast<scl::StructType>())
-            if (auto initDict = initOpt->dyn_cast<mlir::DictionaryAttr>()) {
+          if (auto st = llvm::dyn_cast<scl::StructType>(op.getType()))
+            if (auto initDict = llvm::dyn_cast<mlir::DictionaryAttr>(*initOpt)) {
               SmallVector<Attribute, 8> bytes;
               int64_t total = memref.getShape().empty() ? 0 : memref.getShape()[0];
               std::vector<uint8_t> buf((size_t)total, 0);
@@ -1355,7 +1379,7 @@ struct DataBlockOpLowering : public OpConversionPattern<scl::DataBlockOp> {
                 for (auto na : initDict.getValue()) {
                   if (na.getName().str() != mname.str())
                     continue;
-                  auto ia = na.getValue().dyn_cast<IntegerAttr>();
+                  auto ia = llvm::dyn_cast<IntegerAttr>(na.getValue());
                   if (!ia)
                     continue;
                   uint64_t v = ia.getValue().getZExtValue();
@@ -1395,15 +1419,15 @@ struct GetGlobalOpLowering : public OpConversionPattern<scl::GetGlobalOp> {
     // memref.get_global must use that plain type; cast the result to the
     // (possibly strided) address type when it differs.
     Value result;
-    if (auto memrefRes = resTy.dyn_cast<MemRefType>();
+    if (auto memrefRes = llvm::dyn_cast<MemRefType>(resTy);
         memrefRes && memrefRes.getLayout()) {
       // An instance-DB address converts to a dynamic-size byte view; the
       // global itself must use the FB layout's static size.
       SmallVector<int64_t, 1> shape(memrefRes.getShape());
-      if (auto addrTy = op.getResult().getType()
-                            .dyn_cast<scl::AddressType>()) {
+      if (auto addrTy = llvm::dyn_cast<scl::AddressType>(op.getResult().getType()
+                            )) {
         if (auto idbTy =
-                addrTy.getElementType().dyn_cast<scl::InstanceDbType>()) {
+                llvm::dyn_cast<scl::InstanceDbType>(addrTy.getElementType())) {
           auto &layouts = static_cast<const SclTypeConverter *>(typeConverter)
                               ->fbLayouts;
           auto it = layouts.find(idbTy.getFbSymbol());
@@ -1440,7 +1464,7 @@ static Value resolveByteViewRoot(Value v, Value &dynOff, int64_t &constOff,
     OpFoldResult ofr = rc.getMixedOffsets()[0];
     if (auto c = mlir::getConstantIntValue(ofr)) {
       constOff += *c;
-    } else if (Value o = ofr.dyn_cast<Value>()) {
+    } else if (Value o = llvm::dyn_cast<Value>(ofr)) {
       if (o.getType() != indexTy)
         o = b.create<arith::IndexCastOp>(loc, indexTy, o);
       dynOff = dynOff ? (Value)b.create<arith::AddIOp>(loc, dynOff, o) : o;
@@ -1449,7 +1473,7 @@ static Value resolveByteViewRoot(Value v, Value &dynOff, int64_t &constOff,
     }
     v = rc.getSource();
   }
-  if (!v.getType().isa<MemRefType>())
+  if (!llvm::isa<MemRefType>(v.getType()))
     return nullptr;
   return v;
 }
@@ -1478,12 +1502,17 @@ static Value makeByteView(OpBuilder &b, Location loc, Value root, Value off,
   auto i8 = IntegerType::get(ctx, 8);
   auto resTy = MemRefType::get(
       {staticSize ? size : ShapedType::kDynamic}, i8,
-      StridedLayoutAttr::get(ctx, ShapedType::kDynamic, {1}));
-  auto sizeV = b.create<arith::ConstantIndexOp>(loc, size);
-  auto one = b.create<arith::ConstantIndexOp>(loc, 1);
-  return b.create<memref::ReinterpretCastOp>(loc, resTy, root, off,
-                                             ValueRange{sizeV},
-                                             ValueRange{one});
+      StridedLayoutAttr::get(ctx, ShapedType::kDynamic,
+                             {staticSize ? 1 : ShapedType::kDynamic}));
+  OpFoldResult sizeOfr =
+      staticSize ? OpFoldResult(b.getIndexAttr(size))
+                 : OpFoldResult(b.create<arith::ConstantIndexOp>(loc, size));
+  OpFoldResult strideOfr =
+      staticSize ? OpFoldResult(b.getIndexAttr(1))
+                 : OpFoldResult(b.create<arith::ConstantIndexOp>(loc, 1));
+  return b.create<memref::ReinterpretCastOp>(loc, resTy, root, OpFoldResult(off),
+                                             ArrayRef<OpFoldResult>{sizeOfr},
+                                             ArrayRef<OpFoldResult>{strideOfr});
 }
 
 /// Create a rank-1 i8 byte view at byte offset `memberOff` within `src`,
@@ -1498,7 +1527,7 @@ static Value makeByteViewFromSource(OpBuilder &b, Location loc, Value src,
   Value dynOff;
   int64_t constOff;
   Value root = resolveByteViewRoot(src, dynOff, constOff, b, loc);
-  if (!root || !root.getType().isa<MemRefType>())
+  if (!root || !llvm::isa<MemRefType>(root.getType()))
     return nullptr;
   auto meta = b.create<memref::ExtractStridedMetadataOp>(loc, root);
   Value off =
@@ -1523,12 +1552,10 @@ struct GetIndexOpLowering : public OpConversionPattern<scl::GetIndexOp> {
     // (array member of a FB/struct), else from the address element type.
     scl::ArrayType arrayTy;
     if (op.getArrayType().has_value())
-      arrayTy = op.getArrayType()->cast<scl::ArrayType>();
+      arrayTy = llvm::cast<scl::ArrayType>(op.getArrayType());
     else
-      arrayTy = op.getAddr().getType()
-                     .cast<scl::AddressType>()
-                     .getElementType()
-                     .cast<scl::ArrayType>();
+      arrayTy = llvm::cast<scl::ArrayType>(
+          llvm::cast<scl::AddressType>(op.getAddr().getType()).getElementType());
     auto dims = arrayTy.getDimensions();
     auto indices = adaptor.getIndices();
     if (indices.size() != dims.size())
@@ -1547,9 +1574,9 @@ struct GetIndexOpLowering : public OpConversionPattern<scl::GetIndexOp> {
     Value flat;
     for (size_t i = 0; i < dims.size(); ++i) {
       Value idx = indices[i];
-      if (!idx.getType().isa<IntegerType, IndexType>())
+      if (!llvm::isa<IntegerType, IndexType>(idx.getType()))
         return failure();
-      Value adj = idx.getType().isa<IndexType>()
+      Value adj = llvm::isa<IndexType>(idx.getType())
                       ? idx
                       : (Value)rewriter.create<arith::IndexCastOp>(loc, indexTy, idx);
       if (dims[i].first != 0) {
@@ -1573,7 +1600,7 @@ struct GetIndexOpLowering : public OpConversionPattern<scl::GetIndexOp> {
     // view into a composite buffer).
     Value base = adaptor.getAddr();
     auto ctx = rewriter.getContext();
-    auto baseMemTy = base.getType().cast<MemRefType>();
+    auto baseMemTy = llvm::cast<MemRefType>(base.getType());
     // Byte path: the base is a rank-1 i8 view (array member of a FB/struct)
     // or a plain char array buffer. Compute the byte offset and create a
     // single cast from the root buffer.
@@ -1587,7 +1614,7 @@ struct GetIndexOpLowering : public OpConversionPattern<scl::GetIndexOp> {
         byteFlat = rewriter.create<arith::MulIOp>(loc, flat, scale);
       }
       bool compositeElem =
-          arrayTy.getElementType().isa<scl::StructType, scl::ArrayType>();
+          llvm::isa<scl::StructType, scl::ArrayType>(arrayTy.getElementType());
       // A static-size window is only correct when the result is an
       // address<composite> (plain array variable, no arrayType attr); the
       // byte-view path (array member of a FB/struct) yields address<i8>,
@@ -1597,7 +1624,7 @@ struct GetIndexOpLowering : public OpConversionPattern<scl::GetIndexOp> {
       Value dynOff;
       int64_t constOff;
       Value root = resolveByteViewRoot(base, dynOff, constOff, rewriter, loc);
-      if (!root || !root.getType().isa<MemRefType>())
+      if (!root || !llvm::isa<MemRefType>(root.getType()))
         return failure();
       auto meta = rewriter.create<memref::ExtractStridedMetadataOp>(loc, root);
       Value off = combineOffsets(rewriter, loc, constOff, dynOff, nullptr);
@@ -1798,7 +1825,7 @@ struct ForDoOpLowering : public OpConversionPattern<scl::ForDoOp> {
     Value step = adaptor.getBy();
     if (!step) {
       auto ty = init.getType();
-      auto attr = ty.isa<FloatType>()
+      auto attr = llvm::isa<FloatType>(ty)
                       ? (TypedAttr)rewriter.getFloatAttr(ty, 1.0)
                       : (TypedAttr)rewriter.getIntegerAttr(ty, 1);
       step = rewriter.create<arith::ConstantOp>(loc, ty, attr);
@@ -1848,7 +1875,7 @@ struct ForDoOpLowering : public OpConversionPattern<scl::ForDoOp> {
     Value iv2 = loadFromByteBuffer(rewriter, loc, var, init.getType());
     if (!iv2)
       return failure();
-    Value next = iv2.getType().isa<FloatType>()
+    Value next = llvm::isa<FloatType>(iv2.getType())
                      ? (Value)rewriter.create<arith::AddFOp>(loc, iv2, step)
                      : (Value)rewriter.create<arith::AddIOp>(loc, iv2, step);
     if (failed(storeToByteBuffer(rewriter, loc, next, var)))
@@ -1992,7 +2019,7 @@ struct CaseOpLowering : public OpConversionPattern<scl::CaseOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     Value sel = adaptor.getSelector();
-    if (!sel.getType().isa<IntegerType>())
+    if (!llvm::isa<IntegerType>(sel.getType()))
       return failure();
     auto i32 = rewriter.getI32Type();
     if (sel.getType() != i32) {
@@ -2025,7 +2052,7 @@ struct CaseOpLowering : public OpConversionPattern<scl::CaseOp> {
     SmallVector<ValueRange> caseOperands;
     auto caseValuesAttr = op.getCaseValues();
     for (unsigned i = 0; i + 1 < numRegions; ++i) {
-      auto values = caseValuesAttr[i].cast<DenseI32ArrayAttr>();
+      auto values = llvm::cast<DenseI32ArrayAttr>(caseValuesAttr[i]);
       for (int32_t v : values.asArrayRef()) {
         caseValues.push_back(v);
         caseDests.push_back(entries[i]);
@@ -2114,8 +2141,8 @@ struct GetDirectOpLowering : public OpConversionPattern<scl::GetDirectOp> {
     auto resTy = getTypeConverter()->convertType(op.getResult().getType());
     if (!resTy)
       return failure();
-    auto dt = op.getResult().getType().cast<scl::AddressType>()
-                  .getElementType().cast<scl::DirectType>();
+    auto dt = llvm::cast<scl::DirectType>(
+        llvm::cast<scl::AddressType>(op.getResult().getType()).getElementType());
     int64_t packed = ((int64_t)(uint8_t)dt.getArea() << 56) |
                      ((int64_t)(uint32_t)dt.getDb() << 40) |
                      ((int64_t)(uint32_t)dt.getByte() << 16) |
@@ -2138,8 +2165,8 @@ struct GetVariableOpLowering : public OpConversionPattern<scl::GetVariableOp> {
   matchAndRewrite(scl::GetVariableOp op, scl::GetVariableOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto addrTy = op.getAddr().getType().cast<scl::AddressType>();
-    auto idbTy = addrTy.getElementType().dyn_cast<scl::InstanceDbType>();
+    auto addrTy = llvm::cast<scl::AddressType>(op.getAddr().getType());
+    auto idbTy = llvm::dyn_cast<scl::InstanceDbType>(addrTy.getElementType());
     if (!idbTy)
       return failure();
     auto &layouts =
@@ -2179,7 +2206,7 @@ struct GetElementOpLowering : public OpConversionPattern<scl::GetElementOp> {
   matchAndRewrite(scl::GetElementOp op, scl::GetElementOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto addrTy = op.getAddr().getType().cast<scl::AddressType>();
+    auto addrTy = llvm::cast<scl::AddressType>(op.getAddr().getType());
     auto &layouts =
         static_cast<const SclTypeConverter *>(typeConverter)->fbLayouts;
     // Byte offset and declared type of the member: from the FB's layout when
@@ -2203,10 +2230,10 @@ struct GetElementOpLowering : public OpConversionPattern<scl::GetElementOp> {
         return failure();
     } else {
       scl::StructType structTy;
-      if (auto st = addrTy.getElementType().dyn_cast<scl::StructType>())
+      if (auto st = llvm::dyn_cast<scl::StructType>(addrTy.getElementType()))
         structTy = st;
       else if (op.getBaseType().has_value())
-        structTy = op.getBaseType()->cast<scl::StructType>();
+        structTy = llvm::cast<scl::StructType>(op.getBaseType());
       if (!structTy)
         return failure();
       for (auto [name, elem] :
@@ -2347,8 +2374,8 @@ struct IntegerCastOpLowering : public OpConversionPattern<scl::IntegerCastOp> {
   LogicalResult
   matchAndRewrite(scl::IntegerCastOp op, scl::IntegerCastOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto resTy = typeConverter->convertType(op.getType()).cast<IntegerType>();
-    auto srcTy = adaptor.getValue().getType().cast<IntegerType>();
+    auto resTy = llvm::cast<IntegerType>(typeConverter->convertType(op.getType()));
+    auto srcTy = llvm::cast<IntegerType>(adaptor.getValue().getType());
     if (resTy.getWidth() > srcTy.getWidth()) {
       // zext: zero-extend (unsigned source, e.g. byte/word); default is
       // sign-extension (signed int/dint).
@@ -2379,7 +2406,7 @@ struct TimeConstantOpLowering : public OpConversionPattern<SclOp> {
   matchAndRewrite(SclOp op, typename SclOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto resTy = this->typeConverter->convertType(op.getType());
-    if (!resTy || !resTy.template isa<IntegerType>())
+    if (!resTy || !llvm::isa<IntegerType>(resTy))
       return failure();
     rewriter.replaceOpWithNewOp<arith::ConstantOp>(
         op, resTy, rewriter.getIntegerAttr(resTy, op.getValue()));
@@ -2408,18 +2435,18 @@ static Value convertScalarTo(OpBuilder &b, Location loc, Value v, Type ty,
   Type src = v.getType();
   if (src == ty)
     return v;
-  if (src.isa<FloatType>() && ty.isa<FloatType>()) {
+  if (llvm::isa<FloatType>(src) && llvm::isa<FloatType>(ty)) {
     if (src.getIntOrFloatBitWidth() < ty.getIntOrFloatBitWidth())
       return b.create<arith::ExtFOp>(loc, ty, v);
     if (src.getIntOrFloatBitWidth() > ty.getIntOrFloatBitWidth())
       return b.create<arith::TruncFOp>(loc, ty, v);
     return v;
   }
-  if (src.isa<FloatType>() && ty.isa<IntegerType>())
+  if (llvm::isa<FloatType>(src) && llvm::isa<IntegerType>(ty))
     return b.create<arith::FPToSIOp>(loc, ty, v);
-  if (src.isa<IntegerType>() && ty.isa<FloatType>())
+  if (llvm::isa<IntegerType>(src) && llvm::isa<FloatType>(ty))
     return b.create<arith::SIToFPOp>(loc, ty, v);
-  if (src.isa<IntegerType>() && ty.isa<IntegerType>()) {
+  if (llvm::isa<IntegerType>(src) && llvm::isa<IntegerType>(ty)) {
     if (src.getIntOrFloatBitWidth() < ty.getIntOrFloatBitWidth()) {
       // a bit (i1) is an unsigned 0/1, not a sign bit; zext forces
       // zero-extension for unsigned loads (BYTE/WORD into the ACCU)
@@ -2440,7 +2467,7 @@ struct AwlDirectOpLowering : public OpConversionPattern<awl::DirectOp> {
     auto resTy = getTypeConverter()->convertType(op.getResult().getType());
     if (!resTy)
       return failure();
-    auto dt = op.getResult().getType().cast<scl::DirectType>();
+    auto dt = llvm::cast<scl::DirectType>(op.getResult().getType());
     int64_t packed = ((int64_t)(uint8_t)dt.getArea() << 56) |
                      ((int64_t)(uint32_t)dt.getDb() << 40) |
                      ((int64_t)(uint32_t)dt.getByte() << 16) |
@@ -2457,7 +2484,7 @@ struct AwlConstOpLowering : public OpConversionPattern<awl::ConstOp> {
   matchAndRewrite(awl::ConstOp op, awl::ConstOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<arith::ConstantOp>(op,
-        op.getValue().cast<TypedAttr>());
+        llvm::cast<TypedAttr>(op.getValue()));
     return success();
   }
 };
@@ -2488,7 +2515,7 @@ struct AwlLoadOpLowering : public OpConversionPattern<awl::LoadOp> {
   LogicalResult
   matchAndRewrite(awl::LoadOp op, awl::LoadOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto dt = op.getAddr().getType().template cast<scl::DirectType>();
+    auto dt = llvm::cast<scl::DirectType>(op.getAddr().getType());
     auto resTy = typeConverter->convertType(op.getType());
     if (!resTy)
       return failure();
@@ -2504,7 +2531,7 @@ struct AwlStoreOpLowering : public OpConversionPattern<awl::StoreOp> {
   LogicalResult
   matchAndRewrite(awl::StoreOp op, awl::StoreOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto dt = op.getAddr().getType().template cast<scl::DirectType>();
+    auto dt = llvm::cast<scl::DirectType>(op.getAddr().getType());
     if (failed(lowerDirectStore(rewriter, op.getLoc(), dt, adaptor.getValue(),
                                 op->template getParentOfType<ModuleOp>(), op)))
       return failure();
@@ -2519,7 +2546,7 @@ struct AwlRloLowering : public OpConversionPattern<RloOp> {
   LogicalResult
   matchAndRewrite(RloOp op, typename RloOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto dt = op.getAddr().getType().template cast<scl::DirectType>();
+    auto dt = llvm::cast<scl::DirectType>(op.getAddr().getType());
     auto i1 = rewriter.getI1Type();
     Value bit = lowerDirectLoad(rewriter, op.getLoc(), dt, i1,
                                 op->template getParentOfType<ModuleOp>());
@@ -2555,7 +2582,7 @@ struct AwlAssignOpLowering : public OpConversionPattern<awl::AssignOp> {
   LogicalResult
   matchAndRewrite(awl::AssignOp op, awl::AssignOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto dt = op.getAddr().getType().template cast<scl::DirectType>();
+    auto dt = llvm::cast<scl::DirectType>(op.getAddr().getType());
     if (failed(lowerDirectStore(rewriter, op.getLoc(), dt, adaptor.getRlo(),
                                 op->template getParentOfType<ModuleOp>(), op)))
       return failure();
@@ -2570,7 +2597,7 @@ struct AwlSetResetLowering : public OpConversionPattern<SetResetOp> {
   LogicalResult
   matchAndRewrite(SetResetOp op, typename SetResetOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto dt = op.getAddr().getType().template cast<scl::DirectType>();
+    auto dt = llvm::cast<scl::DirectType>(op.getAddr().getType());
     auto i1 = rewriter.getI1Type();
     auto v = rewriter.create<arith::ConstantOp>(
         op.getLoc(), i1, rewriter.getIntegerAttr(i1, set ? 1 : 0));
@@ -2595,7 +2622,7 @@ struct AwlArithLowering : public OpConversionPattern<AwlOp> {
     Value r = convertScalarTo(rewriter, op.getLoc(), adaptor.getRhs(), resTy);
     if (!l || !r)
       return failure();
-    if (resTy.template isa<FloatType>()) {
+    if (llvm::isa<FloatType>(resTy)) {
       // awlsim computes real arith in double and rounds to f32 on store,
       // with inf/zero-divisor special cases in *R and /R that also set the
       // STW — route Add/Sub/Mul/Div on floats through the runtime helper.
@@ -2789,7 +2816,7 @@ struct AwlNegOpLowering : public OpConversionPattern<awl::NegOp> {
     Value v = convertScalarTo(rewriter, op.getLoc(), adaptor.getRhs(), resTy);
     if (!v)
       return failure();
-    if (resTy.template isa<FloatType>()) {
+    if (llvm::isa<FloatType>(resTy)) {
       rewriter.replaceOpWithNewOp<arith::NegFOp>(op, resTy, v);
     } else {
       auto zero = rewriter.create<arith::ConstantOp>(
@@ -2833,7 +2860,7 @@ struct AwlCmpLowering : public OpConversionPattern<AwlOp> {
     Value r = adaptor.getRhs();
     if (l.getType() != r.getType()) {
       // normalize to the wider type
-      Type ty = l.getType().template isa<FloatType>() || r.getType().template isa<FloatType>()
+      Type ty = llvm::isa<FloatType>(l.getType()) || llvm::isa<FloatType>(r.getType())
                     ? (Type)rewriter.getF32Type()
                     : (l.getType().getIntOrFloatBitWidth() >=
                                r.getType().getIntOrFloatBitWidth()
@@ -2844,7 +2871,7 @@ struct AwlCmpLowering : public OpConversionPattern<AwlOp> {
       if (!l || !r)
         return failure();
     }
-    if (l.getType().template isa<FloatType>())
+    if (llvm::isa<FloatType>(l.getType()))
       rewriter.replaceOpWithNewOp<arith::CmpFOp>(op, predF, l, r);
     else
       rewriter.replaceOpWithNewOp<arith::CmpIOp>(op, predI, l, r);
@@ -2924,7 +2951,7 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
     bool sfbRt = false;
     int32_t sfbN = 0;
     if (auto sfcAttr = op.getSfc()) {
-      if (op.getCallee().startswith("SFB")) {
+      if (op.getCallee().starts_with("SFB")) {
         sfbRt = true;
         sfbN = sfcAttr.value();
       }
@@ -2934,7 +2961,7 @@ struct AwlCallOpLowering : public OpConversionPattern<awl::CallOp> {
     bool sfcRt = false;
     int32_t sfcN = 0;
     if (auto sfcAttr = op.getSfc()) {
-      if (op.getCallee().startswith("SFC")) {
+      if (op.getCallee().starts_with("SFC")) {
         sfcRt = true;
         sfcN = sfcAttr.value();
       }
@@ -3379,7 +3406,7 @@ struct AwlStwCmpLowering : public OpConversionPattern<awl::StwCmpOp> {
     auto i8 = rewriter.getI8Type();
     Value predC = rewriter.create<arith::ConstantOp>(
         loc, i8, rewriter.getI8IntegerAttr(op.getPred()));
-    if (adaptor.getLhs().getType().isa<FloatType>()) {
+    if (llvm::isa<FloatType>(adaptor.getLhs().getType())) {
       auto f64 = rewriter.getF64Type();
       Value l = convertScalarTo(rewriter, loc, adaptor.getLhs(), f64);
       Value r = convertScalarTo(rewriter, loc, adaptor.getRhs(), f64);
@@ -3407,7 +3434,7 @@ struct AwlStwSignLowering : public OpConversionPattern<awl::StwSignOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     ModuleOp module = op->getParentOfType<ModuleOp>();
-    if (adaptor.getValue().getType().isa<FloatType>()) {
+    if (llvm::isa<FloatType>(adaptor.getValue().getType())) {
       auto f64 = rewriter.getF64Type();
       Value v = convertScalarTo(rewriter, loc, adaptor.getValue(), f64);
       auto fn = getOrInsertRtFunc(rewriter, module, "scl_rt_stw_sign_f",
@@ -3441,7 +3468,7 @@ struct AwlStwDivLowering : public OpConversionPattern<awl::StwDivOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     ModuleOp module = op->getParentOfType<ModuleOp>();
-    if (adaptor.getResult().getType().isa<FloatType>()) {
+    if (llvm::isa<FloatType>(adaptor.getResult().getType())) {
       auto f64 = rewriter.getF64Type();
       Value d = convertScalarTo(rewriter, loc, adaptor.getDivisor(), f64);
       Value r = convertScalarTo(rewriter, loc, adaptor.getResult(), f64);
@@ -3515,7 +3542,7 @@ struct AwlTimerStartLowering : public OpConversionPattern<awl::TimerStartOp> {
       rewriter.eraseOp(op);
       return success();
     }
-    auto dt = op.getTimer().getType().dyn_cast<scl::DirectType>();
+    auto dt = llvm::dyn_cast<scl::DirectType>(op.getTimer().getType());
     if (!dt)
       return rewriter.notifyMatchFailure(op, "timer_start needs a direct operand");
     auto loc = op.getLoc();
@@ -3557,7 +3584,7 @@ struct AwlTimerResetLowering : public OpConversionPattern<awl::TimerResetOp> {
       rewriter.eraseOp(op);
       return success();
     }
-    auto dt = op.getTimer().getType().dyn_cast<scl::DirectType>();
+    auto dt = llvm::dyn_cast<scl::DirectType>(op.getTimer().getType());
     if (!dt)
       return rewriter.notifyMatchFailure(op, "timer_reset needs a direct operand");
     auto loc = op.getLoc();
@@ -3594,7 +3621,7 @@ struct AwlFrOpLowering : public OpConversionPattern<awl::FrOp> {
       rewriter.eraseOp(op);
       return success();
     }
-    auto dt = op.getOperand().getType().dyn_cast<scl::DirectType>();
+    auto dt = llvm::dyn_cast<scl::DirectType>(op.getOperand().getType());
     if (!dt)
       return rewriter.notifyMatchFailure(op, "fr needs a direct operand");
     auto loc = op.getLoc();
@@ -3699,7 +3726,7 @@ struct AwlCounterOpLowering : public OpConversionPattern<awl::CounterOp> {
       rewriter.eraseOp(op);
       return success();
     }
-    auto dt = op.getCounter().getType().dyn_cast<scl::DirectType>();
+    auto dt = llvm::dyn_cast<scl::DirectType>(op.getCounter().getType());
     if (!dt)
       return rewriter.notifyMatchFailure(op, "counter needs a direct operand");
     Value cntC = rewriter.create<arith::ConstantOp>(
@@ -4108,7 +4135,7 @@ struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
     auto loc = op.getLoc();
     // FB blocks take the instance DB number (from `CALL FB n, DB m`) as an
     // i32 argument; DB operands without a number inside the FB use it.
-    bool isFb = op.getSymName().startswith("FB") || op.getFb().has_value();
+    bool isFb = op.getSymName().starts_with("FB") || op.getFb().has_value();
     auto funcType = isFb ? rewriter.getFunctionType({rewriter.getI32Type()}, {})
                          : rewriter.getFunctionType({}, {});
     auto func = rewriter.create<func::FuncOp>(loc, op.getSymName(), funcType);
@@ -4282,7 +4309,7 @@ struct AwlBlockOpLowering : public OpConversionPattern<awl::BlockOp> {
         rewriter.create<func::CallOp>(loc, fbFn, TypeRange{}, ValueRange{fbC});
       }
       // OB entry: write the S7 OB-temp preset header into the new frame
-      if (op.getSymName().startswith("OB")) {
+      if (op.getSymName().starts_with("OB")) {
         int32_t obNum = atoi(op.getSymName().substr(2).str().c_str());
         auto obFn = getOrInsertRtFunc(rewriter, module, "scl_rt_ob_start",
                                       rewriter.getFunctionType({i32}, {}));

@@ -259,7 +259,9 @@ def CallOp : AwlOp<"call", [DeclareOpInterfaceMethods<CallOpInterface>]> {
   let arguments = (ins FlatSymbolRefAttr:$callee, Optional<Awl_Bool>:$rlo,
                        OptionalAttr<I32Attr>:$db, OptionalAttr<UnitAttr>:$instdb,
                        OptionalAttr<I32Attr>:$ar2off, OptionalAttr<I32Attr>:$sfc,
-                       OptionalAttr<I32Attr>:$iec);
+                       OptionalAttr<I32Attr>:$iec,
+                       OptionalAttr<DictArrayAttr>:$arg_attrs,
+                       OptionalAttr<DictArrayAttr>:$res_attrs);
   let results = (outs);
   let assemblyFormat = "attr-dict $callee (`,` `rlo` $rlo^ `:` type($rlo))? (`,` `db` $db^)?";
 }

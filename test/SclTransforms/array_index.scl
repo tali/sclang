@@ -2,8 +2,8 @@
 
 // CHECK-LABEL: func.func @arr
 // CHECK:         %[[A:[a-z_0-9]+]] = memref.alloca() : memref<3xi16>
-// CHECK:         %[[EL:[a-z_0-9]+]] = memref.reinterpret_cast %[[A]] to offset: [%c1]
-// CHECK:         memref.store %c42_i16, %[[EL]][] : memref<i16, strided<[], offset: ?>>
+// CHECK:         %[[EL:[a-z_0-9]+]] = memref.reinterpret_cast %[[A]] to offset: [1]
+// CHECK:         memref.store %c42_i16, %[[EL]][] : memref<i16, strided<[], offset: 1>>
 function arr : int
 var
   a : array[1..3] of int;

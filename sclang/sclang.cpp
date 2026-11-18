@@ -33,7 +33,7 @@
 #include <sstream>
 #include <vector>
 
-#include "mlir/Dialect/Affine/Passes.h"
+#include "mlir/Dialect/Affine/Transforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"
@@ -66,7 +66,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/DynamicLibrary.h"
-#include "llvm/Support/Host.h"
+#include "llvm/TargetParser/Host.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -333,9 +333,9 @@ std::unique_ptr<sclang::ModuleAST> parseInputFile(llvm::StringRef filename) {
 int loadMLIR(mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &module) {
   // Handle '.scl' / '.awl' input to the compiler.
   if (inputType != InputType::MLIR &&
-      !llvm::StringRef(inputFilename).endswith(".mlir")) {
+      !llvm::StringRef(inputFilename).ends_with(".mlir")) {
     bool isAwl = inputType == InputType::Awl ||
-                 llvm::StringRef(inputFilename).endswith(".awl");
+                 llvm::StringRef(inputFilename).ends_with(".awl");
     if (isAwl) {
       llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
           llvm::MemoryBuffer::getFileOrSTDIN(inputFilename);
@@ -575,7 +575,7 @@ static void configureSimRuntime() {
     llvm::StringRef area(spec.data(), eq);
     std::string upperStr = area.upper();
     llvm::StringRef upper(upperStr);
-    if (upper.startswith("DB")) {
+    if (upper.starts_with("DB")) {
       // DB<n>=size: pre-size a simulated data block
       uint32_t db = (uint32_t)std::strtoul(upper.data() + 2, nullptr, 0);
       scl_rt_sim_set_db_size(db, size);

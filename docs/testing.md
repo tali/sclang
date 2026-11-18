@@ -9,7 +9,7 @@ compile-only tests cannot catch wrong values, and JIT tests cannot tell you
 
 | Tier | Runner | What it checks |
 |------|--------|----------------|
-| lit (FileCheck) | `build.release/bin/llvm-lit test` (131 tests) | IR shape per pass (`--emit=mlir`, `mlir-std`, `awl-mlir`), AWL text output, and JIT-executed values via `--scan-io`/`--scan-inputs` scan lines and `--dump-areas` |
+| lit (FileCheck) | `build.23/bin/llvm-lit test` (131 tests) | IR shape per pass (`--emit=mlir`, `mlir-std`, `awl-mlir`), AWL text output, and JIT-executed values via `--scan-io`/`--scan-inputs` scan lines and `--dump-areas` |
 | AWL/SCL compile corpora | `run_conformance.py` compile tiers | every public `.awl`/`.scl` corpus file parses and lowers |
 | JIT smoke | `run_conformance.py` jit tier | corpus files with `OB1` run under the JIT without crashing |
 | Oracle vs awlsim | `run_conformance.py` oracle tier | `__ASSERT(...)` lines in awlsim-test `.awl` files: our sim runtime must agree with awlsim's own expectations |
@@ -20,10 +20,10 @@ compile-only tests cannot catch wrong values, and JIT tests cannot tell you
 Run everything:
 
 ```
-cd build.release && ninja sclang sclang-gen && ./bin/llvm-lit ../test
-python3 test/conformance/run_conformance.py --sclang build.release/bin/sclang
-python3 test/conformance/run_st_traces.py --sclang build.release/bin/sclang --cross
-python3 test/conformance/fuzz_st.py --sclang build.release/bin/sclang --scans 5 --seed 7
+cd build.23 && ninja sclang sclang-gen && ./bin/llvm-lit ../test
+python3 test/conformance/run_conformance.py --sclang build.23/bin/sclang
+python3 test/conformance/run_st_traces.py --sclang build.23/bin/sclang --cross
+python3 test/conformance/fuzz_st.py --sclang build.23/bin/sclang --scans 5 --seed 7
 ```
 
 ## Why the differential cross exists

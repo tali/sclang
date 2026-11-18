@@ -55,7 +55,6 @@ using namespace sclang;
 using llvm::ArrayRef;
 using llvm::isa;
 using llvm::dyn_cast;
-using llvm::makeArrayRef;
 using llvm::ScopedHashTableScope;
 using llvm::SmallVector;
 using llvm::StringRef;
@@ -82,7 +81,7 @@ public:
   mlir::Type getType() const { return type; }
   mlir::Value getValue() const { return value; }
   const ExpressionAST* getConstValue() const { return constValue.value(); }
-  bool isAddress() const { return type && type.isa<AddressType>(); }
+  bool isAddress() const { return type && llvm::isa<AddressType>(type); }
   bool isDirect() const { return value != nullptr; }
   bool isElement() const { return type && value == nullptr; }
   bool isConst() const { return constValue.has_value(); }
@@ -542,29 +541,29 @@ private:
   /// Byte size of an SCL type (packed, big-endian layout — mirrors byteSize
   /// in LowerToStd.cpp, which computes the instance layouts).
   static int64_t sclByteSize(mlir::Type t) {
-    if (auto it = t.dyn_cast<IntegerType>())
+    if (auto it = llvm::dyn_cast<IntegerType>(t))
       return (it.getWidth() + 7) / 8;
-    if (auto lt = t.dyn_cast<LogicalType>())
+    if (auto lt = llvm::dyn_cast<LogicalType>(t))
       return (lt.getWidth() + 7) / 8;
-    if (t.isa<RealType>())
+    if (llvm::isa<RealType>(t))
       return 4;
-    if (auto at = t.dyn_cast<ArrayType>()) {
+    if (auto at = llvm::dyn_cast<ArrayType>(t)) {
       int64_t count = 1;
       for (auto &dim : at.getDimensions())
         count *= dim.second - dim.first + 1;
       return count * sclByteSize(at.getElementType());
     }
-    if (auto st = t.dyn_cast<StructType>()) {
+    if (auto st = llvm::dyn_cast<StructType>(t)) {
       int64_t size = 0;
       for (auto elem : st.getElementTypes())
         size += sclByteSize(elem);
       return size;
     }
-    if (t.isa<S5TimeType>() || t.isa<DateType>())
+    if (llvm::isa<S5TimeType>(t) || llvm::isa<DateType>(t))
       return 2;
-    if (t.isa<TimeType>() || t.isa<TimeOfDayType>())
+    if (llvm::isa<TimeType>(t) || llvm::isa<TimeOfDayType>(t))
       return 4;
-    if (t.isa<DateAndTimeType>())
+    if (llvm::isa<DateAndTimeType>(t))
       return 8;
     return 0;
   }
@@ -619,7 +618,7 @@ private:
   /// instance DBs (scl.init_bits on VariableOp, consumed by the lowering).
   std::optional<llvm::APInt> foldConstCompositeAST(const ExpressionAST *e,
                                                    mlir::Type t) {
-    if (auto at = t.dyn_cast<ArrayType>()) {
+    if (auto at = llvm::dyn_cast<ArrayType>(t)) {
       int64_t total = sclByteSize(t);
       llvm::APInt result(total * 8, 0);
       // Shallow elements: a multi-dim array carries all dimensions in one
@@ -639,7 +638,7 @@ private:
       }
       return result;
     }
-    if (auto st = t.dyn_cast<StructType>()) {
+    if (auto st = llvm::dyn_cast<StructType>(t)) {
       // Structure literal: `(x := 1, y := 10)` (named) or `(1, 10)`
       // (positional), as an ExpressionListAST.
       std::vector<const ExpressionAST *> elems;
@@ -699,7 +698,7 @@ private:
   mlir::LogicalResult emitCompositeInit(mlir::Location location,
                                         mlir::Value addr, mlir::Type t,
                                         const ExpressionAST *e) {
-    if (auto at = t.dyn_cast<ArrayType>()) {
+    if (auto at = llvm::dyn_cast<ArrayType>(t)) {
       std::vector<const ExpressionAST *> elems;
       initListElements(e, elems);
       auto dims = at.getDimensions();
@@ -728,9 +727,9 @@ private:
         // Mirror mlirGen(IndexedVariableAST): a plain array base yields a
         // typed element address (no attr); a byte-view base (array member of
         // a FB/struct) yields an i8 view with the array type recorded.
-        mlir::Type baseElem = addr.getType().cast<AddressType>().getElementType();
-        bool byteBase = baseElem.isa<IntegerType>() &&
-                        baseElem.cast<IntegerType>().getWidth() == 8;
+        mlir::Type baseElem = llvm::cast<AddressType>(addr.getType()).getElementType();
+        bool byteBase = llvm::isa<IntegerType>(baseElem) &&
+                        llvm::cast<IntegerType>(baseElem).getWidth() == 8;
         mlir::TypeAttr attr;
         mlir::Type resultElem;
         if (byteBase) {
@@ -749,10 +748,10 @@ private:
       }
       return mlir::success();
     }
-    if (t.dyn_cast<StructType>()) {
+    if (llvm::dyn_cast<StructType>(t)) {
       std::vector<const ExpressionAST *> elems;
       initListElements(e, elems);
-      auto st = t.cast<StructType>();
+      auto st = llvm::cast<StructType>(t);
       auto names = st.getElementNames();
       unsigned pos = 0;
       for (auto *el : elems) {
@@ -774,7 +773,7 @@ private:
         mlir::Type mty = it != byteViewTypes.end()
                              ? it->second
                              : st.getElementType(mname);
-        if (mty.dyn_cast<ArrayType>() || mty.dyn_cast<StructType>()) {
+        if (llvm::dyn_cast<ArrayType>(mty) || llvm::dyn_cast<StructType>(mty)) {
           if (mlir::failed(emitCompositeInit(location, elemAddr, mty, rhs)))
             return mlir::failure();
         } else {
@@ -865,20 +864,20 @@ private:
                                                      0))
           .getResult();
     };
-    if (auto it = type.dyn_cast<IntegerType>())
+    if (auto it = llvm::dyn_cast<IntegerType>(type))
       return zeroInt(it.getWidth());
-    if (auto lt = type.dyn_cast<LogicalType>())
+    if (auto lt = llvm::dyn_cast<LogicalType>(type))
       return zeroInt(lt.getWidth());
-    if (type.isa<RealType>())
+    if (llvm::isa<RealType>(type))
       return builder
           .create<ConstantOp>(location, type,
                               builder.getFloatAttr(builder.getF32Type(), 0.0))
           .getResult();
-    if (type.isa<S5TimeType>() || type.isa<DateType>())
+    if (llvm::isa<S5TimeType>(type) || llvm::isa<DateType>(type))
       return zeroInt(16);
-    if (type.isa<TimeType>() || type.isa<TimeOfDayType>())
+    if (llvm::isa<TimeType>(type) || llvm::isa<TimeOfDayType>(type))
       return zeroInt(32);
-    if (type.isa<DateAndTimeType>())
+    if (llvm::isa<DateAndTimeType>(type))
       return builder.create<ConstantDateAndTimeOp>(location, 1990, 1, 1, 0, 0,
                                                    0, 0)
           .getResult();
@@ -946,7 +945,7 @@ private:
           return mlir::failure();
         emitWarning(loc(decl->loc()))
             << "constant declaration without initializer, using default";
-        if (type.isa<ArrayType>())
+        if (llvm::isa<ArrayType>(type))
           astPool.push_back(std::make_unique<StringConstantAST>(
               decl->loc(), "", tok_string_literal));
         else
@@ -1043,7 +1042,7 @@ private:
                                  FunctionBlockOp fbCtx = nullptr) {
     functionName = identifier;
     enoCells.clear();
-    functionHasReturnValue = !retType.isa<mlir::NoneType>();
+    functionHasReturnValue = !llvm::isa<mlir::NoneType>(retType);
     labelBlocks.clear();
     std::string name(identifier);
     // A METHOD of an FB becomes a function "<FB>.<METHOD>" with the
@@ -1159,7 +1158,7 @@ private:
       auto name = std::get<1>(name_value);
       auto value = std::get<2>(name_value);
       bool isAddr = argIndex < (int)input_is_addr.size() && input_is_addr[argIndex];
-      auto addressType = isAddr ? type.cast<AddressType>() : AddressType::get(type);
+      auto addressType = isAddr ? llvm::cast<AddressType>(type) : AddressType::get(type);
       if (isAddr) {
         // by-reference parameter: use the caller's address directly
         if (failed(declare(location, name, addressType, value)))
@@ -1438,14 +1437,14 @@ private:
     auto it = subrangeMin.find(llvm::StringRef(udt->getName()).upper());
     if (it == subrangeMin.end())
       return nullptr;
-    if (auto it2 = type.dyn_cast<IntegerType>())
+    if (auto it2 = llvm::dyn_cast<IntegerType>(type))
       return builder
           .create<ConstantOp>(location, type,
                               builder.getIntegerAttr(
                                   builder.getIntegerType(it2.getWidth()),
                                   it->second))
           .getResult();
-    if (auto lt = type.dyn_cast<LogicalType>())
+    if (auto lt = llvm::dyn_cast<LogicalType>(type))
       return builder
           .create<ConstantOp>(location, type,
                               builder.getIntegerAttr(
@@ -1521,23 +1520,23 @@ private:
   /// variable (local, parameter, output or FB member), without codegen.
   /// Size of an SCL type in bytes (flat buffer layout).
   int64_t byteSizeOf(mlir::Type t) {
-    if (auto it = t.dyn_cast<IntegerType>())
+    if (auto it = llvm::dyn_cast<IntegerType>(t))
       return (it.getWidth() + 7) / 8;
-    if (auto lt = t.dyn_cast<LogicalType>())
+    if (auto lt = llvm::dyn_cast<LogicalType>(t))
       return (lt.getWidth() + 7) / 8;
-    if (t.isa<RealType>())
+    if (llvm::isa<RealType>(t))
       return 4;
-    if (t.isa<S5TimeType, DateType>())
+    if (llvm::isa<S5TimeType, DateType>(t))
       return 2;
-    if (t.isa<TimeType, DateAndTimeType>())
-      return t.isa<TimeType>() ? 4 : 8;
-    if (auto at = t.dyn_cast<ArrayType>()) {
+    if (llvm::isa<TimeType, DateAndTimeType>(t))
+      return llvm::isa<TimeType>(t) ? 4 : 8;
+    if (auto at = llvm::dyn_cast<ArrayType>(t)) {
       int64_t n = 1;
       for (auto d : at.getDimensions())
         n *= d.second - d.first + 1;
       return n * byteSizeOf(at.getElementType());
     }
-    if (auto st = t.dyn_cast<StructType>()) {
+    if (auto st = llvm::dyn_cast<StructType>(t)) {
       int64_t sz = 0;
       for (auto e : st.getElementTypes())
         sz += byteSizeOf(e);
@@ -1554,21 +1553,21 @@ private:
     if (!sym.getType())
       return nullptr;
     mlir::Type t = sym.getType();
-    if (auto at = t.dyn_cast<AddressType>())
+    if (auto at = llvm::dyn_cast<AddressType>(t))
       t = at.getElementType();
-    return t.dyn_cast<ArrayType>();
+    return llvm::dyn_cast<ArrayType>(t);
   }
 
   /// Array type behind an address value (direct element type or byte view).
   ArrayType arrayTypeOfAddress(mlir::Value addr) {
-    if (!addr || !addr.getType().isa<AddressType>())
+    if (!addr || !llvm::isa<AddressType>(addr.getType()))
       return nullptr;
-    auto elem = addr.getType().cast<AddressType>().getElementType();
-    if (auto at = elem.dyn_cast<ArrayType>())
+    auto elem = llvm::cast<AddressType>(addr.getType()).getElementType();
+    if (auto at = llvm::dyn_cast<ArrayType>(elem))
       return at;
     auto it = byteViewTypes.find(addr);
     if (it != byteViewTypes.end())
-      return it->second.dyn_cast<ArrayType>();
+      return llvm::dyn_cast<ArrayType>(it->second);
     return nullptr;
   }
 
@@ -1634,8 +1633,8 @@ private:
       return nullptr;
     }
     auto elemTy = arrTy.getElementType();
-    if (!elemTy.isa<IntegerType>() ||
-        elemTy.cast<IntegerType>().getWidth() != 8) {
+    if (!llvm::isa<IntegerType>(elemTy) ||
+        llvm::cast<IntegerType>(elemTy).getWidth() != 8) {
       emitError(location) << "only string (char array) comparison is supported";
       return nullptr;
     }
@@ -1699,8 +1698,8 @@ private:
                                               ArrayType arrTy,
                                               llvm::StringRef value) {
     auto elemTy = arrTy.getElementType();
-    if (!elemTy.isa<IntegerType>() ||
-        elemTy.cast<IntegerType>().getWidth() != 8) {
+    if (!llvm::isa<IntegerType>(elemTy) ||
+        llvm::cast<IntegerType>(elemTy).getWidth() != 8) {
       emitError(location) << "string target is not an array of char";
       return mlir::failure();
     }
@@ -1758,9 +1757,9 @@ private:
                           << name << "'";
       return nullptr;
     }
-    auto arrTy = it->second.dyn_cast<ArrayType>();
-    if (!arrTy || !arrTy.getElementType().isa<IntegerType>() ||
-        arrTy.getElementType().cast<IntegerType>().getWidth() != 8) {
+    auto arrTy = llvm::dyn_cast<ArrayType>(it->second);
+    if (!arrTy || !llvm::isa<IntegerType>(arrTy.getElementType()) ||
+        llvm::cast<IntegerType>(arrTy.getElementType()).getWidth() != 8) {
       emitError(location) << "string literal argument to non-string parameter '"
                           << name << "'";
       return nullptr;
@@ -1782,20 +1781,20 @@ private:
     mlir::Value lhs = mlirGenLValue(lvalue);
     if (!lhs)
       return mlir::failure();
-    auto baseElem = lhs.getType().cast<AddressType>().getElementType();
+    auto baseElem = llvm::cast<AddressType>(lhs.getType()).getElementType();
     // A string member (byte view of an array type) takes the whole literal;
     // only a plain char target gets just the first byte (char := 'A').
     ArrayType arrTy;
-    if (auto at = baseElem.dyn_cast<ArrayType>()) {
+    if (auto at = llvm::dyn_cast<ArrayType>(baseElem)) {
       arrTy = at;
     } else {
       auto it = byteViewTypes.find(lhs);
-      if (it != byteViewTypes.end() && it->second.isa<ArrayType>())
-        arrTy = it->second.cast<ArrayType>();
+      if (it != byteViewTypes.end() && llvm::isa<ArrayType>(it->second))
+        arrTy = llvm::cast<ArrayType>(it->second);
     }
     if (!arrTy) {
       // char := 'A': a string literal assigns its first byte to a char
-      if (auto it8 = baseElem.dyn_cast<IntegerType>()) {
+      if (auto it8 = llvm::dyn_cast<IntegerType>(baseElem)) {
         if (it8.getWidth() == 8 && !str->getValue().empty()) {
           auto byteVal = builder.create<ConstantOp>(
               location, baseElem,
@@ -1853,8 +1852,8 @@ private:
       }
       // char arrays (strings) of different declared sizes: copy the common
       // prefix and zero-fill the rest (string assignment truncates/pads)
-      bool lhsIsChar = lhsArr.getElementType().isa<IntegerType>() &&
-                       lhsArr.getElementType().cast<IntegerType>().getWidth() == 8;
+      bool lhsIsChar = llvm::isa<IntegerType>(lhsArr.getElementType()) &&
+                       llvm::cast<IntegerType>(lhsArr.getElementType()).getWidth() == 8;
       if (rhsArr.getElementType() == lhsArr.getElementType() &&
           (lhsArr.getDimensions() == rhsArr.getDimensions() || lhsIsChar)) {
         if (!rhsAddr)
@@ -1870,7 +1869,7 @@ private:
         int64_t elemBytes = byteSizeOf(elemTy);
         if (elemBytes <= 0)
           return mlir::failure();
-        if (!elemTy.isa<IntegerType>()) {
+        if (!llvm::isa<IntegerType>(elemTy)) {
           auto i8 = IntegerType::get(builder.getContext(), 8);
           copyTy = ArrayType::get({{0, count * elemBytes - 1}}, i8);
           elemTy = i8;
@@ -1894,8 +1893,8 @@ private:
                   location, elemTy,
                   builder.getIntegerAttr(
                       builder.getIntegerType(
-                          elemTy.isa<IntegerType>()
-                              ? elemTy.cast<IntegerType>().getWidth()
+                          llvm::isa<IntegerType>(elemTy)
+                              ? llvm::cast<IntegerType>(elemTy).getWidth()
                               : 8),
                       0)));
         }
@@ -1919,7 +1918,7 @@ private:
             mlir::Value bitVal = rhs;
             if (bitVal.getType() != i8) {
               auto cast = builder.create<IntegerCastOp>(location, i8, bitVal);
-              if (bitVal.getType().isa<LogicalType>())
+              if (llvm::isa<LogicalType>(bitVal.getType()))
                 cast.setZextAttr(builder.getUnitAttr());
               bitVal = cast.getResult();
             }
@@ -1947,7 +1946,7 @@ private:
     // Implicit integer conversion on assignment (e.g. char -> int). For
     // byte-view member addresses use the declared member type, not the i8
     // address element type.
-    auto lhsElem = lhs.getType().cast<AddressType>().getElementType();
+    auto lhsElem = llvm::cast<AddressType>(lhs.getType()).getElementType();
     auto bvIt = byteViewTypes.find(lhs);
     mlir::Type declared = bvIt != byteViewTypes.end() ? bvIt->second : lhsElem;
     // Implicit integer conversion on width mismatch. byte/word/dword are
@@ -1955,45 +1954,45 @@ private:
     // width; storing a wider value into a byte view would otherwise write
     // past the view and read back the high byte.
     auto widthOfTy = [](mlir::Type t) -> int {
-      if (auto it = t.dyn_cast<IntegerType>())
+      if (auto it = llvm::dyn_cast<IntegerType>(t))
         return it.getWidth();
-      if (auto it = t.dyn_cast<mlir::IntegerType>())
+      if (auto it = llvm::dyn_cast<mlir::IntegerType>(t))
         return it.getWidth();
-      if (auto lt = t.dyn_cast<LogicalType>())
+      if (auto lt = llvm::dyn_cast<LogicalType>(t))
         return lt.getWidth();
       return -1;
     };
     int dw = widthOfTy(declared), rw = widthOfTy(rhs.getType());
-    if (dw > 0 && rhs.getType().isa<ArrayType>()) {
+    if (dw > 0 && llvm::isa<ArrayType>(rhs.getType())) {
       // assigning a string/array value to a scalar (e.g. a string builtin
       // stub result): store zero, with a warning
       emitWarning(location) << "assigning a string value to a scalar, storing 0";
       rhs = builder.create<ConstantOp>(
-          location, declared.isa<IntegerType>()
+          location, llvm::isa<IntegerType>(declared)
                         ? declared
                         : IntegerType::get(builder.getContext(), dw),
           builder.getIntegerAttr(
-              builder.getIntegerType(declared.isa<IntegerType>()
-                                         ? declared.cast<IntegerType>().getWidth()
+              builder.getIntegerType(llvm::isa<IntegerType>(declared)
+                                         ? llvm::cast<IntegerType>(declared).getWidth()
                                          : dw),
               0));
     } else if (dw > 0 && rw > 0 && dw != rw &&
-               (rhs.getType().isa<IntegerType>() ||
-                rhs.getType().isa<mlir::IntegerType>())) {
-      mlir::Type castTy = declared.isa<IntegerType>()
+               (llvm::isa<IntegerType>(rhs.getType()) ||
+                llvm::isa<mlir::IntegerType>(rhs.getType()))) {
+      mlir::Type castTy = llvm::isa<IntegerType>(declared)
                               ? declared
                               : IntegerType::get(builder.getContext(), dw);
       rhs = builder.create<IntegerCastOp>(location, castTy, rhs);
     } else if (dw > 0 && rw > 0 && dw != rw &&
-               (rhs.getType().isa<LogicalType>() ||
-                declared.isa<LogicalType>())) {
+               (llvm::isa<LogicalType>(rhs.getType()) ||
+                llvm::isa<LogicalType>(declared))) {
       // bool <-> int assignment (e.g. `r := c.CLEAR()`): zero-extend or
       // truncate through an integer of the declared width.
-      mlir::Type castTy = declared.isa<IntegerType>()
+      mlir::Type castTy = llvm::isa<IntegerType>(declared)
                               ? declared
                               : IntegerType::get(builder.getContext(), dw);
       auto cast = builder.create<IntegerCastOp>(location, castTy, rhs);
-      if (rhs.getType().isa<LogicalType>())
+      if (llvm::isa<LogicalType>(rhs.getType()))
         cast.setZextAttr(builder.getUnitAttr());
       rhs = cast.getResult();
     }
@@ -2001,7 +2000,7 @@ private:
     // REAL <-> LREAL assignment coercion (IEC 61131-3 LREAL, ADR 004):
     // fpext/fptrunc at lowering via scl.mlir.cast.
     auto isRealTy = [](mlir::Type t) {
-      return t.isa<RealType>() || t.isa<LrealType>();
+      return llvm::isa<RealType>(t) || llvm::isa<LrealType>(t);
     };
     if (isRealTy(declared) && isRealTy(rhs.getType()) &&
         declared != rhs.getType())
@@ -2022,7 +2021,7 @@ private:
     if (!address)
       return nullptr;
 
-    if (!address.getType().isa<AddressType>()) {
+    if (!llvm::isa<AddressType>(address.getType())) {
       emitError(location) << "not a lvalue, type " << address.getType();
       return nullptr;
     }
@@ -2070,8 +2069,8 @@ private:
       auto addr = mlirGen(dir);
       if (!addr)
         return nullptr;
-      auto directTy = addr.getType().cast<AddressType>()
-                          .getElementType().cast<DirectType>();
+      auto directTy = llvm::cast<DirectType>(
+          llvm::cast<AddressType>(addr.getType()).getElementType());
       return builder.create<LoadOp>(loc(expr->loc()), directTy.getValueType(),
                                     addr);
     }
@@ -2156,7 +2155,7 @@ private:
   mlir::Value mlirGenRValue(mlir::Value expr) {
     if (!expr)
       return nullptr;
-    if (expr.getType().isa<AddressType>()) {
+    if (llvm::isa<AddressType>(expr.getType())) {
       return builder.create<LoadOp>(expr.getLoc(), expr);
     }
     return expr;
@@ -2305,9 +2304,9 @@ private:
     const ExpressionAST *ce = variable.getConstValue();
     mlir::Type resTy = variable.getType() ? variable.getType() : getType(tok_int);
     unsigned width = 16;
-    if (auto it = resTy.dyn_cast<IntegerType>())
+    if (auto it = llvm::dyn_cast<IntegerType>(resTy))
       width = it.getWidth();
-    else if (auto lt = resTy.dyn_cast<LogicalType>())
+    else if (auto lt = llvm::dyn_cast<LogicalType>(resTy))
       width = lt.getWidth();
     if (auto *ic = llvm::dyn_cast<IntegerConstantAST>(ce))
       return builder.create<ConstantOp>(
@@ -2430,8 +2429,8 @@ private:
 
   /// The declared type of a struct/IDB member (used to type loads).
   mlir::Type memberDeclaredType(mlir::Value base, StringRef name) {
-    auto baseTy = base.getType().cast<AddressType>().getElementType();
-    if (auto idbTy = baseTy.dyn_cast<InstanceDbType>()) {
+    auto baseTy = llvm::cast<AddressType>(base.getType()).getElementType();
+    if (auto idbTy = llvm::dyn_cast<InstanceDbType>(baseTy)) {
       auto fbName = mlir::StringAttr::get(theModule->getContext(),
                                           idbTy.getFbSymbol());
       auto fb = mlir::SymbolTable::lookupNearestSymbolFrom<FunctionBlockOp>(
@@ -2441,7 +2440,7 @@ private:
       auto var = lookupVariableCI(fb, name);
       return var ? var.getType() : nullptr;
     }
-    if (auto structTy = baseTy.dyn_cast<StructType>())
+    if (auto structTy = llvm::dyn_cast<StructType>(baseTy))
       return structTy.getElementType(name);
     return nullptr;
   }
@@ -2488,7 +2487,7 @@ private:
                           << name << "'";
       return nullptr;
     }
-    mlir::Type baseType = address.getType().cast<AddressType>().getElementType();
+    mlir::Type baseType = llvm::cast<AddressType>(address.getType()).getElementType();
     auto i8 = IntegerType::get(builder.getContext(), 8);
     mlir::Type resultType = AddressType::get(i8);
 
@@ -2537,7 +2536,7 @@ private:
                               << "' in builtin FB '" << fbName << "'";
           return nullptr;
         }
-        auto addrElem = address.getType().cast<AddressType>().getElementType();
+        auto addrElem = llvm::cast<AddressType>(address.getType()).getElementType();
         mlir::Value result;
         if (addrElem == idbType) {
           // Direct instance-DB address: GetVariableOp can be lowered.
@@ -2582,7 +2581,7 @@ private:
         return nullptr;
       }
       // Address the member as an i8 view into the instance byte buffer.
-      auto addrElem = address.getType().cast<AddressType>().getElementType();
+      auto addrElem = llvm::cast<AddressType>(address.getType()).getElementType();
       if (addrElem == idbType) {
         // Direct access through the FB's own instance-DB argument ($self).
         auto result = builder.create<GetVariableOp>(location, resultType, address, name);
@@ -2640,14 +2639,14 @@ private:
       }
       // FB-typed member (e.g. a TON_TIME timer inside an FB): the declared
       // instance-DB type is tracked in byteViewTypes.
-      if (auto idbTy = it->second.dyn_cast<InstanceDbType>())
+      if (auto idbTy = llvm::dyn_cast<InstanceDbType>(it->second))
         return genIdbMember(idbTy);
-      if (!it->second.isa<StructType>()) {
+      if (!llvm::isa<StructType>(it->second)) {
         emitError(location) << "unsupported base type " << baseType
                             << " for element '" << name << "'";
         return nullptr;
       }
-      auto structType = it->second.cast<StructType>();
+      auto structType = llvm::cast<StructType>(it->second);
       auto memberTy = structType.getElementType(name);
       if (!memberTy) {
         emitError(location) << "unknown element '" << name << "' in struct";
@@ -2701,24 +2700,24 @@ private:
     mlir::Value base = mlirGen(expr->getBase());
     if (!base)
       return nullptr;
-    auto baseElem = base.getType().cast<AddressType>().getElementType();
+    auto baseElem = llvm::cast<AddressType>(base.getType()).getElementType();
     mlir::Type resultElem;
     mlir::TypeAttr arrayTypeAttr;
     ArrayType arrayTy;
-    if (auto at = baseElem.dyn_cast<ArrayType>()) {
+    if (auto at = llvm::dyn_cast<ArrayType>(baseElem)) {
       // Plain array variable: element address has the element type.
       arrayTy = at;
       resultElem = at.getElementType();
-    } else if (baseElem.isa<IntegerType>() &&
-               baseElem.cast<IntegerType>().getWidth() == 8) {
+    } else if (llvm::isa<IntegerType>(baseElem) &&
+               llvm::cast<IntegerType>(baseElem).getWidth() == 8) {
       // Array member of a FB/struct: the base is a byte view; keep the
       // result a byte view and record the declared array type on the op.
       auto it = byteViewTypes.find(base);
-      if (it == byteViewTypes.end() || !it->second.isa<ArrayType>()) {
+      if (it == byteViewTypes.end() || !llvm::isa<ArrayType>(it->second)) {
         emitError(location) << "cannot index into '" << baseElem << "'";
         return nullptr;
       }
-      arrayTy = it->second.cast<ArrayType>();
+      arrayTy = llvm::cast<ArrayType>(it->second);
       resultElem = baseElem;
       arrayTypeAttr = mlir::TypeAttr::get(arrayTy);
     } else {
@@ -2812,7 +2811,7 @@ private:
     case tok_cmp_le:
     case tok_cmp_gt:
     case tok_cmp_ge:
-      if (lhs.getType().isa<DateType>() && rhs.getType().isa<DateType>()) {
+      if (llvm::isa<DateType>(lhs.getType()) && llvm::isa<DateType>(rhs.getType())) {
         auto flip = [&](mlir::Value v) {
           return builder.create<XOrOp>(
               location, v,
@@ -2824,8 +2823,8 @@ private:
         };
         lhs = flip(lhs);
         rhs = flip(rhs);
-      } else if (lhs.getType().isa<DateAndTimeType>() &&
-                 rhs.getType().isa<DateAndTimeType>()) {
+      } else if (llvm::isa<DateAndTimeType>(lhs.getType()) &&
+                 llvm::isa<DateAndTimeType>(rhs.getType())) {
         auto i64 = IntegerType::get(builder.getContext(), 64);
         auto flip = [&](mlir::Value v) {
           mlir::Value c = builder.create<IntegerCastOp>(location, i64, v).getResult();
@@ -2852,26 +2851,26 @@ private:
     // bitcast to the same-width IntegerType first (IntegerCastOp only
     // accepts IntegerType).
     auto widthOfTy = [](mlir::Type t) -> int {
-      if (auto it = t.dyn_cast<IntegerType>())
+      if (auto it = llvm::dyn_cast<IntegerType>(t))
         return it.getWidth();
-      if (auto lt = t.dyn_cast<LogicalType>())
+      if (auto lt = llvm::dyn_cast<LogicalType>(t))
         return lt.getWidth();
       // time/date types compare and mix arithmetically with integers as
       // plain integers of their storage width
-      if (t.isa<S5TimeType>() || t.isa<DateType>())
+      if (llvm::isa<S5TimeType>(t) || llvm::isa<DateType>(t))
         return 16;
-      if (t.isa<TimeType>() || t.isa<TimeOfDayType>())
+      if (llvm::isa<TimeType>(t) || llvm::isa<TimeOfDayType>(t))
         return 32;
-      if (t.isa<DateAndTimeType>())
+      if (llvm::isa<DateAndTimeType>(t))
         return 64;
       return -1;
     };
     auto toIntOfWidth = [&](mlir::Value v, int w) -> mlir::Value {
       int vw = widthOfTy(v.getType());
-      if (vw < 0 || (vw == w && v.getType().isa<IntegerType>()))
+      if (vw < 0 || (vw == w && llvm::isa<IntegerType>(v.getType())))
         return v;
       // LogicalType (byte/word/dword/bool) is unsigned: zero-extend.
-      bool zext = v.getType().isa<LogicalType>();
+      bool zext = llvm::isa<LogicalType>(v.getType());
       auto op = builder.create<IntegerCastOp>(
           location, IntegerType::get(builder.getContext(), w), v);
       if (zext)
@@ -2891,13 +2890,13 @@ private:
     // (sitofp at lowering) so comparisons/arithmetic have matching types.
     // LREAL (binary64) counts as real; mixed REAL/LREAL promotes to LREAL.
     auto isRealTy = [](mlir::Type t) {
-      return t.isa<RealType>() || t.isa<LrealType>();
+      return llvm::isa<RealType>(t) || llvm::isa<LrealType>(t);
     };
     if (isRealTy(lhs.getType()) != isRealTy(rhs.getType()) ||
         (isRealTy(lhs.getType()) && isRealTy(rhs.getType()) &&
          lhs.getType() != rhs.getType())) {
-      bool lLreal = lhs.getType().isa<LrealType>();
-      bool rLreal = rhs.getType().isa<LrealType>();
+      bool lLreal = llvm::isa<LrealType>(lhs.getType());
+      bool rLreal = llvm::isa<LrealType>(rhs.getType());
       auto realTy = (lLreal || rLreal) ? getType(tok_lreal)
                                        : (isRealTy(lhs.getType()) ? lhs.getType()
                                                                   : rhs.getType());
@@ -2967,10 +2966,10 @@ private:
     case tok_not:
       // NOT on a bit string (BYTE/WORD/DWORD) is bitwise; only a BOOL operand
       // is coerced to a logical value.
-      if (rhs.getType().isa<LogicalType>() &&
-          rhs.getType().cast<LogicalType>().getWidth() > 1)
+      if (llvm::isa<LogicalType>(rhs.getType()) &&
+          llvm::cast<LogicalType>(rhs.getType()).getWidth() > 1)
         return builder.create<UnaryNotOp>(location, rhs);
-      if (rhs.getType().isa<IntegerType>())
+      if (llvm::isa<IntegerType>(rhs.getType()))
         return builder.create<UnaryNotOp>(location, rhs);
       return builder.create<UnaryNotOp>(location, coerceToBool(location, rhs));
     case tok_plus:
@@ -3053,14 +3052,14 @@ private:
       if (!instAddr)
         return mlir::failure();
       auto it = byteViewTypes.find(instAddr);
-      if (it == byteViewTypes.end() || !it->second.isa<InstanceDbType>()) {
+      if (it == byteViewTypes.end() || !llvm::isa<InstanceDbType>(it->second)) {
         emitError(location, "call target '")
             << fbVar->getName() << "." << idbVar->getName()
             << "' is not a function block instance";
         return mlir::failure();
       }
       if (failed(mlirGenFbCallOn(expr, instAddr,
-                                 it->second.cast<InstanceDbType>().getFbSymbol())))
+                                 llvm::cast<InstanceDbType>(it->second).getFbSymbol())))
         return mlir::failure();
       return mlir::success();
     })
@@ -3105,16 +3104,14 @@ private:
       return std::nullopt;
     if (fb.empty()) {
       // global instance DB: the address element type is the IDB type
-      if (auto idb = addr.getType()
-                         .cast<AddressType>()
-                         .getElementType()
-                         .dyn_cast<InstanceDbType>())
+      if (auto idb = llvm::dyn_cast<InstanceDbType>(
+              llvm::cast<AddressType>(addr.getType()).getElementType()))
         fb = unquote(idb.getFbSymbol());
     }
     if (fb.empty()) {
       auto it = byteViewTypes.find(addr);
       if (it != byteViewTypes.end())
-        if (auto idb = it->second.dyn_cast<InstanceDbType>())
+        if (auto idb = llvm::dyn_cast<InstanceDbType>(it->second))
           fb = unquote(idb.getFbSymbol());
     }
     if (fb.empty())
@@ -3507,25 +3504,25 @@ private:
     };
 
     // DATE - DATE -> TIME (day difference in ms)
-    if (minus && lhs.getType().isa<DateType>() && rhs.getType().isa<DateType>()) {
+    if (minus && llvm::isa<DateType>(lhs.getType()) && llvm::isa<DateType>(rhs.getType())) {
       mlir::Value d = dtSub(location, toI64(lhs, true), toI64(rhs, true));
       mlir::Value ms = dtMul(location, d, dtConst(location, 86400000));
       mlir::Value t = builder.create<IntegerCastOp>(location, i32, ms).getResult();
       return builder.create<DialectCastOp>(location, timeTy, t).getResult();
     }
     // DT - DT -> TIME (ms difference of the decoded calendar values)
-    if (minus && lhs.getType().isa<DateAndTimeType>() &&
-        rhs.getType().isa<DateAndTimeType>()) {
+    if (minus && llvm::isa<DateAndTimeType>(lhs.getType()) &&
+        llvm::isa<DateAndTimeType>(rhs.getType())) {
       mlir::Value ms = dtSub(location, bcdDtToMs(location, lhs),
                              bcdDtToMs(location, rhs));
       mlir::Value t = builder.create<IntegerCastOp>(location, i32, ms).getResult();
       return builder.create<DialectCastOp>(location, timeTy, t).getResult();
     }
     // DT +/- TIME -> DT (TIME + DT allowed for ADD)
-    if ((lhs.getType().isa<DateAndTimeType>() && rhs.getType().isa<TimeType>()) ||
-        (!minus && lhs.getType().isa<TimeType>() && rhs.getType().isa<DateAndTimeType>())) {
-      mlir::Value dt = lhs.getType().isa<DateAndTimeType>() ? lhs : rhs;
-      mlir::Value tm = lhs.getType().isa<DateAndTimeType>() ? rhs : lhs;
+    if ((llvm::isa<DateAndTimeType>(lhs.getType()) && llvm::isa<TimeType>(rhs.getType())) ||
+        (!minus && llvm::isa<TimeType>(lhs.getType()) && llvm::isa<DateAndTimeType>(rhs.getType()))) {
+      mlir::Value dt = llvm::isa<DateAndTimeType>(lhs.getType()) ? lhs : rhs;
+      mlir::Value tm = llvm::isa<DateAndTimeType>(lhs.getType()) ? rhs : lhs;
       mlir::Value ms = bcdDtToMs(location, dt);
       mlir::Value t = toI64(tm, false); // TIME is a signed i32
       mlir::Value r = minus ? dtSub(location, ms, t) : dtAdd(location, ms, t);
@@ -3579,7 +3576,7 @@ private:
     auto i16 = IntegerType::get(ctx, 16);
     if (arg.getType() != i64) {
       auto cast = builder.create<IntegerCastOp>(location, i64, arg);
-      if (arg.getType().isa<LogicalType>())
+      if (llvm::isa<LogicalType>(arg.getType()))
         cast.setZextAttr(builder.getUnitAttr());
       arg = cast.getResult();
     }
@@ -3703,7 +3700,7 @@ private:
     if (!arg)
       return nullptr;
     // string/array source (e.g. CHAR_TO_INT(s) on a string): approximate as 0
-    if (arg.getType().isa<ArrayType>()) {
+    if (llvm::isa<ArrayType>(arg.getType())) {
       emitWarning(location) << "conversion of a string value, assuming 0";
       return builder.create<ConstantOp>(
           location, resTy,
@@ -3712,13 +3709,13 @@ private:
     // REAL/LREAL source: dialect-cast straight to the target (fptosi/… at
     // lowering); REAL <-> LREAL is an fpext/fptrunc.
     auto isRealTy = [](mlir::Type t) {
-      return t.isa<RealType>() || t.isa<LrealType>();
+      return llvm::isa<RealType>(t) || llvm::isa<LrealType>(t);
     };
     if (isRealTy(arg.getType()) && !isRealTy(resTy)) {
       auto cast = builder.create<DialectCastOp>(location, resTy, arg);
       // IEC 61131-3 ed.3 table 22: real -> integer conversions round to the
       // nearest integer (ties are implementation-defined)
-      if (resTy.isa<IntegerType>() || resTy.isa<LogicalType>())
+      if (llvm::isa<IntegerType>(resTy) || llvm::isa<LogicalType>(resTy))
         cast.setRoundAttr(builder.getUnitAttr());
       return cast.getResult();
     }
@@ -3727,26 +3724,26 @@ private:
     // cast to the destination width as an IntegerType first (int.cast only
     // has integer results), then dialect-cast to the scl target type
     int width = 16;
-    if (auto it = resTy.dyn_cast<IntegerType>())
+    if (auto it = llvm::dyn_cast<IntegerType>(resTy))
       width = it.getWidth();
-    else if (auto lt = resTy.dyn_cast<LogicalType>())
+    else if (auto lt = llvm::dyn_cast<LogicalType>(resTy))
       width = lt.getWidth();
-    else if (resTy.isa<RealType>())
+    else if (llvm::isa<RealType>(resTy))
       width = 32;
-    else if (resTy.isa<LrealType>())
+    else if (llvm::isa<LrealType>(resTy))
       width = 64;
-    else if (resTy.isa<S5TimeType>() || resTy.isa<DateType>())
+    else if (llvm::isa<S5TimeType>(resTy) || llvm::isa<DateType>(resTy))
       width = 16;
-    else if (resTy.isa<TimeType>() || resTy.isa<TimeOfDayType>())
+    else if (llvm::isa<TimeType>(resTy) || llvm::isa<TimeOfDayType>(resTy))
       width = 32;
-    else if (resTy.isa<DateAndTimeType>())
+    else if (llvm::isa<DateAndTimeType>(resTy))
       width = 64;
     if (isRealTy(resTy)) {
       // int -> real/lreal: sitofp at lowering, via mlir.cast i32 -> !scl.real
       auto intTy = IntegerType::get(context, 32);
       if (arg.getType() != intTy) {
         auto cast = builder.create<IntegerCastOp>(location, intTy, arg);
-        if (arg.getType().isa<LogicalType>())
+        if (llvm::isa<LogicalType>(arg.getType()))
           cast.setZextAttr(builder.getUnitAttr()); // byte/word/dword: unsigned
         arg = cast.getResult();
       }
@@ -3758,7 +3755,7 @@ private:
       // BYTE/WORD/DWORD (LogicalType) are unsigned bit strings: zero-extend
       // on widening (UINT_TO_DINT(16#FFFF) = 65535, not -1). CHAR/SINT are
       // IntegerType(8) and keep sign extension.
-      if (resTy.isa<LogicalType>() || arg.getType().isa<LogicalType>())
+      if (llvm::isa<LogicalType>(resTy) || llvm::isa<LogicalType>(arg.getType()))
         cast.setZextAttr(builder.getUnitAttr());
       arg = cast.getResult();
     }
@@ -3802,9 +3799,9 @@ private:
 
   mlir::Value sclConst(mlir::Location location, mlir::Type ty, int64_t v) {
     int width = 32;
-    if (auto it = ty.dyn_cast<IntegerType>())
+    if (auto it = llvm::dyn_cast<IntegerType>(ty))
       width = it.getWidth();
-    else if (auto lt = ty.dyn_cast<LogicalType>())
+    else if (auto lt = llvm::dyn_cast<LogicalType>(ty))
       width = lt.getWidth();
     return builder.create<ConstantOp>(
         location, ty, builder.getIntegerAttr(builder.getIntegerType(width), v));
@@ -3820,13 +3817,13 @@ private:
     auto d = dintTy();
     if (v.getType() == d)
       return v;
-    if (auto it = v.getType().dyn_cast<IntegerType>()) {
+    if (auto it = llvm::dyn_cast<IntegerType>(v.getType())) {
       auto c = builder.create<IntegerCastOp>(location, d, v);
       if (it.getWidth() == 8)
         c.setZextAttr(builder.getUnitAttr()); // char: unsigned
       return c.getResult();
     }
-    if (v.getType().isa<LogicalType>()) {
+    if (llvm::isa<LogicalType>(v.getType())) {
       auto c = builder.create<IntegerCastOp>(location, d, v);
       c.setZextAttr(builder.getUnitAttr()); // byte/word/dword/bool: unsigned
       return c.getResult();
@@ -3838,7 +3835,7 @@ private:
     auto c8 = charTy();
     if (v.getType() == c8)
       return v;
-    if (v.getType().isa<IntegerType>() || v.getType().isa<LogicalType>())
+    if (llvm::isa<IntegerType>(v.getType()) || llvm::isa<LogicalType>(v.getType()))
       return builder.create<IntegerCastOp>(location, c8, v).getResult();
     return builder.create<DialectCastOp>(location, c8, v).getResult();
   }
@@ -3859,7 +3856,7 @@ private:
                          mlir::Type target) {
     if (v.getType() == target)
       return v;
-    if (target.isa<IntegerType>())
+    if (llvm::isa<IntegerType>(target))
       return builder.create<IntegerCastOp>(location, target, v).getResult();
     return builder.create<DialectCastOp>(location, target, v).getResult();
   }
@@ -3960,21 +3957,21 @@ private:
     mlir::Value v = mlirGen(e);
     if (!v)
       return s;
-    if (v.getType().isa<AddressType>()) {
+    if (llvm::isa<AddressType>(v.getType())) {
       if (ArrayType at = arrayTypeOfAddress(v)) {
         s.addr = v;
         s.arrTy = at;
         return s;
       }
       // scalar address (char var / member): load with the declared type
-      mlir::Type vt = v.getType().cast<AddressType>().getElementType();
+      mlir::Type vt = llvm::cast<AddressType>(v.getType()).getElementType();
       auto it = byteViewTypes.find(v);
       if (it != byteViewTypes.end())
         vt = it->second;
       s.scalar = toChar(location, builder.create<LoadOp>(location, vt, v));
       return s;
     }
-    if (auto at = v.getType().dyn_cast<ArrayType>()) {
+    if (auto at = llvm::dyn_cast<ArrayType>(v.getType())) {
       // whole-array value (e.g. a user FC returning a string): spill to a temp
       auto buf = builder.create<TempVariableOp>(location, AddressType::get(at),
                                                 builder.getStringAttr("strarg"));
@@ -4435,7 +4432,7 @@ private:
     // Unary real functions on LREAL: scl_rt_realmath_d (libm on binary64).
     if (auto it = realFns.find(up); it != realFns.end() &&
                                       args.size() == 1 &&
-                                      t0.isa<LrealType>()) {
+                                      llvm::isa<LrealType>(t0)) {
       static const std::map<std::string, int> kindOf = {
           {"sin", 1}, {"cos", 2},  {"tan", 3},  {"asin", 4}, {"acos", 5},
           {"atan", 6}, {"sqrt", 7}, {"exp", 8},  {"ln", 9},   {"abs", 10}};
@@ -4456,13 +4453,14 @@ private:
           location, i32, builder.getIntegerAttr(i32, kIt->second));
       return builder.create<CallFcOp>(location, lrealTy, "scl_rt_realmath_d",
                                       mlir::ValueRange{kindC, args[0]},
-                                      mlir::ArrayAttr::get(ctx, {}));
+                                      mlir::ArrayAttr::get(ctx, {}),
+                                      nullptr, nullptr);
     }
     // Unary real functions (operand REAL/LREAL -> awl.real_math, f32).
     if (auto it = realFns.find(up); it != realFns.end() &&
                                       args.size() == 1 &&
-                                      t0.isa<RealType>()) {
-      auto f32 = mlir::FloatType::getF32(ctx);
+                                      llvm::isa<RealType>(t0)) {
+      auto f32 = mlir::Float32Type::get(ctx);
       mlir::Value v = args[0];
       if (v.getType() != f32)
         v = builder.create<DialectCastOp>(location, f32, v);
@@ -4490,20 +4488,20 @@ private:
     // map to their storage width).
     auto commonStdTy = [&](ArrayRef<mlir::Value> vs) -> mlir::Type {
       if (llvm::any_of(vs,
-                       [](mlir::Value v) { return v.getType().isa<RealType>(); }))
-        return (mlir::Type)mlir::FloatType::getF32(ctx);
+                       [](mlir::Value v) { return llvm::isa<RealType>(v.getType()); }))
+        return (mlir::Type)mlir::Float32Type::get(ctx);
       unsigned w = 1;
       for (auto v : vs) {
         mlir::Type t = v.getType();
-        if (auto it = t.dyn_cast<IntegerType>())
+        if (auto it = llvm::dyn_cast<IntegerType>(t))
           w = std::max(w, (unsigned)it.getWidth());
-        else if (auto lt = t.dyn_cast<LogicalType>())
+        else if (auto lt = llvm::dyn_cast<LogicalType>(t))
           w = std::max(w, (unsigned)lt.getWidth());
-        else if (t.isa<TimeType>() || t.isa<TimeOfDayType>())
+        else if (llvm::isa<TimeType>(t) || llvm::isa<TimeOfDayType>(t))
           w = std::max(w, 32u);
-        else if (t.isa<S5TimeType>() || t.isa<DateType>())
+        else if (llvm::isa<S5TimeType>(t) || llvm::isa<DateType>(t))
           w = std::max(w, 16u);
-        else if (t.isa<DateAndTimeType>())
+        else if (llvm::isa<DateAndTimeType>(t))
           w = std::max(w, 64u);
       }
       return (mlir::Type)mlir::IntegerType::get(ctx, w);
@@ -4512,15 +4510,15 @@ private:
     auto commonSclTy = [&](ArrayRef<mlir::Value> vs) -> mlir::Type {
       mlir::Type best = vs[0].getType();
       auto widthOf = [&](mlir::Type t) -> unsigned {
-        if (auto it = t.dyn_cast<IntegerType>())
+        if (auto it = llvm::dyn_cast<IntegerType>(t))
           return it.getWidth();
-        if (auto lt = t.dyn_cast<LogicalType>())
+        if (auto lt = llvm::dyn_cast<LogicalType>(t))
           return lt.getWidth();
-        if (t.isa<RealType>())
+        if (llvm::isa<RealType>(t))
           return 1000; // real dominates
-        if (t.isa<TimeType>() || t.isa<TimeOfDayType>())
+        if (llvm::isa<TimeType>(t) || llvm::isa<TimeOfDayType>(t))
           return 32;
-        if (t.isa<DateAndTimeType>())
+        if (llvm::isa<DateAndTimeType>(t))
           return 64;
         return 16;
       };
@@ -4542,7 +4540,7 @@ private:
       mlir::Type stdTy = commonStdTy(args);
       mlir::Value a = toStd(args[0], stdTy), b = toStd(args[1], stdTy);
       mlir::Value res;
-      if (stdTy.isa<mlir::FloatType>()) {
+      if (llvm::isa<mlir::FloatType>(stdTy)) {
         static const std::map<std::string, mlir::arith::CmpFPredicate> cmpFFns = {
             {"LT", mlir::arith::CmpFPredicate::OLT},
             {"LE", mlir::arith::CmpFPredicate::OLE},
@@ -4568,7 +4566,7 @@ private:
       mlir::Value acc = toStd(args[0], stdTy);
       for (size_t i = 1; i < args.size(); ++i) {
         mlir::Value v = toStd(args[i], stdTy);
-        if (stdTy.isa<mlir::FloatType>()) {
+        if (llvm::isa<mlir::FloatType>(stdTy)) {
           switch (it->second) {
           case 0: acc = builder.create<mlir::arith::AddFOp>(location, acc, v).getResult(); break;
           case 1: acc = builder.create<mlir::arith::SubFOp>(location, acc, v).getResult(); break;
@@ -4593,9 +4591,9 @@ private:
     if ((up == "SHL" || up == "SHR" || up == "ROL" || up == "ROR") &&
         args.size() == 2) {
       unsigned w = 8;
-      if (auto it = t0.dyn_cast<IntegerType>())
+      if (auto it = llvm::dyn_cast<IntegerType>(t0))
         w = it.getWidth();
-      else if (auto lt = t0.dyn_cast<LogicalType>())
+      else if (auto lt = llvm::dyn_cast<LogicalType>(t0))
         w = lt.getWidth();
       auto stdTy = mlir::IntegerType::get(ctx, w);
       mlir::Value x = toStd(args[0], stdTy);
@@ -4647,23 +4645,23 @@ private:
     if (up == "EXPT" && args.size() == 2) {
       mlir::Type stdTy = commonStdTy(args);
       mlir::Value a = toStd(args[0], stdTy), b = toStd(args[1], stdTy);
-      mlir::Value res = stdTy.isa<mlir::FloatType>()
+      mlir::Value res = llvm::isa<mlir::FloatType>(stdTy)
           ? (mlir::Value)builder.create<mlir::math::PowFOp>(location, a, b).getResult()
           : (mlir::Value)builder.create<mlir::math::IPowIOp>(location, a, b).getResult();
       return fromStd(res, commonSclTy(args));
     }
 
     // TRUNC(r): REAL -> integer, rounding toward zero (arith.truncf).
-    if (up == "TRUNC" && args.size() == 1 && t0.isa<RealType>()) {
-      auto f32 = mlir::FloatType::getF32(ctx);
+    if (up == "TRUNC" && args.size() == 1 && llvm::isa<RealType>(t0)) {
+      auto f32 = mlir::Float32Type::get(ctx);
       mlir::Value v = toStd(args[0], f32);
       auto i32 = mlir::IntegerType::get(ctx, 32);
       mlir::Value r = builder.create<mlir::arith::FPToSIOp>(location, i32, v).getResult();
       return fromStd(r, IntegerType::get(ctx, 32));
     }
 
-    if (up == "ABS" && args.size() == 1 && t0.isa<IntegerType>()) {
-      auto it = t0.cast<IntegerType>();
+    if (up == "ABS" && args.size() == 1 && llvm::isa<IntegerType>(t0)) {
+      auto it = llvm::cast<IntegerType>(t0);
       auto stdTy = mlir::IntegerType::get(ctx, it.getWidth());
       mlir::Value v = toStd(args[0], stdTy);
       auto zero = builder.create<ConstantOp>(
@@ -4677,16 +4675,16 @@ private:
     }
     if (auto it = selFns.find(up); it != selFns.end() && args.size() >= 2) {
       bool isFloat = llvm::any_of(args, [](mlir::Value v) {
-        return v.getType().isa<RealType>();
+        return llvm::isa<RealType>(v.getType());
       });
       mlir::Type resTy = t0;
       mlir::Type stdTy;
       if (isFloat)
-        stdTy = mlir::FloatType::getF32(ctx);
+        stdTy = mlir::Float32Type::get(ctx);
       else {
         unsigned w = 32;
         for (auto a : args)
-          if (auto it2 = a.getType().dyn_cast<IntegerType>())
+          if (auto it2 = llvm::dyn_cast<IntegerType>(a.getType()))
             w = std::max<unsigned>(w, it2.getWidth());
         stdTy = mlir::IntegerType::get(ctx, w);
       }
@@ -4696,8 +4694,8 @@ private:
         // max/min are order-insensitive for values, so arg order is fine.
         if (isFloat)
           acc = it->second
-                    ? builder.create<mlir::arith::MaxFOp>(location, acc, v).getResult()
-                    : builder.create<mlir::arith::MinFOp>(location, acc, v).getResult();
+                    ? builder.create<mlir::arith::MaximumFOp>(location, acc, v).getResult()
+                    : builder.create<mlir::arith::MinimumFOp>(location, acc, v).getResult();
         else
           acc = it->second
                     ? builder.create<mlir::arith::MaxSIOp>(location, acc, v).getResult()
@@ -4709,37 +4707,37 @@ private:
       // SEL(G, IN0, IN1): G ? IN1 : IN0
       mlir::Value g = toStd(args[0], mlir::IntegerType::get(ctx, 1));
       mlir::Type stdTy = mlir::IntegerType::get(ctx, 32);
-      if (t0.isa<RealType>())
-        stdTy = mlir::FloatType::getF32(ctx);
-      else if (auto it2 = args[1].getType().dyn_cast<IntegerType>())
+      if (llvm::isa<RealType>(t0))
+        stdTy = mlir::Float32Type::get(ctx);
+      else if (auto it2 = llvm::dyn_cast<IntegerType>(args[1].getType()))
         stdTy = mlir::IntegerType::get(ctx, it2.getWidth());
       mlir::Value in0 = toStd(args[1], stdTy), in1 = toStd(args[2], stdTy);
       auto res = builder.create<mlir::arith::SelectOp>(location, g, in1, in0).getResult();
-      return fromStd(res, t0.isa<RealType>() ? t0 : args[1].getType());
+      return fromStd(res, llvm::isa<RealType>(t0) ? t0 : args[1].getType());
     }
     if (up == "LIMIT" && args.size() == 3) {
       // LIMIT(MN, IN, MX) = MIN(MAX(IN, MN), MX)
       bool isFloat = llvm::any_of(args, [](mlir::Value v) {
-        return v.getType().isa<RealType>();
+        return llvm::isa<RealType>(v.getType());
       });
-      mlir::Type stdTy = isFloat ? (mlir::Type)mlir::FloatType::getF32(ctx)
+      mlir::Type stdTy = isFloat ? (mlir::Type)mlir::Float32Type::get(ctx)
                                  : (mlir::Type)mlir::IntegerType::get(ctx, 32);
       if (!isFloat)
         for (auto a : args)
-          if (auto it2 = a.getType().dyn_cast<IntegerType>())
+          if (auto it2 = llvm::dyn_cast<IntegerType>(a.getType()))
             stdTy = mlir::IntegerType::get(
                 ctx, std::max<unsigned>(
                          it2.getWidth(),
-                         stdTy.cast<mlir::IntegerType>().getWidth()));
+                         llvm::cast<mlir::IntegerType>(stdTy).getWidth()));
       mlir::Value mn = toStd(args[0], stdTy), in = toStd(args[1], stdTy),
                   mx = toStd(args[2], stdTy);
       mlir::Value r;
       if (isFloat)
-        r = builder.create<mlir::arith::MaxFOp>(location, in, mn).getResult();
+        r = builder.create<mlir::arith::MaximumFOp>(location, in, mn).getResult();
       else
         r = builder.create<mlir::arith::MaxSIOp>(location, in, mn).getResult();
       if (isFloat)
-        r = builder.create<mlir::arith::MinFOp>(location, r, mx).getResult();
+        r = builder.create<mlir::arith::MinimumFOp>(location, r, mx).getResult();
       else
         r = builder.create<mlir::arith::MinSIOp>(location, r, mx).getResult();
       return fromStd(r, args[1].getType());
@@ -4747,15 +4745,15 @@ private:
     if (up == "MUX" && args.size() >= 2) {
       // MUX(K, IN0..INn): nested selects, INn is the ELSE
       mlir::Value k = toStd(args[0], mlir::IntegerType::get(ctx, 32));
-      mlir::Type stdTy = mlir::FloatType::getF32(ctx);
+      mlir::Type stdTy = mlir::Float32Type::get(ctx);
       bool isFloat = false;
       for (size_t i = 1; i < args.size(); ++i)
-        if (args[i].getType().isa<RealType>())
+        if (llvm::isa<RealType>(args[i].getType()))
           isFloat = true;
       if (!isFloat) {
         unsigned w = 32;
         for (size_t i = 1; i < args.size(); ++i)
-          if (auto it2 = args[i].getType().dyn_cast<IntegerType>())
+          if (auto it2 = llvm::dyn_cast<IntegerType>(args[i].getType()))
             w = std::max<unsigned>(w, it2.getWidth());
         stdTy = mlir::IntegerType::get(ctx, w);
       }
@@ -4812,7 +4810,7 @@ private:
       // The string argument is taken as an lvalue: its !scl.address is the
       // buffer pointer passed to the runtime (lowers to i64).
       mlir::Value strAddr = mlirGenLValue(params[2].get());
-      if (!strAddr || !strAddr.getType().isa<AddressType>()) {
+      if (!strAddr || !llvm::isa<AddressType>(strAddr.getType())) {
         emitError(location) << "__STRTO_M: third argument must be a string "
                                "lvalue";
         return nullptr;
@@ -4833,7 +4831,8 @@ private:
       }
       builder.create<CallFcOp>(location, getType(tok_dint), "scl_rt_str_to_m",
                                mlir::ValueRange{base, maxLen, strPtr},
-                               mlir::ArrayAttr::get(context, {}));
+                               mlir::ArrayAttr::get(context, {}),
+                               nullptr, nullptr);
       return nullptr; // statement, no value
     }
     //   __LOADM64(<byteBase>)         -> scl_rt_read('M', 0, base, 8) as i64
@@ -4912,22 +4911,22 @@ private:
         // to LREAL) — the inverse of __BITS; used by the trace harness to
         // feed REAL/LREAL inputs.
         unsigned argWidth = 0;
-        if (auto it = arg.getType().dyn_cast<IntegerType>())
+        if (auto it = llvm::dyn_cast<IntegerType>(arg.getType()))
           argWidth = it.getWidth();
-        else if (auto it = arg.getType().dyn_cast<mlir::IntegerType>())
+        else if (auto it = llvm::dyn_cast<mlir::IntegerType>(arg.getType()))
           argWidth = it.getWidth();
         auto resTy = argWidth == 64 ? getType(tok_lreal) : getType(tok_real);
         return builder.create<BitCastOp>(location, resTy, arg).getResult();
       }
       if (upTest == "__BITS") {
         unsigned width;
-        if (auto it = arg.getType().dyn_cast<IntegerType>())
+        if (auto it = llvm::dyn_cast<IntegerType>(arg.getType()))
           width = it.getWidth();
-        else if (auto lt = arg.getType().dyn_cast<LogicalType>())
+        else if (auto lt = llvm::dyn_cast<LogicalType>(arg.getType()))
           width = lt.getWidth();
-        else if (arg.getType().isa<LrealType>())
+        else if (llvm::isa<LrealType>(arg.getType()))
           width = 64;
-        else if (arg.getType().isa<RealType>() || arg.getType().isa<TimeType>())
+        else if (llvm::isa<RealType>(arg.getType()) || llvm::isa<TimeType>(arg.getType()))
           width = 32;
         else {
           emitError(location) << "__BITS: unsupported argument type "
@@ -5104,9 +5103,9 @@ private:
             if (!hasDef)
               dv = 0; // omitted input without a declared default: zero
             unsigned w = 16;
-            if (auto it = ty.dyn_cast<IntegerType>())
+            if (auto it = llvm::dyn_cast<IntegerType>(ty))
               w = it.getWidth();
-            else if (auto lt = ty.dyn_cast<LogicalType>())
+            else if (auto lt = llvm::dyn_cast<LogicalType>(ty))
               w = lt.getWidth();
             v = builder.create<ConstantOp>(
                 location, ty,
@@ -5196,10 +5195,10 @@ private:
       }
       auto argNamesAttr = mlir::ArrayAttr::get(context, argNames);
       return builder.create<CallFcOp>(location, getType(tok_int), callee,
-                                      arguments, argNamesAttr);
+                                      arguments, argNamesAttr, nullptr, nullptr);
     }
     mlir::Type resultType = rtIt->second;
-    if (resultType.isa<mlir::NoneType>()) {
+    if (llvm::isa<mlir::NoneType>(resultType)) {
       if (!allowVoid)
         emitError(location) << "void function '" << callee << "' used as a value";
       return nullptr;
@@ -5207,7 +5206,8 @@ private:
 
     auto argNamesAttr = mlir::ArrayAttr::get(context, argNames);
     mlir::Value callRes =
-        builder.create<CallFcOp>(location, resultType, callee, arguments, argNamesAttr);
+        builder.create<CallFcOp>(location, resultType, callee, arguments,
+                                 argNamesAttr, nullptr, nullptr);
     for (auto &wb : fcWriteBacks) {
       auto val = builder.create<LoadOp>(location, std::get<2>(wb), std::get<0>(wb));
       builder.create<StoreOp>(location, std::get<1>(wb), val);
@@ -5251,9 +5251,9 @@ private:
     mlir::Type t = sym.getType();
     if (!t)
       return std::nullopt;
-    if (t.isa<AddressType>())
-      t = t.cast<AddressType>().getElementType();
-    if (auto idbTy = t.dyn_cast<InstanceDbType>())
+    if (llvm::isa<AddressType>(t))
+      t = llvm::cast<AddressType>(t).getElementType();
+    if (auto idbTy = llvm::dyn_cast<InstanceDbType>(t))
       return unquote(idbTy.getFbSymbol());
     return std::nullopt;
   }
@@ -5328,7 +5328,7 @@ private:
           auto it = byteViewTypes.find(elem);
           mlir::Type ty = it != byteViewTypes.end()
                                ? it->second
-                               : target.getType().cast<AddressType>().getElementType();
+                               : llvm::cast<AddressType>(target.getType()).getElementType();
           outBindings.push_back({elem, target, ty});
         }
     }
@@ -5352,10 +5352,10 @@ private:
         if (!elem)
           return mlir::failure();
         auto it = byteViewTypes.find(elem);
-        if (it == byteViewTypes.end() || !it->second.isa<ArrayType>())
+        if (it == byteViewTypes.end() || !llvm::isa<ArrayType>(it->second))
           return mlir::failure(); // not a string member: fall back to value
         return mlirGenStoreStringBytes(location, elem,
-                                       it->second.cast<ArrayType>(),
+                                       llvm::cast<ArrayType>(it->second),
                                        str->getValue());
       },
       [&] (StringRef name, const BinaryExpressionAST *binary)
@@ -5367,7 +5367,7 @@ private:
         auto it = byteViewTypes.find(elem);
         mlir::Type ty = it != byteViewTypes.end()
                              ? it->second
-                             : target.getType().cast<AddressType>().getElementType();
+                             : llvm::cast<AddressType>(target.getType()).getElementType();
         outBindings.push_back({elem, target, ty});
         return mlir::success();
       })))
@@ -5396,7 +5396,7 @@ private:
     // The call plus the output write-backs, gated by EN when bound
     // (IEC ed.3: with EN=FALSE the FB body is not executed).
     auto emitCall = [&]() {
-      builder.create<CallFbOp>(location, unquote(fb), idbRef);
+      builder.create<CallFbOp>(location, unquote(fb), idbRef, nullptr, nullptr);
       for (auto &ob : outBindings) {
         auto val = builder.create<LoadOp>(location, std::get<2>(ob), std::get<0>(ob));
         builder.create<StoreOp>(location, std::get<1>(ob), val);
@@ -5815,7 +5815,7 @@ private:
       zero = builder.getIntegerAttr(builder.getIntegerType(it.getWidth()), 0);
     else if (auto lt = mlir::dyn_cast<LogicalType>(t))
       zero = builder.getIntegerAttr(builder.getIntegerType(lt.getWidth()), 0);
-    else if (t.isa<ArrayType>()) {
+    else if (llvm::isa<ArrayType>(t)) {
       // string/array value as a condition: approximate as false
       emitWarning(location) << "string value used as a condition, assuming false";
       return builder.create<ConstantOp>(
@@ -6027,10 +6027,10 @@ private:
     mlir::Value selector = mlirGenRValue(caseOf->getExpr());
     if (!selector)
       return mlir::failure();
-    if (selector.getType().isa<RealType>())
+    if (llvm::isa<RealType>(selector.getType()))
       return mlirGenRealCase(location, caseOf, selector);
-    if (!selector.getType().isa<IntegerType>() &&
-        !selector.getType().isa<LogicalType>()) {
+    if (!llvm::isa<IntegerType>(selector.getType()) &&
+        !llvm::isa<LogicalType>(selector.getType())) {
       emitError(location) << "case selector must be an integer, bool or real";
       return mlir::failure();
     }

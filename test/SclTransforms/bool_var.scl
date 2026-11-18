@@ -4,7 +4,7 @@
 // CHECK-LABEL: func.func @f
 // CHECK:         arith.constant false
 // CHECK:         cf.cond_br
-// CHECK:         memref.store %{{.*}}, {{.*}} : memref<i1, strided<[], offset: ?>>
+// CHECK:         memref.store %{{.*}}, {{.*}} : memref<i1, strided<[]>>
 function f : int
 var_temp
   b : bool;

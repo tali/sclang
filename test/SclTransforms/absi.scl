@@ -10,7 +10,7 @@ end_var;
 begin
 
 // CHECK: [[C0:%[_a-z0-9]+]] = arith.constant 0 : i16
-// CHECK: memref.store %arg0, [[INVAR:%[a-z_0-9]+]][] : memref<i16, strided<[], offset: ?>>
+// CHECK: memref.store %arg0, [[INVAR:%[a-z_0-9]+]][] : memref<i16, strided<[]>>
 
 // CHECK: [[IN:%[0-9]+]] = memref.load [[INVAR]]
 // CHECK: [[LT:%[0-9]+]] = arith.cmpi slt, [[IN]], [[C0]]
@@ -19,7 +19,7 @@ begin
 
 // CHECK:   [[IN:%[0-9]+]] = memref.load [[INVAR]]
 // CHECK:   [[NEG:%[0-9]+]] = arith.subi [[C0]], [[IN]] : i16
-// CHECK:   memref.store [[NEG]], [[ABS:%[a-z_0-9]+]][] : memref<i16, strided<[], offset: ?>>
+// CHECK:   memref.store [[NEG]], [[ABS:%[a-z_0-9]+]][] : memref<i16, strided<[]>>
     abs := -in;
 
 // CHECK:   [[IN:%[0-9]+]] = memref.load [[INVAR]]
@@ -28,16 +28,16 @@ begin
   elsif in > int#0 then
 
 // CHECK:     [[IN:%[0-9]+]] = memref.load [[INVAR]]
-// CHECK:     memref.store [[IN]], [[ABS]][] : memref<i16, strided<[], offset: ?>>
+// CHECK:     memref.store [[IN]], [[ABS]][] : memref<i16, strided<[]>>
     abs := in;
 
   else
 
-// CHECK: memref.store [[C0]], [[ABS]][] : memref<i16, strided<[], offset: ?>>
+// CHECK: memref.store [[C0]], [[ABS]][] : memref<i16, strided<[]>>
     abs := int#0;
 
   end_if;
 
-// CHECK: [[RET:%[0-9]+]] = memref.load [[ABS]][] : memref<i16, strided<[], offset: ?>>
+// CHECK: [[RET:%[0-9]+]] = memref.load [[ABS]][] : memref<i16, strided<[]>>
 // CHECK: return [[RET]]
 end_function

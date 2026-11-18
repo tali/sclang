@@ -29,7 +29,7 @@
 #include "sclang/SclTransforms/Passes.h"
 #include <memory>
 
-#include "mlir/Dialect/Affine/Passes.h"
+#include "mlir/Dialect/Affine/Transforms/Passes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
@@ -117,9 +117,9 @@ std::unique_ptr<sclang::ModuleAST> parseInputFile(llvm::StringRef filename) {
 int loadMLIR(mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &module) {
   // Handle '.scl' / '.awl' input to the compiler.
   if (inputType != InputType::MLIR &&
-      !llvm::StringRef(inputFilename).endswith(".mlir")) {
+      !llvm::StringRef(inputFilename).ends_with(".mlir")) {
     bool isAwl = inputType == InputType::Awl ||
-                 llvm::StringRef(inputFilename).endswith(".awl");
+                 llvm::StringRef(inputFilename).ends_with(".awl");
     if (isAwl) {
       llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
           llvm::MemoryBuffer::getFileOrSTDIN(inputFilename);

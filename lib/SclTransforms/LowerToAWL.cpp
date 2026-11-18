@@ -61,7 +61,7 @@ static Type awlValueType(MLIRContext *ctx, Type t) {
   if (auto it = dyn_cast<scl::IntegerType>(t))
     return IntegerType::get(ctx, it.getWidth());
   if (isa<scl::RealType>(t))
-    return FloatType::getF32(ctx);
+    return Float32Type::get(ctx);
   return nullptr;
 }
 
@@ -186,10 +186,10 @@ struct FuncConverter {
   // tempvar, array element), used for struct field offsets.
   Type declaredTypeOf(Value addr) {
     if (auto gv = addr.getDefiningOp<scl::GetVariableOp>()) {
-      auto baseTy = gv.getAddr().getType().dyn_cast<scl::AddressType>();
-      if (baseTy && baseTy.getElementType().isa<scl::InstanceDbType>() &&
+      auto baseTy = llvm::dyn_cast<scl::AddressType>(gv.getAddr().getType());
+      if (baseTy && llvm::isa<scl::InstanceDbType>(baseTy.getElementType()) &&
           fbLayouts) {
-        auto idbTy = baseTy.getElementType().cast<scl::InstanceDbType>();
+        auto idbTy = llvm::cast<scl::InstanceDbType>(baseTy.getElementType());
         std::string fbSym = llvm::StringRef(idbTy.getFbSymbol()).upper();
         auto lit = fbLayouts->find(fbSym);
         if (lit != fbLayouts->end()) {
@@ -201,7 +201,7 @@ struct FuncConverter {
     }
     if (auto gi = addr.getDefiningOp<scl::GetIndexOp>()) {
       if (auto at = gi.getArrayType())
-        if (auto atTy = at->dyn_cast<scl::ArrayType>())
+        if (auto atTy = llvm::dyn_cast<scl::ArrayType>(*at))
           return atTy.getElementType();
     }
     if (auto ge = addr.getDefiningOp<scl::GetElementOp>()) {
@@ -209,7 +209,7 @@ struct FuncConverter {
         // the declared type of the element address is the FIELD type, not
         // the base struct's type (matters for nested structs: r.br.x)
         Type bt = *btOpt;
-        if (auto st = bt.dyn_cast<scl::StructType>()) {
+        if (auto st = llvm::dyn_cast<scl::StructType>(bt)) {
           for (auto [fname, fty] :
                llvm::zip(st.getElementNames(), st.getElementTypes()))
             if (fname.str() == ge.getName().str())
@@ -218,7 +218,7 @@ struct FuncConverter {
         return bt;
       }
     }
-    return addr.getType().cast<scl::AddressType>().getElementType();
+    return llvm::cast<scl::AddressType>(addr.getType()).getElementType();
   }
 
   // Resolve an scl address value to a direct type (M-area var or % direct).
@@ -227,18 +227,17 @@ struct FuncConverter {
     if (it != varDirect.end())
       return it->second;
     if (auto gd = addr.getDefiningOp<scl::GetDirectOp>()) {
-      return addr.getType().cast<scl::AddressType>()
-          .getElementType()
-          .cast<scl::DirectType>();
+      return llvm::cast<scl::DirectType>(
+          llvm::cast<scl::AddressType>(addr.getType()).getElementType());
     }
     // getvariable from an IDB: FB member at its byte offset in the instance
     // DB (db 0 = instance DB of the enclosing FB, else the called DB number)
     if (auto gv = addr.getDefiningOp<scl::GetVariableOp>()) {
       Value base = gv.getAddr();
-      auto baseTy = base.getType().dyn_cast<scl::AddressType>();
+      auto baseTy = llvm::dyn_cast<scl::AddressType>(base.getType());
       if (baseTy &&
-          baseTy.getElementType().isa<scl::InstanceDbType>() && fbLayouts) {
-        auto idbTy = baseTy.getElementType().cast<scl::InstanceDbType>();
+          llvm::isa<scl::InstanceDbType>(baseTy.getElementType()) && fbLayouts) {
+        auto idbTy = llvm::cast<scl::InstanceDbType>(baseTy.getElementType());
         std::string fbSymStr = llvm::StringRef(idbTy.getFbSymbol()).upper();
         auto lit = fbLayouts->find(fbSymStr);
         if (lit != fbLayouts->end()) {
@@ -282,7 +281,7 @@ struct FuncConverter {
         return nullptr;
       int64_t idx = 0;
       if (auto c = gi.getIndices()[0].getDefiningOp<scl::ConstantOp>()) {
-        if (auto ia = c.getValue().dyn_cast<IntegerAttr>())
+        if (auto ia = llvm::dyn_cast<IntegerAttr>(c.getValue()))
           idx = ia.getValue().getSExtValue();
       } else {
         emitError(addr.getLoc()) << "dynamic array index is not representable "
@@ -294,11 +293,11 @@ struct FuncConverter {
       // from the result element type (plain array variable). Composite
       // elements (structs) stay byte views (width 8) but advance by the full
       // element size.
-      int elemBits = widthOf(addr.getType().cast<scl::AddressType>()
+      int elemBits = widthOf(llvm::cast<scl::AddressType>(addr.getType())
                                  .getElementType());
       int64_t elemBytes = elemBits > 0 ? (elemBits + 7) / 8 : 1;
       if (auto at = gi.getArrayType()) {
-        if (auto atTy = at->dyn_cast<scl::ArrayType>()) {
+        if (auto atTy = llvm::dyn_cast<scl::ArrayType>(*at)) {
           int ew = widthOf(atTy.getElementType());
           if (ew > 0) {
             elemBytes = (ew + 7) / 8;
@@ -317,7 +316,7 @@ struct FuncConverter {
       if (!base)
         return nullptr;
       Type baseTy = declaredTypeOf(ge.getAddr());
-      auto st = baseTy.dyn_cast<scl::StructType>();
+      auto st = llvm::dyn_cast<scl::StructType>(baseTy);
       if (!st) {
         emitError(addr.getLoc()) << "struct element of non-struct base";
         return nullptr;
@@ -394,7 +393,7 @@ struct FuncConverter {
   Value emitCallFc(scl::CallFcOp call, bool wantResult) {
     std::string calleeStr = llvm::StringRef(call.getCallee()).upper();
     llvm::StringRef callee = calleeStr;
-    if (!callee.startswith("FC")) {
+    if (!callee.starts_with("FC")) {
       emitError(call.getLoc()) << "AWL backend only supports CALL FC n, got @"
                                << callee;
       return nullptr;
@@ -415,7 +414,7 @@ struct FuncConverter {
         }
         // String/array argument: copy the buffer byte-wise into the
         // parameter window slot (AWL has no whole-buffer transfer).
-        if (auto at = argVal.getType().dyn_cast<scl::ArrayType>()) {
+        if (auto at = llvm::dyn_cast<scl::ArrayType>(argVal.getType())) {
           auto ld = argVal.getDefiningOp<scl::LoadOp>();
           if (!ld || widthOf(at.getElementType()) != 8) {
             emitError(call.getLoc()) << "array argument type not representable "
@@ -809,7 +808,7 @@ struct FuncConverter {
                                   base.getDb(), base.getByte() + (int32_t)offBytes,
                                   0, wBits);
     };
-    if (auto st = ty.dyn_cast<scl::StructType>()) {
+    if (auto st = llvm::dyn_cast<scl::StructType>(ty)) {
       int64_t off = 0;
       for (auto [fname, fty] :
            llvm::zip(st.getElementNames(), st.getElementTypes())) {
@@ -821,7 +820,7 @@ struct FuncConverter {
       }
       return;
     }
-    if (auto at = ty.dyn_cast<scl::ArrayType>()) {
+    if (auto at = llvm::dyn_cast<scl::ArrayType>(ty)) {
       int ew = widthOf(at.getElementType());
       if (ew <= 0)
         return;
@@ -848,7 +847,7 @@ struct FuncConverter {
     // whole struct/array assignment: copy field by field
     if (auto ld = val.getDefiningOp<scl::LoadOp>()) {
       Type sty = declaredTypeOf(ld.getAddress());
-      if (sty.isa<scl::StructType>() || sty.isa<scl::ArrayType>()) {
+      if (llvm::isa<scl::StructType>(sty) || llvm::isa<scl::ArrayType>(sty)) {
         scl::DirectType srcDt = directOf(ld.getAddress());
         if (srcDt) {
           emitCompositeCopy(dt, srcDt, sty);
@@ -977,7 +976,7 @@ struct FuncConverter {
   LogicalResult emitOp(Operation *op,
                        DenseMap<Block *, std::string> &blockLabels) {
     if (auto tv = dyn_cast<scl::TempVariableOp>(op)) {
-      Type elem = tv.getResult().getType().cast<scl::AddressType>()
+      Type elem = llvm::cast<scl::AddressType>(tv.getResult().getType())
                       .getElementType();
       auto pit = paramDirects.find(tv.getResult());
       scl::DirectType dt =
@@ -1383,7 +1382,7 @@ struct FuncConverter {
         auto tv = st.getLhs().getDefiningOp<scl::TempVariableOp>();
         if (!tv)
           continue;
-        Type elem = tv.getResult().getType().cast<scl::AddressType>()
+        Type elem = llvm::cast<scl::AddressType>(tv.getResult().getType())
                         .getElementType();
         int w = widthOf(elem);
         if (w <= 0) {
@@ -1407,7 +1406,7 @@ struct FuncConverter {
     if (auto fn = dyn_cast<scl::FunctionOp>(funcOp)) {
       auto results = fn.getFunctionType().getResults();
       std::string fnName = llvm::StringRef(fn.getSymName()).upper();
-      bool isFc = llvm::StringRef(fnName).startswith("FC");
+      bool isFc = llvm::StringRef(fnName).starts_with("FC");
       if (isFc && !results.empty() && !flat->empty() &&
           isa<awl::BeOp>(flat->back())) {
         Type rt = awlValueType(ctx, results[0]);
@@ -1468,7 +1467,7 @@ struct LowerToAWLPass
       for (auto n : names) {
         std::string upStr = llvm::StringRef(n).upper();
         llvm::StringRef up = upStr;
-        if (up.size() > 2 && up.startswith("DB") &&
+        if (up.size() > 2 && up.starts_with("DB") &&
             llvm::all_of(up.drop_front(2), [](char c) { return isdigit(c); }))
           dbNumbers[n] = atoi(up.drop_front(2).str().c_str());
         else
@@ -1504,15 +1503,15 @@ struct LowerToAWLPass
     }
     for (Operation *op : funcs) {
       llvm::StringRef name = cast<SymbolOpInterface>(op).getName();
-      if (name.startswith("_mlir_ciface_")) {
+      if (name.starts_with("_mlir_ciface_")) {
         op->erase(); // JIT wrapper; the AWL frontend re-synthesizes it
         continue;
       }
       std::string upperStr = llvm::StringRef(name).upper();
       llvm::StringRef upper = upperStr;
       bool ok = upper.size() > 2 &&
-                (upper.startswith("OB") || upper.startswith("FB") ||
-                 upper.startswith("FC")) &&
+                (upper.starts_with("OB") || upper.starts_with("FB") ||
+                 upper.starts_with("FC")) &&
                 llvm::all_of(upper.drop_front(2),
                              [](char c) { return isdigit(c); });
       if (!ok) {

@@ -3968,7 +3968,7 @@ private:
     auto i32 = builder.getI32Type();
     if (v.getType() == i32)
       return v;
-    if (v.getType().isa<mlir::FloatType>())
+    if (llvm::isa<mlir::FloatType>(v.getType()))
       return bitcastTo(v, i32);
     return castTo(v, i32);
   }
@@ -5175,7 +5175,7 @@ private:
       // with a constant value, fold the written bits into the parse-time
       // logic state (NER=bit0, VKE=bit1, STA=bit2, OR=bit3)
       if (auto c = mlir::dyn_cast_or_null<awl::ConstOp>(v.getDefiningOp())) {
-        int64_t w = c.getValue().cast<mlir::IntegerAttr>().getValue().getSExtValue();
+        int64_t w = llvm::cast<mlir::IntegerAttr>(c.getValue()).getValue().getSExtValue();
         stNer = i1Const(w & 1);
         rlo = i1Const((w >> 1) & 1);
         stSta = i1Const((w >> 2) & 1);
@@ -5189,7 +5189,7 @@ private:
         int64_t raw = 0;
         bool isConst = false;
         if (auto c = mlir::dyn_cast_or_null<awl::ConstOp>(v.getDefiningOp())) {
-          raw = c.getValue().cast<mlir::IntegerAttr>().getValue().getSExtValue();
+          raw = llvm::cast<mlir::IntegerAttr>(c.getValue()).getValue().getSExtValue();
           isConst = true;
         }
         if (!isConst) {
@@ -5379,7 +5379,7 @@ private:
     mlir::Value v = parseOperand(false);
     if (!v)
       return false;
-    auto dt = v.getType().dyn_cast<mlir::scl::DirectType>();
+    auto dt = llvm::dyn_cast<mlir::scl::DirectType>(v.getType());
     if (!dt && v.getType().isInteger(64)) {
       if (lastOperandType == "COUNTER") {
         // S/R #counter_var: counter op through the dynamic pointer

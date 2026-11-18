@@ -1684,7 +1684,7 @@ private:
 
     std::string area;
     int32_t db = 0, byte = 0, bit = 0, width = 1;
-    if (upper.startswith("DB")) {
+    if (upper.starts_with("DB")) {
       // %DBn.DB{X,B,W,D}byte[.bit]
       area = "DB";
       pos = 2;

@@ -1,8 +1,9 @@
 // RUN: sclang --opt --emit=llvm %s 2>&1 | FileCheck %s
 
-// CHECK: define i16 @abs(i16 [[IN:%[a-z0-9_.]+]]) local_unnamed_addr #0
-// CHECK:   [[RET:%[a-z0-9_.]+]] = tail call i16 @llvm.abs.i16(i16 [[IN]], i1 false)
-// CHECK:   ret i16 [[RET]]
+// LLVM 23 emits range attributes and unnamed args.
+// CHECK: define {{.*}}i16 @abs(i16 %{{[0-9]+}}) local_unnamed_addr #{{[0-9]+}} {
+// CHECK:   %{{[0-9.]+}} = tail call i16 @llvm.abs.i16(i16 %{{[0-9]+}}, i1 false)
+// CHECK:   ret i16 %{{[0-9.]+}}
 // CHECK: }
 function abs : int
 

@@ -4,7 +4,7 @@
 // CHECK:         memref.store %c1_i16, {{%[a-z_0-9]+}}[]
 // CHECK:         cf.br ^bb1
 // CHECK:       ^bb1:
-// CHECK:         memref.load {{.*}} : memref<i16, strided<[], offset: ?>>
+// CHECK:         memref.load {{.*}} : memref<i16, strided<[]>>
 // CHECK:         arith.cmpi sle, {{%[0-9]+}}, {{%[0-9]+}} : i16
 // CHECK:         cf.cond_br {{%[0-9]+}}, ^bb2, ^bb3
 // CHECK:       ^bb2:

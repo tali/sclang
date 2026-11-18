@@ -29,7 +29,7 @@ def Awl_Dialect : Dialect {
 }
 
 // A !scl.direct<...> value (memory area / DB operand), shared with SCL.
-def Awl_Direct : Type<CPred<"$_self.isa<mlir::scl::DirectType>()">,
+def Awl_Direct : Type<CPred<"::llvm::isa<mlir::scl::DirectType>($_self)">,
                       "!scl.direct operand">;
 
 // i1 (RLO: result of logic operation).

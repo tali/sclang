@@ -45,6 +45,7 @@ class AddressType : public mlir::Type::TypeBase<AddressType, mlir::Type,
 public:
   /// Inherit some necessary constructors from 'TypeBase'.
   using Base::Base;
+  static constexpr ::llvm::StringLiteral name = "scl.address";
 
   /// Create an instance of `AddressType` with the given element types. There
   /// *must* be at least one element type.
@@ -60,6 +61,7 @@ class ArrayType : public mlir::Type::TypeBase<ArrayType, mlir::Type,
 public:
   /// Inherit some necessary constructors from 'TypeBase'.
   using Base::Base;
+  static constexpr ::llvm::StringLiteral name = "scl.array";
   using DimTy = std::pair<int32_t, int32_t>;
 
   /// Create an instance of `ArrayType` with the given dimensions and element
@@ -77,18 +79,21 @@ class DateType
     : public mlir::Type::TypeBase<DateType, mlir::Type, mlir::TypeStorage> {
 public:
   using Base::Base;
+  static constexpr ::llvm::StringLiteral name = "scl.date";
 };
 
 class DateAndTimeType
     : public mlir::Type::TypeBase<DateAndTimeType, mlir::Type, mlir::TypeStorage> {
 public:
   using Base::Base;
+  static constexpr ::llvm::StringLiteral name = "scl.dateandtime";
 };
 
 /// This class defines the SCL type for an instance DB
 class InstanceDbType : public mlir::Type::TypeBase<InstanceDbType, mlir::Type,detail::InstanceDbTypeStorage> {
 public:
   using Base::Base;
+  static constexpr ::llvm::StringLiteral name = "scl.idb";
 
   /// Create an instance of `InstanceDbType` given a reference to the function block.
   static InstanceDbType get(mlir::MLIRContext *ctx, StringRef fbSymbol);
@@ -100,6 +105,7 @@ class IntegerType : public mlir::Type::TypeBase<IntegerType, mlir::Type,
                                                 detail::BitWidthStorage> {
 public:
   using Base::Base;
+  static constexpr ::llvm::StringLiteral name = "scl.int";
 
   static IntegerType get(mlir::MLIRContext *ctx, int width);
 
@@ -111,6 +117,7 @@ class LogicalType : public mlir::Type::TypeBase<LogicalType, mlir::Type,
                                                 detail::BitWidthStorage> {
 public:
   using Base::Base;
+  static constexpr ::llvm::StringLiteral name = "scl.bool";
 
   static LogicalType get(mlir::MLIRContext *ctx, int width);
 
@@ -122,6 +129,7 @@ class RealType
     : public mlir::Type::TypeBase<RealType, mlir::Type, mlir::TypeStorage> {
 public:
   using Base::Base;
+  static constexpr ::llvm::StringLiteral name = "scl.real";
 };
 
 /// IEC 61131-3 LREAL: binary64 real (ADR 004). Lowers to f64.
@@ -129,6 +137,7 @@ class LrealType
     : public mlir::Type::TypeBase<LrealType, mlir::Type, mlir::TypeStorage> {
 public:
   using Base::Base;
+  static constexpr ::llvm::StringLiteral name = "scl.lreal";
 };
 
 /// This class defines the SCL struct type. It represents a collection of
@@ -141,6 +150,7 @@ class StructType : public mlir::Type::TypeBase<StructType, mlir::Type,
 public:
   /// Inherit some necessary constructors from 'TypeBase'.
   using Base::Base;
+  static constexpr ::llvm::StringLiteral name = "scl.struct";
 
   /// Create an instance of a `StructType` with the given element types. There
   /// *must* be at least one element type.
@@ -167,18 +177,21 @@ class S5TimeType
     : public mlir::Type::TypeBase<S5TimeType, mlir::Type, mlir::TypeStorage> {
 public:
   using Base::Base;
+  static constexpr ::llvm::StringLiteral name = "scl.s5time";
 };
 
 class TimeType
     : public mlir::Type::TypeBase<TimeType, mlir::Type, mlir::TypeStorage> {
 public:
   using Base::Base;
+  static constexpr ::llvm::StringLiteral name = "scl.time";
 };
 
 class TimeOfDayType
     : public mlir::Type::TypeBase<TimeOfDayType, mlir::Type, mlir::TypeStorage> {
 public:
   using Base::Base;
+  static constexpr ::llvm::StringLiteral name = "scl.timeofday";
 };
 
 /// Area of a directly-represented variable (S7 process image / data block).
@@ -205,6 +218,7 @@ class DirectType : public mlir::Type::TypeBase<DirectType, mlir::Type,
                                                detail::DirectTypeStorage> {
 public:
   using Base::Base;
+  static constexpr ::llvm::StringLiteral name = "scl.direct";
 
   /// Create a direct type. `width` is the access width in bits
   /// (1 = bit, 8 = byte, 16 = word, 32 = dword).

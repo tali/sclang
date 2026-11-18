@@ -93,7 +93,7 @@ one-line pointer here.
   sizes (default 65536 bytes for I/Q/M/T/C, OOB aborts; DBs grow lazily unless
   sized). `--runtime=host --runtime-lib=path.so` dlopens a host runtime
   exporting `scl_host_runtime_vtable()` and registers its vtable via
-  `scl_rt_register` (LLVM 17: `DynamicLibrary::getPermanentLibrary` returns a
+  `scl_rt_register` (LLVM 23: `DynamicLibrary::getPermanentLibrary` returns a
   value, check `isValid()`; `llvm::JITSymbolFlags`, not `llvm::orc::…`).
   `%T`/`%C` are accepted; the sim runtime implements IEC timer/counter
   semantics (phase 3): `scl_rt_timer_start(i32 t, i8 mode, i64 durS5)` and
@@ -110,21 +110,38 @@ one-line pointer here.
 
 ## LLVM version
 
-`third_party/llvm-project` is pinned (shallow) to release tag **llvmorg-17.0.6**.
-Do not bump blindly. LLVM 17 API facts baked into the code:
-`std::optional` (not llvm::Optional), get-prefixed ODS accessors (`getValue()`,
-`getResult()`, `getDoBody()`), `cf::CondBranchOp`, `arith::` dialect,
-`populateFinalizeMemRefToLLVMConversionPatterns`, `mlir::affine::createLoopFusionPass`,
-SCF header `mlir/Dialect/SCF/IR/SCF.h`, CMake target `MLIRMemRefDialect`,
-`Pure` (not NoSideEffect), `ExecutionEngineOptions` with `.transformer`,
+`third_party/llvm-project` is pinned (shallow) to release tag **llvmorg-23.1.6**.
+Do not bump blindly. LLVM 23 API facts baked into the code:
+free-function casts `llvm::isa/dyn_cast/cast<T>(x)` (member `.isa<>()` etc. on
+Type/Attribute/Operation/Value are gone), `StringRef::starts_with/ends_with`,
+`Float32Type/Float64Type::get` (not `FloatType::getF32`), `arith::MaximumFOp`/
+`MinimumFOp` (not MaxFOp/MinFOp), `LLVM::LLVMPointerType::get(ctx)` (opaque
+pointers; `LLVM::GEPOp` takes an explicit element type; vararg `llvm.call`
+needs `var_callee_type`, which we set in a post-conversion walk in
+`sclang/LowerToLLVM.cpp`), ODS builders take `OpFoldResult` for
+reinterpret_cast offset/sizes/strides and optional attrs become mandatory
+trailing builder args, `CallableOpInterface` extends
+`ArgAndResultAttrsOpInterface` and declares `getArgumentTypes()/getResultTypes()`
+(call ops therefore declare `arg_attrs`/`res_attrs` attributes),
+`DeclareOpInterfaceMethods` also declares `getArgOperandsMutable()`,
+`TypeConverter` materialization callbacks return `Value` (not
+`std::optional<Value>`), `OptionalAttr` getters return `std::optional`,
+`memref.reinterpret_cast` verifier requires result-type layout to match the
+op's `static_offsets/static_sizes/static_strides` attrs (dynamic size =>
+dynamic stride; static offset in type => static attr) — see `rcOffsetOfr` in
+`lib/SclTransforms/LowerToStd.cpp`, `StridedLayoutAttr::print` elides
+`offset: 0`, `CallableOpInterface`/`FunctionOpInterface` in
+`mlir/Interfaces/CallInterfaces.h`, `llvm::TargetParser/Host.h`,
+`mlir/Dialect/Affine/Transforms/Passes.h`, lit internal shell
+(`ShTest(execute_external=False)`), `ExecutionEngineOptions` with `.transformer`,
 `registerBuiltinDialectTranslation` + `registerLLVMDialectTranslation` needed for JIT.
 
 ## Build & test (arm64 macOS host)
 
-Build dir is `build.release` (already configured):
+Build dir is `build.23` (already configured, LLVM 23):
 
 ```
-cd build.release
+cd build.23
 ninja sclang sclang-gen          # build tools
 ninja check-sclang              # run all lit tests (background it; poll the log)
 ./bin/llvm-lit -sv tools/sclang/test/SclTransforms   # run a subset
@@ -135,7 +152,7 @@ CMake was configured with `-DCMAKE_MAKE_PROGRAM=/opt/homebrew/bin/ninja
 -DLLVM_TARGETS_TO_BUILD=AArch64 -DLLVM_HOST_TRIPLE=arm64-apple-darwin
 -DLLVM_DEFAULT_TARGET_TRIPLE=arm64-apple-darwin -DLLVM_ENABLE_ASSERTIONS=OFF
 -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_ENABLE_LIBEDIT=OFF
--DLLVM_ENABLE_TERMINFO=OFF -DLLVM_DISABLE_ASSEMBLY_FILES=ON`.
+-DLLVM_DISABLE_ASSEMBLY_FILES=ON`.
 Assertions are OFF because the system libc++ rejects `_LIBCPP_ENABLE_HARDENED_MODE`.
 cmake is at `/opt/homebrew/bin/cmake`. Host quirks: BSD `sed` needs `sed -i ''` and
 has no `\b` — use python3 for regex edits.
@@ -152,7 +169,7 @@ has no `\b` — use python3 for regex edits.
   `.awl`; the tools list includes `not` (negative tests need `not … | FileCheck`,
   lit's internal shell has pipefail so a bare failing pipeline fails the RUN).
 - Run a subset via the *binary* test dirs:
-  `cd build.release/tools/sclang/test && ../../bin/llvm-lit -sv AwlGen sclang`
+  `cd build.23/tools/sclang/test && ../../bin/llvm-lit -sv AwlGen sclang`
   (running llvm-lit on `../test/...` directly misses the site-config tool
   substitutions). `ninja check-sclang` covers everything.
 - RUN conventions: `sclang-gen --emit=mlir-std %s | FileCheck %s` for lowering tests,
@@ -685,7 +702,7 @@ has no `\b` — use python3 for regex edits.
   block, sets its successors, and dedicated `ConditionOpLowering`/`UntilOpLowering`
   patterns create the `cf.cond_br` from the **adaptor** (properly converted i1).
 - Loops lower to `cf` blocks directly (not scf), because scf has no break op in
-  LLVM 17; `continue`/`exit`/`end` in loop bodies are mapped by
+  LLVM 23; `continue`/`exit`/`end` in loop bodies are mapped by
   `lowerLoopTerminators`.
 - Arrays lower to memref + flat row-major offset (lower bound subtracted), computed
   in `index` type (`arith.index_cast`, not `extsi` — extsi rejects index results).
@@ -928,7 +945,7 @@ has no `\b` — use python3 for regex edits.
     `@scl_rt_update_outputs()` before every `scl.return`.
   - Sim runtime: `include/sclang/Runtime/Runtime.h` (fixed C ABI, ADR 002) +
     `lib/Runtime/SimRuntime.cpp` (CMake target `SclRuntime`). The driver binds
-    the JIT symbols with `ExecutionEngine::registerSymbols` — in LLVM 17 that
+    the JIT symbols with `ExecutionEngine::registerSymbols` — in LLVM 23 that
     is `llvm::JITSymbolFlags` (NOT `llvm::orc::JITSymbolFlags`) and
     `llvm::orc::ExecutorAddr::fromPtr`. Host integration: `scl_rt_register()`
     installs an `SclRtVTable` that the sim forwards to.

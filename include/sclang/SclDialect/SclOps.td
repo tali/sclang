@@ -23,7 +23,7 @@
 #define SCL_OPS
 
 include "sclang/SclDialect/SclBase.td"
-include "mlir/IR/FunctionInterfaces.td"
+include "mlir/Interfaces/FunctionInterfaces.td"
 include "mlir/IR/OpAsmInterface.td"
 include "mlir/Interfaces/CallInterfaces.td"
 include "mlir/Interfaces/CastInterfaces.td"
@@ -76,7 +76,9 @@ def CallFbOp : SclOp<"call.fb", [
 
   let arguments = (ins
     FlatSymbolRefAttr:$fb,
-    Scl_AddressType:$idb
+    Scl_AddressType:$idb,
+    OptionalAttr<DictArrayAttr>:$arg_attrs,
+    OptionalAttr<DictArrayAttr>:$res_attrs
   );
 
   let results = (outs);
@@ -98,7 +100,9 @@ def CallFcOp : SclOp<"call.fc", [
     // AnyType (not just Scl_Type): by-reference parameters (VAR_IN_OUT /
     // VAR_OUTPUT of a function) are passed as !scl.address values.
     Variadic<AnyType>:$arguments,
-    StrArrayAttr:$argNames
+    StrArrayAttr:$argNames,
+    OptionalAttr<DictArrayAttr>:$arg_attrs,
+    OptionalAttr<DictArrayAttr>:$res_attrs
   );
 
   let results = (outs
@@ -146,8 +150,6 @@ def FunctionOp : TopLevelOp<"function", [
   ];
 
   let extraClassDeclaration = [{
-    ArrayRef<Type> getArgumentTypes() { return getFunctionType().getInputs(); }
-    ArrayRef<Type> getResultTypes() { return getFunctionType().getResults(); }
     LogicalResult verifyType();
     LogicalResult verifyBody();
   }];
@@ -184,8 +186,6 @@ def FunctionBlockOp : TopLevelOp<"function_block", [
   let extraClassDeclaration = [{
     static void build(OpBuilder &builder, OperationState &state,
                       StringRef name);
-    ArrayRef<Type> getArgumentTypes() { return getFunctionType().getInputs(); }
-    ArrayRef<Type> getResultTypes() { return getFunctionType().getResults(); }
     LogicalResult verifyType();
     LogicalResult verifyBody();
   }];
@@ -422,7 +422,7 @@ def LoadOp : SclOp<"load", [/*SameOperandsAndResultElementType*/]> {
 
   let builders = [
     OpBuilder<(ins "Value":$address), [{
-      auto elementType = address.getType().cast<AddressType>().getElementType();
+      auto elementType = cast<AddressType>(address.getType()).getElementType();
       build($_builder, $_state, elementType, address);
     }]>
   ];
@@ -572,7 +572,7 @@ def ReturnValueOp : FuncTerminatorOp<"return.value"> {
 
   let extraClassDeclaration = [{
     Type getReturnType() {
-      return getValue().getType().dyn_cast<AddressType>().getElementType();
+      return llvm::cast<AddressType>(getValue().getType()).getElementType();
     }
   }];
 }

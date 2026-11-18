@@ -88,7 +88,7 @@ private:
     // Create a function declaration for printf, the signature is:
     //   * `i32 (i8*, ...)`
     auto llvmI32Ty = IntegerType::get(context, 32);
-    auto llvmI8PtrTy = LLVM::LLVMPointerType::get(IntegerType::get(context, 8));
+    auto llvmI8PtrTy = LLVM::LLVMPointerType::get(context);
     auto llvmFnType = LLVM::LLVMFunctionType::get(llvmI32Ty, llvmI8PtrTy,
                                                   /*isVarArg=*/true);
 
@@ -132,10 +132,12 @@ private:
     Value cst0 = builder.create<LLVM::ConstantOp>(
         loc, IntegerType::get(builder.getContext(), 64),
         builder.getIntegerAttr(builder.getIndexType(), 0));
+    // With opaque pointers the GEP element type must be given explicitly:
+    // it is the global's array type, so the two indices step over the array
+    // and then into its first i8 element.
     return builder.create<LLVM::GEPOp>(
-        loc,
-        LLVM::LLVMPointerType::get(IntegerType::get(builder.getContext(), 8)),
-        globalPtr, ArrayRef<Value>({cst0, cst0}));
+        loc, LLVM::LLVMPointerType::get(builder.getContext()),
+        global.getType(), globalPtr, ArrayRef<Value>({cst0, cst0}));
   }
 };
 
@@ -196,6 +198,19 @@ void SclToLLVMLoweringPass::runOnOperation() {
   // ensures that only legal operations will remain after the conversion.
   if (failed(applyFullConversion(module, target, std::move(patterns))))
     signalPassFailure();
+
+  // MLIR 23 requires `var_callee_type` on llvm.call to a vararg callee (e.g.
+  // printf); the func->llvm conversion does not set it, so fix it up here.
+  module.walk([&](LLVM::CallOp call) {
+    if (call.getVarCalleeType() || !call.getCallee())
+      return;
+    auto fn = module.lookupSymbol<LLVM::LLVMFuncOp>(*call.getCallee());
+    if (!fn)
+      return;
+    auto fnType = llvm::dyn_cast<LLVM::LLVMFunctionType>(fn.getFunctionType());
+    if (fnType && fnType.isVarArg())
+      call.setVarCalleeTypeAttr(TypeAttr::get(fnType));
+  });
 }
 
 /// Create a pass for lowering operations the remaining `Scl` operations, as

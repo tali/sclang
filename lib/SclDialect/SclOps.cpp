@@ -29,7 +29,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
-#include "mlir/IR/FunctionImplementation.h"
+#include "mlir/Interfaces/FunctionImplementation.h"
 
 #include "sclang/SclDialect/SclTypes.h"
 
@@ -178,8 +178,8 @@ OpFoldResult ConstantOp::fold(FoldAdaptor) { return getValue(); }
 
 void ConstantOp::getAsmResultNames(
     function_ref<void(Value, StringRef)> setNameFn) {
-  if (auto intCst = getValue().dyn_cast<IntegerAttr>()) {
-    LogicalType logTy = getType().dyn_cast<LogicalType>();
+  if (auto intCst = llvm::dyn_cast<IntegerAttr>(getValue())) {
+    LogicalType logTy = llvm::dyn_cast<LogicalType>(getType());
 
     // Sugar BOOL constants with 'true' and 'false'.
     if (logTy && logTy.getWidth() == 1)
@@ -520,23 +520,23 @@ void ConstantDateAndTimeOp::getAsmResultNames(
 
 namespace {
 int bitWidth(Type type) {
-  if (auto t = type.dyn_cast<scl::IntegerType>())
+  if (auto t = llvm::dyn_cast<scl::IntegerType>(type))
     return t.getWidth();
-  if (auto t = type.dyn_cast<scl::LogicalType>())
+  if (auto t = llvm::dyn_cast<scl::LogicalType>(type))
     return t.getWidth();
-  if (auto t = type.dyn_cast<mlir::IntegerType>())
+  if (auto t = llvm::dyn_cast<mlir::IntegerType>(type))
     return t.getWidth();
-  if (auto t = type.dyn_cast<mlir::FloatType>())
+  if (auto t = llvm::dyn_cast<mlir::FloatType>(type))
     return t.getWidth();
-  if (type.isa<scl::RealType>())
+  if (llvm::isa<scl::RealType>(type))
     return 32;
-  if (type.isa<scl::LrealType>())
+  if (llvm::isa<scl::LrealType>(type))
     return 64;
-  if (type.isa<scl::S5TimeType>() || type.isa<scl::DateType>())
+  if (llvm::isa<scl::S5TimeType>(type) || llvm::isa<scl::DateType>(type))
     return 16;
-  if (type.isa<scl::TimeType>() || type.isa<scl::TimeOfDayType>())
+  if (llvm::isa<scl::TimeType>(type) || llvm::isa<scl::TimeOfDayType>(type))
     return 32;
-  if (type.isa<scl::DateAndTimeType>())
+  if (llvm::isa<scl::DateAndTimeType>(type))
     return 64;
   return -1;
 }
@@ -565,7 +565,7 @@ bool DialectCastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
   Type in = inputs.front(), out = outputs.front();
   // int/logical <-> real conversions (e.g. INT_TO_REAL) go through
   // sitofp/fptosi at lowering, also within the scl dialect
-  if (in.isa<RealType>() != out.isa<RealType>())
+  if (llvm::isa<RealType>(in) != llvm::isa<RealType>(out))
     return true;
   // numeric casts between scl scalar types (e.g. dint -> time_of_day in
   // DTL_TO_TOD) are fine: the operands convert to plain integers anyway
@@ -605,7 +605,7 @@ void FunctionOp::print(OpAsmPrinter &printer) {
 
 LogicalResult FunctionOp::verifyType() {
   auto type = getFunctionTypeAttr().getValue();
-  if (!type.isa<FunctionType>())
+  if (!llvm::isa<FunctionType>(type))
     return emitOpError("requires '" + getFunctionTypeAttrName().getValue() +
                        "' attribute of function type");
   if (getFunctionType().getNumResults() > 1)
@@ -651,12 +651,11 @@ Region *FunctionOp::getCallableRegion() {
   return isExternal() ? nullptr : &getBody();
 }
 
-// CallableOpInterface
-ArrayAttr FunctionOp::getCallableArgAttrs() { return getArgAttrsAttr(); }
-ArrayAttr FunctionOp::getCallableResAttrs() { return getResAttrsAttr(); }
-
-// CallableOpInterface
-ArrayRef<Type> FunctionOp::getCallableResults() {
+// CallableOpInterface / FunctionOpInterface
+ArrayRef<Type> FunctionOp::getArgumentTypes() {
+  return getFunctionType().getInputs();
+}
+ArrayRef<Type> FunctionOp::getResultTypes() {
   return getFunctionType().getResults();
 }
 
@@ -687,7 +686,7 @@ void FunctionBlockOp::print(OpAsmPrinter &printer) {
 
 LogicalResult FunctionBlockOp::verifyType() {
   auto type = getFunctionTypeAttr().getValue();
-  if (!type.isa<FunctionType>())
+  if (!llvm::isa<FunctionType>(type))
     return emitOpError("requires '" + getFunctionTypeAttrName().getValue() +
                        "' attribute of function type");
   if (getFunctionType().getNumInputs() != 1)
@@ -732,12 +731,11 @@ Region *FunctionBlockOp::getCallableRegion() {
   return isExternal() ? nullptr : &getBody();
 }
 
-// CallableOpInterface
-ArrayAttr FunctionBlockOp::getCallableArgAttrs() { return getArgAttrsAttr(); }
-ArrayAttr FunctionBlockOp::getCallableResAttrs() { return getResAttrsAttr(); }
-
-// CallableOpInterface
-ArrayRef<Type> FunctionBlockOp::getCallableResults() {
+// CallableOpInterface / FunctionOpInterface
+ArrayRef<Type> FunctionBlockOp::getArgumentTypes() {
+  return getFunctionType().getInputs();
+}
+ArrayRef<Type> FunctionBlockOp::getResultTypes() {
   return getFunctionType().getResults();
 }
 
@@ -756,6 +754,10 @@ Operation::operand_range CallFbOp::getArgOperands() {
   return {getOperation()->operand_begin(), getOperation()->operand_end()}; // only operand is `idb`
 }
 
+MutableOperandRange CallFbOp::getArgOperandsMutable() {
+  return getIdbMutable();
+}
+
 
 // MARK: CallFcOp
 
@@ -768,6 +770,10 @@ CallInterfaceCallable CallFcOp::getCallableForCallee() {
 }
 
 Operation::operand_range CallFcOp::getArgOperands() { return getArguments(); }
+
+MutableOperandRange CallFcOp::getArgOperandsMutable() {
+  return getArgumentsMutable();
+}
 
 
 // MARK: GetElementOp
@@ -805,10 +811,8 @@ void GetDirectOp::build(OpBuilder &builder, OperationState &state,
 }
 
 LogicalResult GetDirectOp::verify() {
-  auto directTy = getResult().getType()
-                      .dyn_cast<AddressType>()
-                      .getElementType()
-                      .dyn_cast<DirectType>();
+  auto directTy = llvm::dyn_cast<DirectType>(
+      llvm::dyn_cast<AddressType>(getResult().getType()).getElementType());
   if (!directTy)
     return emitOpError("result must be an address of !scl.direct");
   auto area = DirectType::areaFromName(getArea());
@@ -864,13 +868,13 @@ bool IntegerCastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
   // dword/bool) input is allowed as well — it converts to an IntegerType of
   // the same width during lowering.
   Type input = inputs.front();
-  if (!input.isa<IntegerType>() && !input.isa<mlir::IntegerType>() &&
-      !input.isa<LogicalType>() &&
-      !input.isa<S5TimeType>() && !input.isa<TimeType>() &&
-      !input.isa<TimeOfDayType>() && !input.isa<DateType>() &&
-      !input.isa<DateAndTimeType>())
+  if (!llvm::isa<IntegerType>(input) && !llvm::isa<mlir::IntegerType>(input) &&
+      !llvm::isa<LogicalType>(input) &&
+      !llvm::isa<S5TimeType>(input) && !llvm::isa<TimeType>(input) &&
+      !llvm::isa<TimeOfDayType>(input) && !llvm::isa<DateType>(input) &&
+      !llvm::isa<DateAndTimeType>(input))
     return false;
-  IntegerType output = outputs.front().dyn_cast<IntegerType>();
+  IntegerType output = llvm::dyn_cast<IntegerType>(outputs.front());
   if (!output)
     return false;
   return true;

@@ -110,7 +110,7 @@ struct TextPrinter {
     auto it = directText.find(v);
     if (it != directText.end())
       return it->second;
-    auto dt = v.getType().dyn_cast<scl::DirectType>();
+    auto dt = llvm::dyn_cast<scl::DirectType>(v.getType());
     std::string s = dt ? operandText(dt) : std::string("?");
     directText[v] = s;
     return s;
@@ -230,8 +230,8 @@ struct TextPrinter {
     prepass();
     // header: OB n / FB n / FC n
     llvm::StringRef name = block.getSymName();
-    if (name.size() > 2 && (name.startswith("OB") || name.startswith("FB") ||
-                            name.startswith("FC"))) {
+    if (name.size() > 2 && (name.starts_with("OB") || name.starts_with("FB") ||
+                            name.starts_with("FC"))) {
       os << name.take_front(2) << ' ' << name.drop_front(2) << '\n';
     } else {
       os << "// block " << name << '\n';
@@ -239,7 +239,7 @@ struct TextPrinter {
     for (Operation &o : flat->getOperations()) {
       if (auto d = dyn_cast<DirectOp>(&o)) {
         directText[d.getResult()] = operandText(
-            d.getResult().getType().cast<scl::DirectType>());
+            llvm::cast<scl::DirectType>(d.getResult().getType()));
         continue;
       }
       if (auto c = dyn_cast<ConstOp>(&o)) {
@@ -424,9 +424,9 @@ struct TextPrinter {
       if (auto c = dyn_cast<CallOp>(&o)) {
         llvm::StringRef callee = c.getCallee();
         bool cc = (bool)c.getRlo();
-        if (callee.startswith("FC"))
+        if (callee.starts_with("FC"))
           os << (cc ? "  CC FC " : "  UC FC ") << callee.drop_front(2) << '\n';
-        else if (callee.startswith("FB")) {
+        else if (callee.starts_with("FB")) {
           os << (cc ? "  CC FB " : "  CALL FB ") << callee.drop_front(2);
           if (auto db = c.getDb())
             os << ", DB " << db.value();

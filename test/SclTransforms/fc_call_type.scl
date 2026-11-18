@@ -4,7 +4,7 @@
 // CHECK: func.func @g() -> f32
 // CHECK-LABEL: func.func @f
 // CHECK:         %{{[0-9]+}} = call @g() : () -> f32
-// CHECK:         memref.store {{.*}} : memref<f32, strided<[], offset: ?>>
+// CHECK:         memref.store {{.*}} : memref<f32, strided<[]>>
 function g : real
 begin
   g := 1.5;
