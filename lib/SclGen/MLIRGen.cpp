@@ -5428,7 +5428,7 @@ private:
   /// integer attribute of the given bit `width`.
   /// The element type of an scl address value (`!scl.address<T>` -> T).
   static mlir::Type addrElemTy(mlir::Value addr) {
-    return addrElemTy(addr);
+    return llvm::cast<AddressType>(addr.getType()).getElementType();
   }
 
   ConstantOp intConst(mlir::Location loc, mlir::Type sclTy, unsigned width,

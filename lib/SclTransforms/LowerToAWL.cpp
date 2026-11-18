@@ -40,6 +40,11 @@
 
 #include <string>
 
+/// The element type of an scl address value (`!scl.address<T>` -> T).
+static mlir::Type addrElemTy(mlir::Value addr) {
+  return llvm::cast<mlir::scl::AddressType>(addr.getType()).getElementType();
+}
+
 using namespace mlir;
 
 namespace mlir {
@@ -218,7 +223,7 @@ struct FuncConverter {
         return bt;
       }
     }
-    return llvm::cast<scl::AddressType>(addr.getType()).getElementType();
+    return addrElemTy(addr);
   }
 
   // Resolve an scl address value to a direct type (M-area var or % direct).
@@ -228,7 +233,7 @@ struct FuncConverter {
       return it->second;
     if (auto gd = addr.getDefiningOp<scl::GetDirectOp>()) {
       return llvm::cast<scl::DirectType>(
-          llvm::cast<scl::AddressType>(addr.getType()).getElementType());
+          addrElemTy(addr));
     }
     // getvariable from an IDB: FB member at its byte offset in the instance
     // DB (db 0 = instance DB of the enclosing FB, else the called DB number)

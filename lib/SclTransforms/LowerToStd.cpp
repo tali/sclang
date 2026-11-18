@@ -410,6 +410,11 @@ public:
   }
 };
 
+/// The element type of an scl address value (`!scl.address<T>` -> T).
+static Type addrElemTy(Value addr) {
+  return llvm::cast<scl::AddressType>(addr.getType()).getElementType();
+}
+
 /// Shorthand for an integer constant of type `ty` with value `v`.
 static Value constInt(OpBuilder &b, Location loc, Type ty, int64_t v) {
   return b.create<arith::ConstantOp>(loc, ty, b.getIntegerAttr(ty, v));
@@ -897,7 +902,7 @@ struct LoadOpLowering : public OpConversionPattern<scl::LoadOp> {
     if (!resTy)
       return failure();
     // Direct address (memory area / DB): runtime C ABI call (ADR 002).
-    if (auto dt = llvm::dyn_cast<scl::DirectType>(llvm::cast<scl::AddressType>(op.getAddress().getType()).getElementType())) {
+    if (auto dt = llvm::dyn_cast<scl::DirectType>(addrElemTy(op.getAddress()))) {
       Value loaded = lowerDirectLoad(rewriter, op.getLoc(), dt, resTy,
                                      moduleOf(op));
       rewriter.replaceOp(op, loaded);
@@ -1094,7 +1099,7 @@ struct StoreOpLowering : public OpConversionPattern<scl::StoreOp> {
   matchAndRewrite(scl::StoreOp op, scl::StoreOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // Direct address (memory area / DB): runtime C ABI call (ADR 002).
-    if (auto dt = llvm::dyn_cast<scl::DirectType>(llvm::cast<scl::AddressType>(op.getLhs().getType()).getElementType())) {
+    if (auto dt = llvm::dyn_cast<scl::DirectType>(addrElemTy(op.getLhs()))) {
       if (failed(lowerDirectStore(rewriter, op.getLoc(), dt, adaptor.getRhs(),
                                   moduleOf(op), op)))
         return failure();
@@ -1147,7 +1152,7 @@ struct TempVariableOpLowering
       // i8 address: rank-1 byte view holding a single byte. An instance-DB
       // address allocates the FB's whole instance buffer instead.
       int64_t allocSize = 1;
-      if (auto idbTy = llvm::dyn_cast<scl::InstanceDbType>(llvm::cast<scl::AddressType>(op.getResult().getType()).getElementType())) {
+      if (auto idbTy = llvm::dyn_cast<scl::InstanceDbType>(addrElemTy(op.getResult()))) {
         auto &layouts =
             static_cast<const SclTypeConverter *>(typeConverter)->fbLayouts;
         auto it = layouts.find(idbTy.getFbSymbol());
@@ -1555,7 +1560,7 @@ struct GetIndexOpLowering : public OpConversionPattern<scl::GetIndexOp> {
       arrayTy = llvm::cast<scl::ArrayType>(op.getArrayType());
     else
       arrayTy = llvm::cast<scl::ArrayType>(
-          llvm::cast<scl::AddressType>(op.getAddr().getType()).getElementType());
+          addrElemTy(op.getAddr()));
     auto dims = arrayTy.getDimensions();
     auto indices = adaptor.getIndices();
     if (indices.size() != dims.size())
@@ -2141,7 +2146,7 @@ struct GetDirectOpLowering : public OpConversionPattern<scl::GetDirectOp> {
     if (!resTy)
       return failure();
     auto dt = llvm::cast<scl::DirectType>(
-        llvm::cast<scl::AddressType>(op.getResult().getType()).getElementType());
+        addrElemTy(op.getResult()));
     int64_t packed = ((int64_t)(uint8_t)dt.getArea() << 56) |
                      ((int64_t)(uint32_t)dt.getDb() << 40) |
                      ((int64_t)(uint32_t)dt.getByte() << 16) |
