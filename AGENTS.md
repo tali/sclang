@@ -86,6 +86,22 @@ one-line pointer here.
   the `_mlir_ciface_OB1` wrapper (`engine->invoke("OB1")` resolves
   `_mlir_ciface_OB1`), which calls `function OB1` (see test/sclang/jit.scl) —
   JIT tests must define that wrapper.
+- MLIR/LLVM-23 feature audit (what we adopted vs. what turned out to be
+  already covered downstream — verified, not assumed):
+  adopted: SCCP/mem2reg/LICM/symbol-dce in `--opt`, reconcile-unrealized-casts,
+  host TargetMachine for the LLVM opt pipeline, `--emit=bytecode`/`.mlirbc`,
+  `--fp-mode` fastmath (default contract).
+  already covered: `cf::SwitchOp` is already used for CASE; LLVM StoreMerger
+  already merges unrolled string-literal byte stores into vector stores and
+  var-var string/array copies already use `memref.copy` (-> llvm.memcpy);
+  InstCombine already folds big-endian byte-assembly into one wide load;
+  GreedyRewriteConfig region simplification defaults to Aggressive.
+  deliberately skipped: scf.for iter_args / scf.while refactor of
+  FOR/WHILE/REPEAT — SCL allows the body to modify the loop variable and the
+  bound cell is re-read, so the counter must live in memory (byte view);
+  LoopLikeOpInterface on scl loop ops would not change that. Same for
+  InferIntRange/InferStridedMetadata on scl ops: we lower to arith/cf/memref
+  early, and those dialects already provide the interfaces to LLVM.
 - `sclang-gen --emit=bytecode` writes MLIR bytecode; a `.mlirbc` input is
   auto-detected by `parseSourceFile` (see test/SclGen/MLIR/bytecode_roundtrip.scl).
   Round-trip is byte-identical to text output; useful for large modules.
