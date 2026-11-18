@@ -86,6 +86,9 @@ one-line pointer here.
   the `_mlir_ciface_OB1` wrapper (`engine->invoke("OB1")` resolves
   `_mlir_ciface_OB1`), which calls `function OB1` (see test/sclang/jit.scl) —
   JIT tests must define that wrapper.
+- `sclang-gen --emit=bytecode` writes MLIR bytecode; a `.mlirbc` input is
+  auto-detected by `parseSourceFile` (see test/SclGen/MLIR/bytecode_roundtrip.scl).
+  Round-trip is byte-identical to text output; useful for large modules.
 - `--fp-mode=none|contract|fast` (default **contract**) sets the fastmath
   attribute on arith float ops we generate (cmpf/negf/addf/... — see
   `mlir::sclang::withFPFastMath` in `include/sclang/SclDialect/Dialect.h`).

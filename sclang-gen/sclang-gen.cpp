@@ -29,6 +29,7 @@
 #include "sclang/SclTransforms/Passes.h"
 #include <memory>
 
+#include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/Affine/Transforms/Passes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -86,7 +87,7 @@ static sclang::LangMode langMode() {
 }
 
 namespace {
-enum Action { None, DumpAST, DumpMLIR, DumpMLIRStd, DumpAWL };
+enum Action { None, DumpAST, DumpMLIR, DumpMLIRStd, DumpAWL, DumpBytecode };
 }
 static cl::opt<enum Action> emitAction(
     "emit", cl::desc("Select the kind of output desired"),
@@ -95,7 +96,9 @@ static cl::opt<enum Action> emitAction(
     cl::values(clEnumValN(DumpMLIRStd, "mlir-std",
                           "output the MLIR dump after std lowering")),
     cl::values(clEnumValN(DumpAWL, "awl",
-                          "output AWL (STL) text after the LowerToAWL pass")));
+                          "output AWL (STL) text after the LowerToAWL pass")),
+    cl::values(clEnumValN(DumpBytecode, "bytecode",
+                          "output MLIR bytecode (faster to re-parse than text)")));
 
 static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
 
@@ -117,7 +120,8 @@ std::unique_ptr<sclang::ModuleAST> parseInputFile(llvm::StringRef filename) {
 int loadMLIR(mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &module) {
   // Handle '.scl' / '.awl' input to the compiler.
   if (inputType != InputType::MLIR &&
-      !llvm::StringRef(inputFilename).ends_with(".mlir")) {
+      !llvm::StringRef(inputFilename).ends_with(".mlir") &&
+      !llvm::StringRef(inputFilename).ends_with(".mlirbc")) {
     bool isAwl = inputType == InputType::Awl ||
                  llvm::StringRef(inputFilename).ends_with(".awl");
     if (isAwl) {
@@ -261,6 +265,12 @@ int main(int argc, char **argv) {
 
   if (emitAction == Action::DumpAWL) {
     mlir::awl::printAwlText(*module, llvm::outs());
+    return 0;
+  }
+
+  if (emitAction == Action::DumpBytecode) {
+    if (mlir::failed(mlir::writeBytecodeToFile(*module, llvm::outs())))
+      return 1;
     return 0;
   }
 

@@ -30,6 +30,7 @@ target_link_libraries(sclang-gen
     AwlGen
     SclTransforms
     MLIRAnalysis
+    MLIRBytecodeWriter
     MLIRCastInterfaces
     MLIRIR
     MLIRParser

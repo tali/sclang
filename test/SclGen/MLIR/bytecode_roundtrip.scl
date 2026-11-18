@@ -1,0 +1,14 @@
+// RUN: sclang-gen --emit=mlir %s > %t.mlir && sclang-gen --emit=bytecode %s > %t.mlirbc && sclang-gen --emit=mlir %t.mlirbc > %t2.mlir && diff %t.mlir %t2.mlir
+
+// MLIR bytecode round-trip: --emit=bytecode writes bytecode (magic "ML\xefR")
+// and a .mlirbc input is parsed back to the identical IR (parseSourceFile
+// auto-detects the bytecode magic).
+function f : int
+var_temp
+  i : int;
+end_var
+begin
+  for i := 1 to 10 do
+    f := f + i;
+  end_for;
+end_function
