@@ -13,7 +13,7 @@ user-defined struct types, strings and date/time types, memory areas
 (`%I`/`%Q`/`%M`/`%DB…`/`%T`/`%C` direct addressing via the runtime C ABI, with a
 simulation runtime for the JIT, host runtime binding via `--runtime-lib`,
 and big-endian storage matching S7), and the compiler can JIT-execute the
-result on the host (110 lit tests pass, incl. an external-corpora
+result on the host (147 lit tests pass, incl. an external-corpora
 conformance suite — see docs/conformance.md). AWL (STL) source files (`.awl`) are
 accepted as a parallel input language converging at the same std IR, and SCL
 can be lowered back to AWL text (`sclang-gen --emit=awl`) —
