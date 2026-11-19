@@ -12,6 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "sclang/AwlDialect/Dialect.h"
 #include "sclang/SclDialect/Dialect.h"
 #include "sclang/SclTransforms/Passes.h"
 
@@ -149,6 +150,8 @@ struct SclToLLVMLoweringPass
   // Registered as "scl-lower-to-llvm" (Passes.td).
   llvm::StringRef getArgument() const override { return "scl-lower-to-llvm"; }
   void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<scl::SclDialect>();
+    registry.insert<awl::AwlDialect>();
     registry.insert<LLVM::LLVMDialect>();
     registry.insert<math::MathDialect>();
   }

@@ -16,8 +16,9 @@ compile-only tests cannot catch wrong values, and JIT tests cannot tell you
 | ST trace conformance | `run_st_traces.py` (92 IEC 61131-3 `.st`/`.trace` pairs) | value-level: per-scan outputs compared to the published trace |
 | Differential cross | same, `--cross` (default) | each trace wrapper run twice: `--emit=jit` vs `--emit=jit-awl` (in-memory awl-dialect lowering); scan lines must be identical |
 | Fuzz | `fuzz_st.py` | seeded random per-scan inputs; SCL->JIT vs SCL->jit-awl must agree |
-| Invalid-input fuzz | `fuzz_invalid.py` | mutates the test corpus (byte flips/deletes/inserts/truncation/garbage); asserts the tools never die by signal or hang — invalid input must yield a diagnostic + clean exit (robustness, see AGENTS.md) |
+| Invalid-input fuzz | `fuzz_invalid.py` | mutates the test corpus (byte flips/deletes/inserts/truncation/garbage); asserts the tools never die by signal or hang — invalid input must yield a diagnostic + clean exit (robustness, see AGENTS.md). Mutated `.mlir` inputs are additionally run through `sclang-opt --pass-pipeline='builtin.module(scl-lower-to-std,scl-lower-to-llvm)'` and `sclang-translate`, so the dialect parser/verifier/lowerings are fuzzed at the MLIR level too (this found the empty-module dialect-loading crash, fixed via getDependentDialects; regression test `test/SclTransforms/pass_pipeline_empty.mlir`) |
 | Project build cache | `project_cache.py` | multi-file project with `--cache-dir`: hit/miss counts per build, cached output byte-identical to uncached (`--emit=mlir` and JIT scan values), edit-one-file -> one miss, corrupted entries rebuilt, duplicate POU across files still an error |
+| MLIR LSP smoke | `mlir_lsp_smoke.py` | drives `sclang-lsp-server` (standard mlir-lsp-server + scl/awl dialects) on .mlir documents: hover/definition/references on scl ops work via the parser's symbol tracking |
 | LSP smoke | `lsp_smoke.py` | drives `sclang --lsp` over stdio (JSON-RPC): syntax-error diagnostics with correct 0-based positions, diagnostics cleared by a ranged didChange, and a didSave JIT run whose per-scan values are checked (`scan 0: mw=1`, `scan 1: mw=2`) — i.e. it tests executed results, not just that the server responds |
 | LSP semantic edits | `lsp_semantic.py` | scripted editing sessions (typing a POU incrementally, renaming a variable via ranged multi-change didChange): asserts parse diagnostics (SCL codes) turn into semantic diagnostics (`unknown variable`, MLIR code) at the exact use site, that errors in several POUs are all reported in one pass (tolerant MLIRGen), that renaming one occurrence vs. the declaration moves the diagnostic accordingly, and that a didSave of the fixed document JIT-runs with the expected scan values. Shared JSON-RPC client: `lsp_client.py` |
 
@@ -30,6 +31,7 @@ python3 test/conformance/run_st_traces.py --sclang build.23/bin/sclang --cross  
 python3 test/conformance/fuzz_st.py --sclang build.23/bin/sclang --scans 5 --seed 7
 python3 test/conformance/fuzz_invalid.py --sclang build.23/bin/sclang --iters 500 --seed 1   # add --tolerant to also fuzz the --parse-tolerant recovery paths
 python3 test/conformance/lsp_smoke.py --sclang build.23/bin/sclang
+python3 test/conformance/mlir_lsp_smoke.py --sclang-lsp-server build.23/bin/sclang-lsp-server
 python3 test/conformance/lsp_semantic.py --sclang build.23/bin/sclang
 python3 test/conformance/project_cache.py --sclang build.23/bin/sclang
 ```

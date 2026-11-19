@@ -93,8 +93,23 @@ one-line pointer here.
 - The lowering passes are TableGen-registered (include/sclang/SclTransforms/
   Passes.td -> Passes.h.inc; registerSclangTransformsPasses() called in main()),
   so `scl-lower-to-std` / `scl-lower-to-awl` / `scl-lower-to-llvm` are usable in
-  --pass-pipeline strings via sclang-opt. LowerToLLVM.cpp lives in
-  lib/SclTransforms (the passes are library code, not binary code).
+  --pass-pipeline strings. `sclang` itself accepts `--pass-pipeline=...`
+  (mlir-opt style; replaces the built-in pipeline in processModule). LowerToLLVM.cpp
+  lives in lib/SclTransforms (the passes are library code, not binary code).
+  IMPORTANT: each lowering pass lists scl/awl in getDependentDialects — the
+  passes create scl types themselves (builtin FB layouts), and with lazy
+  dialect loading (sclang-opt) an unloaded dialect crashes type uniquing in
+  assertion-less builds (found by fuzz_invalid on an empty module;
+  regression test test/SclTransforms/pass_pipeline_empty.mlir).
+- Tools (all in build.23/bin, all Bazel targets too):
+  `sclang` (compiler driver: --emit=ast/mlir/awl-mlir/mlir-std/mlir-llvm/llvm/obj/jit/jit-awl,
+  --pass-pipeline, -o, --lsp), `sclang-gen` (frontend: -x=scl/awl/st/mlir, --emit=mlir/awl/bytecode),
+  `sclang-opt` (mlir-opt with scl/awl dialects + registered sclang passes),
+  `sclang-query` (mlir-query with scl/awl: `echo 'match hasOpName("scl.call.fc")' | sclang-query m.mlir`),
+  `sclang-translate` (bytecode --serialize/--deserialize + --mlir-to-llvmir on scl/awl IR),
+  `sclang-lsp-server` (the STANDARD mlir-lsp-server with scl/awl registered — serves
+  .mlir documents with hover/definition/references; for SCL/AWL *source* files use
+  `sclang --lsp`. Test: test/conformance/mlir_lsp_smoke.py).
 - `sclang --emit=obj -o out.o` is the AOT path: full lowering to LLVM IR, host
   TargetMachine object emission (respects `--opt`); `scl_rt_*` runtime symbols
   stay undefined and are resolved when linking against a host runtime
@@ -203,7 +218,7 @@ Build dir is `build.23` (already configured, LLVM 23):
 
 ```
 cd build.23
-ninja sclang sclang-gen sclang-opt  # build tools
+ninja sclang sclang-gen sclang-opt sclang-query sclang-translate sclang-lsp-server  # build tools
 ninja check-sclang              # run all lit tests (background it; poll the log)
 ./bin/llvm-lit -sv tools/sclang/test/SclTransforms   # run a subset
 ./bin/sclang --opt --emit=jit test/sclang/jit_for.scl # manual JIT run
@@ -339,6 +354,10 @@ has no `\b` — use python3 for regex edits.
   drives initialize / didOpen(syntax error) / ranged didChange / full didChange
   / didSave(JIT) and checks the diagnostic position, that it clears, and the
   actual per-scan values (`scan 0: mw=1`, `scan 1: mw=2`).
+  `python3 test/conformance/mlir_lsp_smoke.py --sclang-lsp-server
+  build.23/bin/sclang-lsp-server` drives the standard mlir-lsp-server variant
+  on .mlir documents: capabilities, diagnostics on broken IR, hover on an
+  scl.function, definition of a call target, references.
   `python3 test/conformance/lsp_semantic.py --sclang build.23/bin/sclang`
   drives scripted semantic edits: typing a POU incrementally (parse error ->
   undeclared-variable diagnostic at the use site -> clean once declared;
@@ -351,7 +370,7 @@ has no `\b` — use python3 for regex edits.
 
 - Test methodology and the rationale for each tier (lit / corpora / JIT smoke
   / awlsim oracle / ST traces / differential cross / fuzz, plus the
-  `jit_edge_*` scenario rationale) are in `docs/testing.md`. Current: 149
+  `jit_edge_*` scenario rationale) are in `docs/testing.md`. Current: 151
   lit tests, 92/92 ST traces with cross, plus the LSP tests
   (`test/conformance/lsp_smoke.py`, `lsp_semantic.py`, see "LSP mode" above)
   and the per-file build-cache test (`test/conformance/project_cache.py`).
@@ -1201,12 +1220,9 @@ Remaining technical gaps:
   Co-Authored-By: Mistral Vibe <vibe@mistral.ai>
   ```
 - Do NOT `git add -A`: untracked and not meant to be committed (yet):
-  `sclang-translate/` (stale Toy-era scaffolding, see below), `cmake/`,
-  `REFERENCES.md`, `.clang-format`. `sclang-opt/` IS tracked since the pass
-  registration work: it is an mlir-opt-style driver with the scl/awl dialects
-  and the sclang passes registered, so lowerings can be exercised via
-  `--pass-pipeline='builtin.module(scl-lower-to-std,...)'` on plain .mlir
-  (test: test/SclTransforms/pass_pipeline.mlir).
+  `cmake/`, `REFERENCES.md`, `.clang-format`. The tool dirs `sclang-opt/`,
+  `sclang-query/`, `sclang-lsp-server/`, `sclang-translate/` ARE tracked (see
+  the tool list in the Architecture section).
   `.gitignore` covers `build.*`, `*.swp`, `.DS_Store`, `.ijwb/`, `xcode/`, `bazel-*`.
 - History on `main` was rewritten once (filter-branch removed accidentally committed
   .swp files), so local hashes differ from any previously pushed state; pushing

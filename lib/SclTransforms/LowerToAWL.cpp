@@ -1453,6 +1453,7 @@ struct LowerToAWLPass
   bool synthCiface = false;
 
   void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<scl::SclDialect>();
     registry.insert<awl::AwlDialect>();
     registry.insert<cf::ControlFlowDialect>();
     registry.insert<func::FuncDialect>();

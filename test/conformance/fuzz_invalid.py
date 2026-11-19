@@ -69,14 +69,23 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--sclang', required=True)
     ap.add_argument('--sclang-gen', default=None)
+    ap.add_argument('--sclang-opt', default=None,
+                    help='sclang-opt binary (default: sibling of --sclang); '
+                         'mutated .mlir inputs are also run through it')
+    ap.add_argument('--sclang-translate', default=None,
+                    help='sclang-translate binary (default: sibling of --sclang)')
     ap.add_argument('--iters', type=int, default=500)
     ap.add_argument('--seed', type=int, default=1)
     ap.add_argument('--tolerant', action='store_true',
                     help='also fuzz with --parse-tolerant (error-recovery paths)')
     args = ap.parse_args()
+    bindir = os.path.dirname(args.sclang)
     if not args.sclang_gen:
-        args.sclang_gen = os.path.join(os.path.dirname(args.sclang),
-                                      'sclang-gen')
+        args.sclang_gen = os.path.join(bindir, 'sclang-gen')
+    if not args.sclang_opt:
+        args.sclang_opt = os.path.join(bindir, 'sclang-opt')
+    if not args.sclang_translate:
+        args.sclang_translate = os.path.join(bindir, 'sclang-translate')
     repo = os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__))))
     seeds = seed_files(repo)
@@ -93,16 +102,28 @@ def main():
             ext = os.path.splitext(src)[1]
             path = os.path.join(tmp, 'f%d%s' % (i, ext))
             open(path, 'wb').write(data)
-            try:
-                r = subprocess.run(tool_args(args.sclang, args.sclang_gen,
-                                             path, ext, args.tolerant),
-                                   capture_output=True, timeout=TIMEOUT_S)
-            except subprocess.TimeoutExpired:
-                crashes.append((i, src, 'TIMEOUT', path))
-                continue
-            n += 1
-            if r.returncode < 0:  # killed by a signal = real crash
-                crashes.append((i, src, r.returncode, path))
+            cmds = [tool_args(args.sclang, args.sclang_gen, path, ext,
+                              args.tolerant)]
+            if ext == '.mlir':
+                # Also exercise the MLIR-level tools on the mutated dialect
+                # IR: sclang-opt (parse+verify+lower via pass pipeline) and
+                # sclang-translate (parse+print). A crash here is a dialect
+                # parser/verifier/lowering bug, not a source-frontend one.
+                cmds.append([args.sclang_opt,
+                             '--pass-pipeline=builtin.module(scl-lower-to-std,'
+                             'scl-lower-to-llvm)', path])
+                cmds.append([args.sclang_translate, path])
+            for cmd in cmds:
+                try:
+                    r = subprocess.run(cmd, capture_output=True,
+                                       timeout=TIMEOUT_S)
+                except subprocess.TimeoutExpired:
+                    crashes.append((i, src, 'TIMEOUT ' + cmd[0], path))
+                    continue
+                n += 1
+                if r.returncode < 0:  # killed by a signal = real crash
+                    crashes.append((i, src, '%s rc=%d' % (cmd[0], r.returncode),
+                                    path))
     print('fuzz-invalid: %d mutations, %d crashes (seed %d%s)'
           % (n, len(crashes), args.seed, ', tolerant' if args.tolerant else ''))
     for i, src, rc, path in crashes[:10]:

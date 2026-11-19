@@ -19,7 +19,10 @@ tests pass, incl. an external-corpora
 conformance suite — see docs/conformance.md). AWL (STL) source files (`.awl`) are
 accepted as a parallel input language converging at the same std IR, and SCL
 can be lowered back to AWL text (`sclang-gen --emit=awl`) —
-see `docs/` for the design.
+see `docs/` for the design. MLIR-level tooling mirrors the standard set with the
+scl/awl dialects registered: `sclang-opt` (pass pipelines), `sclang-query`,
+`sclang-translate` (bytecode/LLVM IR), `sclang-lsp-server` (hover/definition/
+references on `.mlir`); `sclang --lsp` serves SCL/AWL source files.
 
 Design documentation lives in [`docs/`](docs/): ADRs for hard-to-reverse
 decisions (`docs/decisions/`) and design plans (`docs/design/`).

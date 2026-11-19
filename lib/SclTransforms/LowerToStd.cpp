@@ -43,6 +43,10 @@ struct SclToStdLoweringPass
   // --pass-pipeline strings.
   llvm::StringRef getArgument() const override { return "scl-lower-to-std"; }
   void getDependentDialects(DialectRegistry &registry) const override {
+    // The pass creates scl types itself (builtin FB layouts), so the scl
+    // dialect must be loaded even if the input module contains no scl ops
+    // yet (otherwise type uniquing crashes in builds without assertions).
+    registry.insert<scl::SclDialect>();
     registry.insert<scf::SCFDialect>();
     registry.insert<memref::MemRefDialect>();
     registry.insert<arith::ArithDialect>();

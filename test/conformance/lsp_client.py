@@ -14,9 +14,12 @@ def frame(obj):
 
 
 class Lsp:
-    def __init__(self, sclang, extra_args=()):
-        self.p = subprocess.Popen([sclang, '--lsp'] + list(extra_args),
-                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    def __init__(self, sclang, extra_args=(), lsp_flag=True):
+        # lsp_flag=False for servers that speak LSP without a flag
+        # (e.g. sclang-lsp-server).
+        args = [sclang] + (['--lsp'] if lsp_flag else []) + list(extra_args)
+        self.p = subprocess.Popen(args, stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE)
         self.buf = b""
 
     def send(self, obj):
