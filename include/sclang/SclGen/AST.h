@@ -1385,6 +1385,27 @@ public:
 
 void dump(const ModuleAST &);
 
+/// True for a POU with an empty body: a STEP 7 forward declaration
+/// (FUNCTION x ... BEGIN END_FUNCTION in a separate file), which a later
+/// real definition replaces (MLIRGen handles the replace).
+inline bool isForwardDeclaration(const UnitAST *unit) {
+  const CodeSectionAST *code = nullptr;
+  switch (unit->getKind()) {
+  case UnitAST::Unit_Function:
+    code = static_cast<const FunctionAST *>(unit)->getCode();
+    break;
+  case UnitAST::Unit_OrganizationBlock:
+    code = static_cast<const OrganizationBlockAST *>(unit)->getCode();
+    break;
+  case UnitAST::Unit_FunctionBlock:
+    code = static_cast<const FunctionBlockAST *>(unit)->getCode();
+    break;
+  default:
+    return false;
+  }
+  return code && code->getInstructions().empty();
+}
+
 } // namespace sclang
 
 #endif // SCLANG_AST_H_

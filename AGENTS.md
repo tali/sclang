@@ -318,7 +318,8 @@ has no `\b` — use python3 for regex edits.
   / awlsim oracle / ST traces / differential cross / fuzz, plus the
   `jit_edge_*` scenario rationale) are in `docs/testing.md`. Current: 145
   lit tests, 92/92 ST traces with cross, plus the LSP smoke test
-  (`test/conformance/lsp_smoke.py`, see "LSP mode" above).
+  (`test/conformance/lsp_smoke.py`, see "LSP mode" above) and the per-file
+  build-cache test (`test/conformance/project_cache.py`).
 - lit tests live in `test/SclGen/Parse`, `test/SclGen/MLIR`, `test/SclTransforms`,
   `test/AwlGen`, `test/sclang`; BUILD files glob `*.scl` (sclang dir also `*.awl`),
   so new files are picked up automatically. `test/lit.cfg.py` suffixes include

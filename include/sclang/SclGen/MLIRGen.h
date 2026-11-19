@@ -24,8 +24,12 @@
 #define SCLANG_MLIRGEN_H_
 
 #include <memory>
+#include <vector>
 
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Operation.h"
 
 namespace mlir {
 class MLIRContext;
@@ -37,6 +41,14 @@ class ModuleAST;
 /// Emit IR for the given SCL moduleAST, returns a newly created MLIR module
 /// or nullptr on failure.
 mlir::OwningOpRef<mlir::ModuleOp> mlirGen(mlir::MLIRContext &context, ModuleAST &moduleAST);
+
+/// Like mlirGen, but additionally records which module-level operations were
+/// produced from which source file (key = file name from the unit Location).
+/// Used to split a whole-project module into per-file modules for the build
+/// cache (docs/design/multi-file-incremental.md, phase 2).
+mlir::OwningOpRef<mlir::ModuleOp>
+mlirGenPerFile(mlir::MLIRContext &context, ModuleAST &moduleAST,
+               llvm::StringMap<llvm::SmallVector<mlir::Operation *, 4>> &opsByFile);
 } // namespace sclang
 
 #endif // SCLANG_MLIRGEN_H_

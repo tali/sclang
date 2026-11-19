@@ -27,6 +27,8 @@
 #include "sclang/AwlGen/AwlGen.h"
 #include "sclang/Runtime/Runtime.h"
 #include "sclang/SclTransforms/Passes.h"
+
+#include "ProjectCache.h"
 #include <fstream>
 #include <map>
 #include <memory>
@@ -90,6 +92,18 @@ static cl::opt<std::string> projectDir(
     "project", cl::desc("Compile all source files of this directory as one "
                         "project (sorted, by extension of -x)"),
     cl::init(""), cl::value_desc("dir"));
+/// Per-file build cache for SCL projects: each input file's scl MLIR module
+/// is stored under SHA-256(content + compiler ABI tag + language mode) and
+/// reused while the file is unchanged (Bazel action-cache / ccache analog;
+/// docs/design/multi-file-incremental.md phase 2).
+static cl::opt<std::string> cacheDir(
+    "cache-dir",
+    cl::desc("Cache per-file MLIR modules of the input project in this "
+             "directory and reuse them while files are unchanged"),
+    cl::init(""), cl::value_desc("dir"));
+static cl::opt<bool> cacheStats(
+    "cache-stats", cl::desc("Print per-file cache hit/miss counts to stderr"),
+    cl::init(false));
 
 namespace {
 enum InputType { Scl, MLIR, Awl, St };
@@ -378,28 +392,6 @@ static llvm::SmallVector<std::string, 4> expandInputFiles() {
   return files;
 }
 
-/// True for a POU with an empty body: a STEP 7 forward declaration
-/// (FUNCTION x ... BEGIN END_FUNCTION in a separate file), which a later
-/// real definition replaces (MLIRGen handles the replace; see
-/// lib/SclGen/MLIRGen.cpp).
-static bool isForwardDecl(const sclang::UnitAST *unit) {
-  const sclang::CodeSectionAST *code = nullptr;
-  switch (unit->getKind()) {
-  case sclang::UnitAST::Unit_Function:
-    code = static_cast<const sclang::FunctionAST *>(unit)->getCode();
-    break;
-  case sclang::UnitAST::Unit_OrganizationBlock:
-    code = static_cast<const sclang::OrganizationBlockAST *>(unit)->getCode();
-    break;
-  case sclang::UnitAST::Unit_FunctionBlock:
-    code = static_cast<const sclang::FunctionBlockAST *>(unit)->getCode();
-    break;
-  default:
-    return false;
-  }
-  return code && code->getInstructions().empty();
-}
-
 /// Parse all input files and splice their units into one ModuleAST: a
 /// project is one namespace (STEP 7 FC/FB/DB names are globally unique),
 /// see docs/design/multi-file-incremental.md. Two real definitions of the
@@ -428,7 +420,7 @@ parseInputFiles(llvm::ArrayRef<std::string> files,
       const auto &loc = unit->loc();
       std::string site =
           (loc.file ? *loc.file : f) + ":" + std::to_string(loc.line);
-      bool fwd = isForwardDecl(unit.get());
+      bool fwd = sclang::isForwardDeclaration(unit.get());
       auto it = seen.find(up);
       if (it != seen.end() && !it->second.second && !fwd) {
         // two real definitions of the same unit
@@ -488,11 +480,85 @@ int loadMLIRFromBuffer(
   return 0;
 }
 
+/// Build with the per-file content-hash cache (--cache-dir): load unchanged
+/// files' modules from the cache; if anything is missing, parse + codegen the
+/// whole project once, extract and store the missed files' modules, then
+/// merge all per-file modules in file order (docs/design/multi-file-
+/// incremental.md phase 2).
+static int loadMLIRCached(mlir::MLIRContext &context,
+                          mlir::OwningOpRef<mlir::ModuleOp> &module,
+                          llvm::ArrayRef<std::string> files) {
+  std::string langTag = std::to_string((int)langMode());
+  llvm::SmallVector<std::string, 4> contents;
+  llvm::SmallVector<mlir::OwningOpRef<mlir::ModuleOp>, 4> mods;
+  llvm::SmallVector<unsigned, 4> missIdx;
+  unsigned hits = 0;
+  for (auto &f : files) {
+    auto bufOrErr = llvm::MemoryBuffer::getFileOrSTDIN(f);
+    if (std::error_code ec = bufOrErr.getError()) {
+      llvm::errs() << "Could not open input file: " << ec.message() << "\n";
+      return 6;
+    }
+    contents.push_back(bufOrErr.get()->getBuffer().str());
+    std::string key = sclang::projectcache::key(contents.back(), langTag);
+    auto m = sclang::projectcache::load(context, cacheDir, key);
+    if (m) {
+      ++hits;
+      mods.push_back(std::move(m));
+    } else {
+      missIdx.push_back((unsigned)mods.size());
+      mods.push_back(mlir::OwningOpRef<mlir::ModuleOp>());
+    }
+  }
+  if (!missIdx.empty()) {
+    // Something changed: parse + codegen the whole project once and extract
+    // each missed file's module-level ops (recorded by mlirGenPerFile).
+    auto ast = parseInputFiles(files);
+    if (!ast)
+      return 6;
+    llvm::StringMap<llvm::SmallVector<mlir::Operation *, 4>> opsByFile;
+    auto full = mlirGenPerFile(context, *ast, opsByFile);
+    if (!full)
+      return 1;
+    for (unsigned i : missIdx) {
+      auto it = opsByFile.find(files[i]);
+      llvm::SmallVector<mlir::Operation *, 4> ops;
+      if (it != opsByFile.end())
+        ops = it->second;
+      auto fm = sclang::projectcache::extractFileModule(*full, ops);
+      sclang::projectcache::store(
+          cacheDir, sclang::projectcache::key(contents[i], langTag), *fm);
+      mods[i] = std::move(fm);
+    }
+  }
+  auto merged = mlir::ModuleOp::create(mlir::UnknownLoc::get(&context));
+  for (auto &m : mods) {
+    if (!m.get())
+      return 1;
+    if (mlir::failed(sclang::projectcache::mergeInto(merged, *m)))
+      return 1;
+  }
+  if (mlir::failed(mlir::verify(merged))) {
+    merged.emitError("module verification error after cache merge");
+    return 1;
+  }
+  module = std::move(merged);
+  if (cacheStats)
+    llvm::errs() << "sclang cache: " << hits << " hits, " << missIdx.size()
+                 << " misses (" << files.size() << " files)\n";
+  return 0;
+}
+
 int loadMLIR(mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &module) {
   llvm::SmallVector<std::string, 4> files = expandInputFiles();
   bool isMlirInput = inputType == InputType::MLIR;
-  for (auto &f : files)
+  bool isAwlInput = inputType == InputType::Awl;
+  for (auto &f : files) {
     isMlirInput = isMlirInput || llvm::StringRef(f).ends_with(".mlir");
+    isAwlInput = isAwlInput || llvm::StringRef(f).ends_with(".awl");
+  }
+  if (!cacheDir.empty() && !isMlirInput && !isAwlInput)
+    return loadMLIRCached(context, module, files);
   if (files.size() == 1) {
     llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
         llvm::MemoryBuffer::getFileOrSTDIN(files[0]);

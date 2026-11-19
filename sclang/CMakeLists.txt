@@ -11,6 +11,7 @@ set(LLVM_LINK_COMPONENTS
 add_llvm_executable(sclang
   LowerToLLVM.cpp
   Lsp.cpp
+  ProjectCache.cpp
   sclang.cpp
 
   DEPENDS

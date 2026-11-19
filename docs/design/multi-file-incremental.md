@@ -1,10 +1,10 @@
 # Multi-file projects and incremental compilation
 
-Status: **phase 1 implemented** (multi-file CLI: multiple positional inputs +
-`--project=<dir>`, ModuleAST unit splicing, forward-declaration semantics,
-duplicate-POU diagnostics; conformance per-project tier runs natively, 17/17).
-Phases 2-4 (per-file codegen split, content-hash cache, LSP project mode) are
-plans below.
+Status: **phases 1 and 2 implemented** (multi-file CLI: multiple positional
+inputs + `--project=<dir>`, ModuleAST unit splicing, forward-declaration
+semantics, duplicate-POU diagnostics — conformance per-project tier runs
+natively, 17/17; and the per-file content-hash build cache `--cache-dir=`).
+Phases 3-4 (LSP project mode, bitcode/object cache) are plans below.
 Related: `docs/design/` (memory-areas, awl-frontend, scl-to-awl), AGENTS.md
 "LSP mode", ADR 002 (runtime C ABI), ADR 004 (ST as a mode).
 
@@ -120,26 +120,34 @@ Notes from the implementation:
   test; switch the conformance per-project tier from concatenation to
   `--project=dir` and require identical pass counts (17/17).
 
-**Phase 2a — two-pass per-file codegen (prerequisite for per-file cache).**
-Extract MLIRGen's two pre-pass loops into `collectModuleGlobals(const
-ModuleAST&, Globals&)` and make unit codegen `mlirGenUnit(unit, Globals&)`
-into a per-file module. Whole-project gen = collect(all spliced units) + gen
-each unit into one module — must produce IR identical to today's single
-`mlirGen` call (lit check). Per-file path = parse all files (cheap,
-~50ms/100k lines) for globals, codegen only the file being rebuilt.
-
-**Phase 2b — content-hash cache (`sclang/ProjectCache.{h,cpp}`, `--cache-dir=`).**
-Key = SHA-256(file content + sclang version/ABI tag + lang mode); artifact
-= the file's scl-dialect module as text `<key>.mlir` (parseable via
-`parseSourceFile` from a memory buffer). Build flow: parse all project
-files → per file: cache hit ? load : `mlirGenUnit` + store → merge modules
-with `mergeModulesWithPrivateRename` (small util: on name collision where
-both symbols are private, `SymbolTable::replaceAllSymbolUses` + rename in
-the incoming module, then splice the body — same trick as `llvm::Linker`)
-→ verify → existing pipeline → JIT. No manifest needed: hashing current
-files is the invalidation (Bazel action-cache style). Tests: build twice →
-all hits; touch one file → one miss; corrupt a cache entry → recompiled;
-full suite green.
+**Phase 2a/2b — per-file build cache. DONE** (implemented slightly
+differently than first proposed: instead of true per-file codegen with
+FB/DB skeletons — cross-file member/DB lookups in MLIRGen need the sibling
+ops present — a whole-project `mlirGen` runs once per rebuild-with-changes
+and the per-file modules are EXTRACTED from it by recording the pushed op
+pointers per unit (`mlirGenPerFile`, `opsByFile` in MLIRGen.cpp). This is
+provably identical IR: cached and uncached `--emit=mlir` outputs are
+byte-identical, including on the 5-file Formelparser corpus project with
+forward declarations. Forward-declaration units are not recorded
+(`isForwardDeclaration` in AST.h), so merging per-file modules never sees
+a fwd/real public collision.)
+- `sclang/ProjectCache.{h,cpp}`: key = SHA-256(file content + ABI tag
+  `sclang-cache-v1 llvm-<ver> mode=<n>`); artifact = `<key>.mlir` text.
+  `load` parses unverified (`ParserConfig(ctx, false)` — cross-file refs
+  only resolve after merge; the merged module is verified); `store` writes
+  text; `extractFileModule` splices the recorded ops into a fresh module
+  (skipping ops no longer linked, e.g. replaced fwd decls); `mergeInto`
+  renames colliding PRIVATE symbols via `SymbolTable::replaceAllSymbolUses`
+  (llvm::Linker trick) and errors on colliding public symbols.
+- `sclang.cpp`: `--cache-dir=<dir>` + `--cache-stats`; `loadMLIRCached`
+  reads+hashes all files (no parse on all-hit builds), loads hits, and on
+  any miss parses+codegens the whole project once, extracts+stores the
+  missed files, merges all per-file modules in file order, verifies.
+- Test: `test/conformance/project_cache.py` — 4-file synthetic project
+  (FC + FB + DB + fwd decl + cross-file calls): first build 0/4 misses with
+  output identical to uncached, second 4/0 identical, edit one file -> 3/1
+  with updated JIT scan values, corrupt entries -> rebuilt identically,
+  duplicate unit across files still an error.
 
 **Phase 3 — LSP project mode (`sclang/Lsp.cpp`).**
 On `initialize`, take `rootUri` and scan the project files (or accept a

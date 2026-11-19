@@ -117,11 +117,30 @@ public:
   }
 
   /// Public API: convert the AST for a Toy module (source file) to an MLIR
-  /// Module operation.
-  mlir::ModuleOp mlirGen(const ModuleAST *moduleAST) {
+  /// Module operation. When `opsByFile` is given, record the module-level ops
+  /// produced per source file (for per-file cache artifacts).
+  mlir::ModuleOp
+  mlirGen(const ModuleAST *moduleAST,
+          llvm::StringMap<llvm::SmallVector<mlir::Operation *, 4>> *opsByFile =
+              nullptr) {
     // We create an empty MLIR module and codegen functions one at a time and
     // add them to the module.
     theModule = mlir::ModuleOp::create(builder.getUnknownLoc());
+
+    // Record module ops pushed while generating `unit` as belonging to its
+    // source file (per-file artifact extraction for the build cache).
+    // Forward declarations carry no code; the real definition's module is
+    // the one kept when per-file modules are merged, so don't record them.
+    auto recordOps = [&](const UnitAST *unit,
+                         llvm::ArrayRef<mlir::Operation *> pushed) {
+      if (!opsByFile || isForwardDeclaration(unit))
+        return;
+      std::string file =
+          unit->loc().file ? *unit->loc().file : std::string();
+      auto &vec = (*opsByFile)[file];
+      for (auto *op : pushed)
+        vec.push_back(op);
+    };
 
     // Pre-pass: register user-defined types and FB names first, so that type
     // references can be resolved regardless of definition order.
@@ -146,12 +165,17 @@ public:
         // Emit the configuration's global DB + scl.config op now (detached),
         // so VAR_EXTERNAL references resolve while POUs are codegen'd below.
         builder.clearInsertionPoint();
+        llvm::SmallVector<mlir::Operation *, 4> pushed;
         if (mlir::Operation *cfgOp = mlirGen(cfg)) {
           theModule.push_back(cfgOp);
-          for (auto *e : extraOps)
+          pushed.push_back(cfgOp);
+          for (auto *e : extraOps) {
             theModule.push_back(e);
+            pushed.push_back(e);
+          }
           extraOps.clear();
         }
+        recordOps(unit.get(), pushed);
         if (errorOccurred)
           return nullptr;
         if (cfg->getGlobals())
@@ -196,6 +220,7 @@ public:
 
     for (const auto &unit : *moduleAST) {
       builder.clearInsertionPoint();
+      llvm::SmallVector<mlir::Operation *, 4> pushed;
       if (auto *udt = llvm::dyn_cast<UserDefinedTypeAST>(unit.get())) {
         if (failed(mlirGen(udt)) || errorOccurred)
           return nullptr;
@@ -209,10 +234,14 @@ public:
       // A forward declaration arriving AFTER the real definition returns
       // the already-linked definition op — don't link it into the module
       // a second time (that corrupts the block).
-      if (func->getParentOp() != theModule)
+      if (func->getParentOp() != theModule) {
         theModule.push_back(func);
-      for (auto *op : extraOps)
+        pushed.push_back(func);
+      }
+      for (auto *op : extraOps) {
         theModule.push_back(op);
+        pushed.push_back(op);
+      }
       extraOps.clear();
       // Emit queued FB methods at module level (fresh symbol scope).
       for (auto &pm : pendingMethods) {
@@ -228,8 +257,10 @@ public:
         if (!fn || errorOccurred)
           return nullptr;
         theModule.push_back(fn);
+        pushed.push_back(fn);
       }
       pendingMethods.clear();
+      recordOps(unit.get(), pushed);
     }
 
     // Verify the module after we have finished constructing it, this will check
@@ -6154,6 +6185,12 @@ namespace sclang {
 mlir::OwningOpRef<mlir::ModuleOp> mlirGen(mlir::MLIRContext &context,
                               ModuleAST &moduleAST) {
   return MLIRGenImpl(context, moduleAST.getMode()).mlirGen(&moduleAST);
+}
+
+mlir::OwningOpRef<mlir::ModuleOp>
+mlirGenPerFile(mlir::MLIRContext &context, ModuleAST &moduleAST,
+               llvm::StringMap<llvm::SmallVector<mlir::Operation *, 4>> &opsByFile) {
+  return MLIRGenImpl(context, moduleAST.getMode()).mlirGen(&moduleAST, &opsByFile);
 }
 
 } // namespace sclang
