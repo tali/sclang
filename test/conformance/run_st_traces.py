@@ -843,6 +843,9 @@ def main():
                          'extra differential check')
     ap.add_argument('--only', default=None, help='substring filter on test')
     ap.add_argument('--floor', type=float, default=0.0)
+    ap.add_argument('--jobs', type=int,
+                    default=min(8, os.cpu_count() or 1),
+                    help='parallel test workers (default: min(8, cpu_count))')
     args = ap.parse_args()
     if not args.sclang_gen:
         args.sclang_gen = os.path.join(os.path.dirname(args.sclang),
@@ -864,10 +867,21 @@ def main():
         tests = [t for t in tests if args.only in t[0]]
     results = {'pass': [], 'fail': [], 'unsupported': []}
     with tempfile.TemporaryDirectory() as tmpdir:
-        for st, tr in tests:
-            name = os.path.relpath(st, root)[:-3]
-            trace = parse_trace(tr)
-            status, detail = run_one(args, st, trace, tmpdir, args.cross)
+        # Each test gets its own subdir (runs are independent and may run in
+        # parallel with --jobs > 1; subprocesses release the GIL).
+        def work(idx_st_tr):
+            idx, (st, tr) = idx_st_tr
+            tdir = os.path.join(tmpdir, str(idx))
+            os.makedirs(tdir, exist_ok=True)
+            return os.path.relpath(st, root)[:-3], run_one(
+                args, st, parse_trace(tr), tdir, args.cross)
+        if args.jobs > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=args.jobs) as ex:
+                outcomes = list(ex.map(work, enumerate(tests)))
+        else:
+            outcomes = [work(t) for t in enumerate(tests)]
+        for name, (status, detail) in outcomes:
             results[status].append((name, detail))
             if status == 'fail':
                 print('FAIL %s :: %s' % (name, detail))
