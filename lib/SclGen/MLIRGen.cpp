@@ -218,19 +218,28 @@ public:
     if (errorOccurred)
       return nullptr;
 
+    bool anyUnitError = false;
     for (const auto &unit : *moduleAST) {
       builder.clearInsertionPoint();
       llvm::SmallVector<mlir::Operation *, 4> pushed;
+      bool errBefore = errorOccurred;
       if (auto *udt = llvm::dyn_cast<UserDefinedTypeAST>(unit.get())) {
-        if (failed(mlirGen(udt)) || errorOccurred)
-          return nullptr;
+        if (failed(mlirGen(udt)))
+          anyUnitError = true;
         continue;
       }
       if (unit->getKind() == UnitAST::Unit_Configuration)
         continue; // emitted in the pre-pass (global DB must exist early)
       auto func = mlirGen(unit.get());
-      if (!func || errorOccurred)
-        return nullptr;
+      if (!func || (errorOccurred && !errBefore)) {
+        // Don't stop at the first failing POU: keep generating the rest so
+        // one compile reports errors in every unit (LSP-style). The module
+        // is discarded below because errorOccurred is set.
+        anyUnitError = true;
+        extraOps.clear();
+        pendingMethods.clear();
+        continue;
+      }
       // A forward declaration arriving AFTER the real definition returns
       // the already-linked definition op — don't link it into the module
       // a second time (that corrupts the block).
@@ -249,19 +258,27 @@ public:
         // main loop does for units) so the push_back below does not link it
         // into the module twice.
         builder.clearInsertionPoint();
+        bool mErrBefore = errorOccurred;
         auto fn = mlirGenFunctionLike(pm.second->getIdentifier(),
                                       getType(pm.second->getType()),
                                       pm.second->getDeclarations(),
                                       pm.second->getCode(),
                                       loc(pm.second->loc()), pm.first);
-        if (!fn || errorOccurred)
-          return nullptr;
+        if (!fn || (errorOccurred && !mErrBefore)) {
+          anyUnitError = true;
+          continue;
+        }
         theModule.push_back(fn);
         pushed.push_back(fn);
       }
       pendingMethods.clear();
       recordOps(unit.get(), pushed);
     }
+
+    // Any unit-level error invalidates the whole module (it is never run or
+    // cached), but by now every unit has been visited and reported.
+    if (anyUnitError || errorOccurred)
+      return nullptr;
 
     // Verify the module after we have finished constructing it, this will check
     // the structural properties of the IR and invoke any specific verifiers we
@@ -1499,12 +1516,16 @@ private:
     }
     // ScopedHashTableScope<StringRef, mlir::Value> var_scope(symbolTable);
 
+    bool anyFailed = false;
     for (auto &instr : code->getInstructions()) {
-      // Generic expression dispatch codegen.
+      // Generic expression dispatch codegen. On error, keep going with the
+      // next instruction so that one pass reports every bad statement (this
+      // is what an LSP client wants while the user is typing); the enclosing
+      // unit still fails overall.
       if (failed(mlirGen(instr.get())))
-        return mlir::failure();
+        anyFailed = true;
     }
-    return mlir::success();
+    return anyFailed ? mlir::failure() : mlir::success();
   }
 
   /// Codegen an instruction.
