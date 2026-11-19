@@ -489,6 +489,9 @@ private:
     if (lexer.getCurToken() == tok_begin)
       lexer.consume(tok_begin);
     auto assignments = ParseCodeSection();
+    if (!assignments)
+      return parseError<DataBlockAST>("initializer code section",
+                                      "in data block");
 
     auto unit = std::make_unique<DataBlockAST>(
         std::move(identifier), std::move(loc), std::move(attrs),
@@ -830,7 +833,8 @@ private:
     bool isConstant = false;
     switch (lexer.getCurToken()) {
     default:
-      assert(false);
+      return parseError<VariableDeclarationSubsectionAST>(
+          "VAR section", "in declaration subsection");
     case tok_var:
       kind = VariableDeclarationSubsectionAST::Var;
       lexer.consume(tok_var);
@@ -955,6 +959,9 @@ private:
       lexer.consume(tok_assignment);
 
       init = ParseExpression(pred_list);
+      if (!init || !*init)
+        return parseError<VariableDeclarationAST>("initializer expression",
+                                                  "after ':='");
     }
 
     if (lexer.getCurToken() != tok_semicolon)
@@ -1284,6 +1291,9 @@ private:
       lexer.consume(tok_assignment);
 
       init = ParseExpression(pred_list);
+      if (!init || !*init)
+        return parseError<ComponentDeclarationAST>("initializer expression",
+                                                  "after ':='");
     }
 
     if (lexer.getCurToken() != tok_semicolon)
@@ -1792,7 +1802,8 @@ private:
 
     switch (lexer.getCurToken()) {
     default:
-      assert(false);
+      return parseError<ExpressionAST>("TRUE or FALSE",
+                                        "in boolean literal");
     case tok_false:
       lexer.consume(tok_false);
       return std::make_unique<IntegerConstantAST>(std::move(loc), 0, tok_bool);
@@ -2096,7 +2107,7 @@ private:
 
     auto condition = ParseExpression();
     if (!condition)
-      parseError<IfThenAST>("expression", "for if condition");
+      return parseError<IfThenAST>("expression", "for if condition");
 
     if (lexer.getCurToken() != tok_then)
       return parseError<IfThenAST>(tok_then, "for the conditional code block");
@@ -2104,7 +2115,7 @@ private:
 
     auto code = ParseCodeSection();
     if (!code)
-      parseError<IfThenAST>("code block", "for if statement");
+      return parseError<IfThenAST>("code block", "for if statement");
 
     return std::make_unique<IfThenAST>(std::move(loc), std::move(condition),
                                        std::move(code));
@@ -2135,7 +2146,7 @@ private:
         lexer.consume(tok_colon);
 
       elseBlock = ParseCodeSection();
-      if (!elseBlock)
+      if (!elseBlock || !*elseBlock)
         return parseError<IfThenElseAST>("code section", "as else block");
     }
 
@@ -2180,7 +2191,7 @@ private:
         lexer.consume(tok_colon);
 
       elseBlock = ParseCodeSection();
-      if (!elseBlock)
+      if (!elseBlock || !*elseBlock)
         return parseError<CaseOfAST>("code section", "as else block");
     }
 

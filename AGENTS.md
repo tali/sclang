@@ -200,6 +200,24 @@ Assertions are OFF because the system libc++ rejects `_LIBCPP_ENABLE_HARDENED_MO
 cmake is at `/opt/homebrew/bin/cmake`. Host quirks: BSD `sed` needs `sed -i ''` and
 has no `\b` — use python3 for regex edits.
 
+## Robustness against invalid input
+
+- Asserts are OFF in build.23 (NDEBUG), so `assert(false)`/`llvm_unreachable`
+  compile to UB — every such site reachable from invalid input was replaced
+  with a real error return (lexer token printer, getOperatorTok, number/time
+  literal states, parser defaults, MLIRGen defaults, dialect type printers,
+  S5Time scale). Rule: invalid input must produce a diagnostic and a clean
+  non-zero exit, never a signal.
+- Parser bugs fixed by fuzzing: missing `return` after parseError in
+  ParseIfThen/DataBlock; `std::optional<std::unique_ptr<T>>` holding a null
+  pointee (checked with `!x || !*x` now); MLIRGen null-value guards
+  (indexed access, whole-array assign rhs, positional call args, FOR
+  bounds) and null/non-address base in mlirGenElement/mlirGen(InstructionAST).
+- `test/conformance/fuzz_invalid.py` mutates the test corpus (byte flips,
+  deletions, insertions, truncation, pure garbage) and asserts the tools
+  never die by signal — 4000 mutations, 0 signals after the fixes (was 35
+  crashes/400 before). See docs/testing.md.
+
 ## Performance
 
 - Compile-time profiling: both tools register MLIR's default timing manager,

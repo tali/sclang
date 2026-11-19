@@ -296,7 +296,10 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &s, Token token) {
   case tok_error_time:
     return s << "<error time>";
   }
-  assert(false);
+  // Any byte value is a valid Token (single-char tokens are their ASCII
+  // value), so print unknown ones instead of trapping — invalid input must
+  // produce a diagnostic, never UB (asserts are off in release builds).
+  return s << "<token " << (int)token << ">";
 }
 
 } // namespace sclang

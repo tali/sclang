@@ -259,7 +259,8 @@ unsigned ConstantS5TimeOp::getTimeMS() {
   case 0x2000: return 1000 * t;
   case 0x3000: return 10000 * t;
   }
-  assert(false);
+  return 0; // unreachable: scale is masked to 0x3000, but never trap on
+            // crafted attribute values (asserts are off in release builds)
 }
 
 mlir::ParseResult ConstantS5TimeOp::parse(mlir::OpAsmParser &parser,

@@ -58,7 +58,7 @@ arith::FastMathFlags fpFastMathFlags() {
   case FpMode::Fast:
     return arith::FastMathFlags::fast;
   }
-  llvm_unreachable("bad fp-mode");
+  return arith::FastMathFlags::contract; // defensive: default fp-mode
 }
 } // namespace sclang
 } // namespace mlir

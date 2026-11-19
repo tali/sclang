@@ -996,7 +996,7 @@ private:
         // the configuration's global DB via externalVars (ADR 004).
         return mlir::success();
       }
-      assert(false);
+      return mlir::failure(); // unknown declaration subsection
     })
     .Case<ConstantDeclarationSubsectionAST>([&](auto decl) {
       return mlirGen(decl);
@@ -1452,6 +1452,10 @@ private:
 
   /// Codegen a code section, return failure if one statement hit an error.
   mlir::LogicalResult mlirGen(const CodeSectionAST *code) {
+    if (!code) { // defensive: parser must not produce null code sections
+      emitError(builder.getUnknownLoc()) << "internal error: null code section";
+      return mlir::failure();
+    }
     // ScopedHashTableScope<StringRef, mlir::Value> var_scope(symbolTable);
 
     for (auto &instr : code->getInstructions()) {
@@ -1464,6 +1468,10 @@ private:
 
   /// Codegen an instruction.
   mlir::LogicalResult mlirGen(const InstructionAST *instr) {
+    if (!instr) { // defensive: parser must not produce null instructions
+      emitError(builder.getUnknownLoc()) << "internal error: null instruction";
+      return mlir::failure();
+    }
     auto location = loc(instr->loc());
 
     // SPEC[SCL] IEC 61131-3 ST statement list: assignment, call, IF/ELSIF/ELSE,
@@ -1830,6 +1838,8 @@ private:
       // a string builtin call returning a temp buffer address)
       if (!rhsArr && rhsAddr)
         rhsArr = arrayTypeOfAddress(rhsAddr);
+      if (rhsArr && !rhsAddr)
+        return mlir::failure(); // rhs failed to codegen (error already emitted)
       if (!rhsArr) {
         // non-array rhs into an array/string lhs (e.g. a scalar): zero-fill,
         // with a warning
@@ -2252,7 +2262,7 @@ private:
 
     switch (expr->getType()) {
     default:
-      assert(false);
+      return nullptr; // not a date/time literal
     case tok_date:
       if (year >= 1990 && year <= 2168 &&
           month >= 1 && month <= 12 &&
@@ -2449,9 +2459,9 @@ private:
 
   mlir::Value mlirGenElement(mlir::Location location,
                              mlir::Value address, StringRef name) {
-    if (!address) {
-      emitError(location) << "internal: null base address for element access '"
-                          << name << "'";
+    if (!address || !llvm::isa<AddressType>(address.getType())) {
+      emitError(location) << "base of element access '" << name
+                          << "' is not an address";
       return nullptr;
     }
     mlir::Type baseType = addrElemTy(address);
@@ -2696,7 +2706,9 @@ private:
     auto intTy = getType(tok_int);
     for (const auto & index : expr->getIndices()) {
       mlir::Value idx = mlirGenRValue(index.get());
-      if (idx && idx.getType() != intTy)
+      if (!idx)
+        return nullptr;
+      if (idx.getType() != intTy)
         idx = builder.create<DialectCastOp>(location, intTy, idx);
       indices.push_back(idx);
     }
@@ -3171,7 +3183,10 @@ private:
                     "positional argument after named argument");
           return mlir::failure();
         }
-        fNN(mlirGenRValue(arg.get()));
+        mlir::Value argVal = mlirGenRValue(arg.get());
+        if (!argVal)
+          return mlir::failure();
+        fNN(argVal);
       }
     }
     return mlir::success();
@@ -5440,7 +5455,7 @@ private:
   mlir::Type getType(Token token) {
     switch (token) {
     default:
-      assert(false);
+      return mlir::Type(); // unknown type token
     case tok_bool:
       return LogicalType::get(builder.getContext(), 1);
     case tok_byte:
@@ -5724,9 +5739,14 @@ private:
 
     mlir::Value var = mlirGen(assign->getLhs());
     mlir::Value start = mlirGenRValue(assign->getRhs());
+    if (!var || !start)
+      return mlir::failure();
     mlir::Value incr = nullptr;
-    if (forDo->getIncrement().has_value())
+    if (forDo->getIncrement().has_value()) {
       incr = mlirGenRValue(forDo->getIncrement().value());
+      if (!incr)
+        return mlir::failure();
+    }
 
     // The TO bound lives in a temp cell so it can be re-evaluated at the end
     // of every iteration (ed.3 7.3.3.4.2: modifying the final value inside the

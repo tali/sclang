@@ -766,7 +766,7 @@ private:
         return tok_error_real;
       return tok_real_number_literal;
     }
-    assert(false);
+    return tok_error_integer; // defensive: unknown literal state
   }
 
   // MARK: strings and symbols
@@ -970,7 +970,7 @@ private:
         return tok_error_time; // fractions only allowed on s/ms
       switch (pos) {
       case None:
-        assert(false);
+        return tok_error_time; // defensive: no unit parsed
       case Day:
         dayVal = num;
         break;
@@ -998,7 +998,7 @@ private:
   Token getOperatorTok() {
     switch (lastChar) {
     default:
-      assert(false);
+      return tok_error_symbol; // defensive: not an operator start
     case '.':
       lastChar = Token(getNextChar());
       if (lastChar == '.') {

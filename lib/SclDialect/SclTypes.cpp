@@ -615,7 +615,7 @@ llvm::StringRef DirectType::areaName(DirectArea area) {
   case DirectArea::Counter:
     return "C";
   }
-  llvm_unreachable("unknown DirectArea");
+  return "?"; // defensive: unknown area
 }
 
 std::optional<DirectArea> DirectType::areaFromName(llvm::StringRef name) {
@@ -742,7 +742,8 @@ void SclDialect::printType(mlir::Type type,
       .Case<IntegerType>([&](IntegerType type) {
         switch (type.getWidth()) {
         default:
-          llvm_unreachable("Unhandled IntegerType bit width");
+          printer << "int" << type.getWidth(); // non-standard width
+          return;
         case 8:
           printer << "char";
           break;
@@ -777,7 +778,7 @@ void SclDialect::printType(mlir::Type type,
       .Case<S5TimeType>([&](S5TimeType) { printer << "s5time"; })
       .Case<TimeType>([&](TimeType) { printer << "time"; })
       .Case<TimeOfDayType>([&](TimeOfDayType) { printer << "time_of_day"; })
-      .Default([&](Type) { llvm_unreachable("Unhandled SCL type"); });
+      .Default([&](Type t) { printer << t; }); // fallback: default repr
 }
 
 // MARK: SclDialect
