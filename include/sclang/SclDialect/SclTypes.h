@@ -24,6 +24,7 @@
 
 #include "mlir/IR/Dialect.h"
 
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringRef.h"
 
 #include <optional>
@@ -51,6 +52,16 @@ public:
   /// *must* be at least one element type.
   static AddressType get(mlir::Type elementType);
 
+  /// Verifier hook (called by TypeBase::getChecked): the element type must
+  /// be present.
+  static mlir::LogicalResult
+  verifyInvariants(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+                   mlir::Type elementType) {
+    if (!elementType)
+      return emitError() << "scl.address requires a non-null element type";
+    return mlir::success();
+  }
+
   /// Returns the element types of this struct type.
   mlir::Type getElementType();
 };
@@ -68,6 +79,22 @@ public:
   /// type.
   static ArrayType get(llvm::ArrayRef<DimTy> dimensions,
                        mlir::Type elementType);
+
+  /// Verifier hook: at least one dimension, lower <= upper per dimension,
+  /// non-null element type.
+  static mlir::LogicalResult
+  verifyInvariants(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+                   llvm::ArrayRef<DimTy> dimensions, mlir::Type elementType) {
+    if (dimensions.empty())
+      return emitError() << "scl.array requires at least one dimension";
+    for (auto [lo, hi] : dimensions)
+      if (lo > hi)
+        return emitError() << "scl.array dimension [" << lo << ".." << hi
+                           << "] has lower > upper";
+    if (!elementType)
+      return emitError() << "scl.array requires a non-null element type";
+    return mlir::success();
+  }
 
   /// Returns the dimensions of this array type.
   llvm::ArrayRef<DimTy> getDimensions();
@@ -98,6 +125,15 @@ public:
   /// Create an instance of `InstanceDbType` given a reference to the function block.
   static InstanceDbType get(mlir::MLIRContext *ctx, StringRef fbSymbol);
 
+  /// Verifier hook: the FB symbol must be non-empty.
+  static mlir::LogicalResult
+  verifyInvariants(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+                   StringRef fbSymbol) {
+    if (fbSymbol.empty())
+      return emitError() << "scl.idb requires a non-empty FB symbol";
+    return mlir::success();
+  }
+
   StringRef getFbSymbol();
 };
 
@@ -108,6 +144,16 @@ public:
   static constexpr ::llvm::StringLiteral name = "scl.int";
 
   static IntegerType get(mlir::MLIRContext *ctx, int width);
+
+  /// Verifier hook: only the SCL integer widths are valid.
+  static mlir::LogicalResult
+  verifyInvariants(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+                   int width) {
+    if (width != 1 && width != 8 && width != 16 && width != 32 && width != 64)
+      return emitError() << "invalid scl integer width " << width
+                         << " (must be 1, 8, 16, 32 or 64)";
+    return mlir::success();
+  }
 
   /// Return the bit width of this type.
   int getWidth();
@@ -120,6 +166,17 @@ public:
   static constexpr ::llvm::StringLiteral name = "scl.bool";
 
   static LogicalType get(mlir::MLIRContext *ctx, int width);
+
+  /// Verifier hook: only the SCL logical widths are valid (bool/byte/word/
+  /// dword and the 64-bit direct-load width).
+  static mlir::LogicalResult
+  verifyInvariants(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+                   int width) {
+    if (width != 1 && width != 8 && width != 16 && width != 32 && width != 64)
+      return emitError() << "invalid scl logical width " << width
+                         << " (must be 1, 8, 16, 32 or 64)";
+    return mlir::success();
+  }
 
   /// Return the bit width of this type.
   int getWidth();
@@ -156,6 +213,27 @@ public:
   /// *must* be at least one element type.
   static StructType get(llvm::ArrayRef<mlir::StringAttr> elementNames,
                         llvm::ArrayRef<mlir::Type> elementTypes);
+
+  /// Verifier hook: names/types counts match, at least one element, unique
+  /// names, non-null types.
+  static mlir::LogicalResult
+  verifyInvariants(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+                   llvm::ArrayRef<mlir::StringAttr> elementNames,
+                   llvm::ArrayRef<mlir::Type> elementTypes) {
+    if (elementNames.empty())
+      return emitError() << "scl.struct requires at least one element";
+    if (elementNames.size() != elementTypes.size())
+      return emitError() << "scl.struct name/type count mismatch";
+    llvm::SmallSet<llvm::StringRef, 8> seen;
+    for (auto name : elementNames) {
+      if (!seen.insert(name.getValue()).second)
+        return emitError() << "duplicate scl.struct member '" << name << "'";
+    }
+    for (auto t : elementTypes)
+      if (!t)
+        return emitError() << "scl.struct member with null type";
+    return mlir::success();
+  }
 
   /// Returns the elements of this struct type.
   llvm::ArrayRef<mlir::StringAttr> getElementNames();
@@ -209,6 +287,18 @@ enum class DirectArea : uint8_t {
   Counter = 'C',   // %C / AWL Z
 };
 
+namespace detail {
+/// Uniquing key of DirectType (defined here so verifyInvariants can name it).
+struct DirectTypeKey {
+  DirectArea area;
+  int32_t db, byte, bit, width;
+  bool operator==(const DirectTypeKey &key) const {
+    return area == key.area && db == key.db && byte == key.byte &&
+           bit == key.bit && width == key.width;
+  }
+};
+} // namespace detail
+
 /// This class defines the SCL type of a directly-represented variable, e.g.
 /// `%I0.0`, `%MW10` or `%DB1.DBW4`. Printed as
 /// `!scl.direct<M, 0, 10, 3, 1>` = area, db, byte, bit, width-in-bits.
@@ -224,6 +314,12 @@ public:
   /// (1 = bit, 8 = byte, 16 = word, 32 = dword).
   static DirectType get(mlir::MLIRContext *ctx, DirectArea area, int32_t db,
                         int32_t byte, int32_t bit, int32_t width);
+
+  /// Verifier hook (args match the KeyTy passed to Base::get): sane
+  /// db/byte/bit offsets and a valid access width.
+  static mlir::LogicalResult
+  verifyInvariants(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+                   detail::DirectTypeKey key);
 
   DirectArea getArea() const;
   int32_t getDb() const;

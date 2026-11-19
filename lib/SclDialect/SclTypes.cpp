@@ -231,10 +231,19 @@ mlir::Type parseArrayType(mlir::DialectAsmParser &parser) {
         parser.parseInteger(high))
       return Type();
 
+    if (low > high) {
+      parser.emitError(parser.getNameLoc(),
+                       "array dimension lower > upper");
+      return Type();
+    }
     dimensions.push_back(std::make_pair(low, high));
 
     // Parse the optional: `,`
   } while (succeeded(parser.parseOptionalComma()));
+  if (dimensions.empty()) {
+    parser.emitError(parser.getNameLoc(), "array requires at least one dimension");
+    return Type();
+  }
 
   // Parse: `>`
   if (parser.parseGreater())
@@ -390,6 +399,19 @@ mlir::Type parseStructType(mlir::DialectAsmParser &parser) {
   // Parse: `>`
   if (parser.parseGreater())
     return Type();
+  if (elementNames.empty()) {
+    parser.emitError(parser.getNameLoc(), "struct requires at least one element");
+    return Type();
+  }
+  {
+    llvm::SmallSet<llvm::StringRef, 8> seen;
+    for (auto n : elementNames)
+      if (!seen.insert(n.getValue()).second) {
+        parser.emitError(parser.getNameLoc(),
+                         "duplicate struct member '") << n.getValue() << "'";
+        return Type();
+      }
+  }
   return StructType::get(elementNames, elementTypes);
 }
 
@@ -545,14 +567,7 @@ namespace detail {
 struct DirectTypeStorage : public mlir::TypeStorage {
   /// The `KeyTy` is a required type that provides an interface for the storage
   /// instance, used to unique the type structurally.
-  struct KeyTy {
-    DirectArea area;
-    int32_t db, byte, bit, width;
-    bool operator==(const KeyTy &key) const {
-      return area == key.area && db == key.db && byte == key.byte &&
-             bit == key.bit && width == key.width;
-    }
-  };
+  using KeyTy = DirectTypeKey;
 
   DirectTypeStorage(DirectArea area, int32_t db, int32_t byte, int32_t bit,
                     int32_t width)
@@ -576,6 +591,21 @@ struct DirectTypeStorage : public mlir::TypeStorage {
 } // end namespace detail
 } // end namespace scl
 } // end namespace mlir
+
+mlir::LogicalResult DirectType::verifyInvariants(
+    llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+    detail::DirectTypeKey key) {
+  if (key.db < 0)
+    return emitError() << "scl.direct db must be >= 0";
+  if (key.byte < 0)
+    return emitError() << "scl.direct byte offset must be >= 0";
+  if (key.bit < 0 || key.bit > 7)
+    return emitError() << "scl.direct bit must be in 0..7";
+  if (key.width != 1 && key.width != 8 && key.width != 16 && key.width != 32 &&
+      key.width != 64)
+    return emitError() << "scl.direct width must be 1, 8, 16, 32 or 64 bits";
+  return mlir::success();
+}
 
 DirectType DirectType::get(mlir::MLIRContext *ctx, DirectArea area, int32_t db,
                            int32_t byte, int32_t bit, int32_t width) {
@@ -666,6 +696,11 @@ mlir::Type parseDirectType(mlir::DialectAsmParser &parser) {
   if (width != 1 && width != 8 && width != 16 && width != 32 && width != 64) {
     parser.emitError(parser.getNameLoc(),
                      "direct width must be 1, 8, 16, 32 or 64 bits");
+    return Type();
+  }
+  if (db < 0 || byte < 0 || bit < 0 || bit > 7) {
+    parser.emitError(parser.getNameLoc(),
+                     "direct db/byte must be >= 0 and bit in 0..7");
     return Type();
   }
   return DirectType::get(parser.getBuilder().getContext(), *area, db, byte, bit,
