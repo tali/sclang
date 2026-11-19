@@ -916,6 +916,9 @@ static void bindRuntimeSymbols(mlir::ExecutionEngine &engine) {
     add("scl_rt_realmath_f", (void *)&scl_rt_realmath_f);
     add("scl_rt_stw_div_i", (void *)&scl_rt_stw_div_i);
     add("scl_rt_stw_div_f", (void *)&scl_rt_stw_div_f);
+    add("scl_rt_debug_print", (void *)&scl_rt_debug_print);
+    add("scl_rt_debug_print_i", (void *)&scl_rt_debug_print_i);
+    add("scl_rt_debug_print_r", (void *)&scl_rt_debug_print_r);
     add("scl_rt_f2i", (void *)&scl_rt_f2i);
     add("scl_rt_ob_start", (void *)&scl_rt_ob_start);
     add("scl_rt_feature", (void *)&scl_rt_feature);

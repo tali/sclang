@@ -72,7 +72,14 @@ void SclToStdLoweringPass::runOnOperation() {
   target.addLegalDialect<func::FuncDialect>();
   target.addLegalDialect<cf::ControlFlowDialect>();
   target.addLegalOp<func::FuncOp>();
-  target.addLegalOp<scl::DebugPrintOp>();
+  // Legal only once its optional value operand is a std type (converted by
+  // DebugPrintOpConversion); the LLVM-stage lowering then emits the runtime
+  // call (scl_rt_debug_print*).
+  target.addDynamicallyLegalOp<scl::DebugPrintOp>(
+      [](scl::DebugPrintOp op) {
+        return !op.getValue() ||
+               !llvm::isa<scl::SclDialect>(op.getValue().getType().getDialect());
+      });
 
   // We want to lower all of SCL except for control flow:
   target.addIllegalDialect<scl::SclDialect>();

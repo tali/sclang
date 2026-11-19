@@ -222,6 +222,10 @@ public:
 
   /// The source-language mode (ADR 004).
   LangMode getMode() const { return mode; }
+  /// The file name attached to locations (may be empty for in-memory text).
+  std::string getFilename() const {
+    return lastLocation.file ? *lastLocation.file : std::string();
+  }
   bool iecMode() const { return mode == LangMode::IEC; }
   bool s7Mode() const { return mode == LangMode::S7; }
 

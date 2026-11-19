@@ -962,12 +962,19 @@ public:
 
 class DebugPrintAST : public InstructionAST {
   std::string msg;
+  // Set for the value form `// DEBUG PRINT <expr>;` — the expression whose
+  // value is printed at runtime (harmonized with __ASSERT: both flow through
+  // the runtime C ABI with the source line as id).
+  std::unique_ptr<ExpressionAST> expr;
 
 public:
-  DebugPrintAST(Location loc, std::string msg)
-      : InstructionAST(std::move(loc), Instr_DebugPrint), msg(std::move(msg)) {}
+  DebugPrintAST(Location loc, std::string msg,
+                std::unique_ptr<ExpressionAST> expr = nullptr)
+      : InstructionAST(std::move(loc), Instr_DebugPrint), msg(std::move(msg)),
+        expr(std::move(expr)) {}
 
   llvm::StringRef getMsg() const { return msg; }
+  const ExpressionAST *getExpr() const { return expr.get(); }
 
   /// LLVM style RTTI
   static bool classof(const InstructionAST *i) {

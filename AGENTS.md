@@ -429,6 +429,15 @@ has no `\b` — use python3 for regex edits.
   scl_rt_assert_cmp[_r], Runtime ABI v4; malformed assert forms skip the
   line). sclang driver exits 2 when scl_rt_assert_failures() > 0 after the
   cycle loop.
+- Debug prints: `// DEBUG PRINT <text>` (message form) and
+  `// DEBUG PRINT <expr>;` (value form, trailing `;` marks an expression)
+  both lower `scl.debug.print` through the runtime C ABI v14 vtable
+  (`scl_rt_debug_print[_i|_r]`, source line as id — same channel as
+  __ASSERT). Message form prints `%s\n`; value form prints
+  `line %u: <expr> = <value>` (i64/f64; BOOL zero-extends to 0/1). The
+  value must be numeric/bool — strings/arrays are a compile-time error.
+  Tests: test/SclGen/MLIR/debugprint.scl (IR + round-trip),
+  test/sclang/jit_debugprint.scl (JIT output).
   Current: AWL 116/116 (100%), SCL single 15/15, SCL per-project 17/17,
   JIT smoke 103/105 (98%), oracle (__ASSERT value-level, OB1 + bare
   instruction files) 70/71 (99%). Known-open oracle failure:

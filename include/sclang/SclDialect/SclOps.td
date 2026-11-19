@@ -690,9 +690,17 @@ def UnaryMinusOp : UnaryArithmeticOp<"negate"> {
 //
 
 def DebugPrintOp : SclOp<"debug.print"> {
-  let summary = "debug print";
-  let arguments = (ins StrAttr:$msg);
-  let assemblyFormat = "attr-dict $msg";
+  let summary = "debug print (message, or value form with $value)";
+  let description = [{
+    `// DEBUG PRINT <text>` prints a static message; the value form
+    `// DEBUG PRINT <expr>;` additionally carries the expression's value,
+    printed at runtime through the runtime C ABI (scl_rt_debug_print*) —
+    the same channel as the awlsim-style __ASSERT oracles.
+  }];
+  let arguments = (ins StrAttr:$msg, Optional<AnyType>:$value);
+  // The `=` literal anchors the optional group: without it, a following SSA
+  // name on the next line would be misparsed as the optional $value operand.
+  let assemblyFormat = "$msg (`=` $value^ `:` type($value))? attr-dict";
 }
 
 #endif // SCL_OPS

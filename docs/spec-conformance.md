@@ -153,8 +153,8 @@ plus the lit tests under `test/` and the external corpus tests listed in
 | AWL | Siemens AWL manual system functions SFC/SFB -> scl_rt_sfc/scl_rt_sfb (runtime-staged params in the marker area) | full | [lib/Runtime/SimRuntime.cpp:1290](../lib/Runtime/SimRuntime.cpp#L1290) |
 | AWL | Siemens AWL manual status word (STW) cleared at OB entry (awlsim statusWord.reset) -> scl_rt_ob_start | full | [lib/Runtime/SimRuntime.cpp:2031](../lib/Runtime/SimRuntime.cpp#L2031) |
 | AWL | awlsim __FEATURE t [, v] -> scl_rt_feature (nrAccus, OB-temp presets) | full | [lib/Runtime/SimRuntime.cpp:2070](../lib/Runtime/SimRuntime.cpp#L2070) |
-| ST | IEC 61131-3 ST STRING outputs observed by trace tests: the | full | [lib/Runtime/SimRuntime.cpp:2143](../lib/Runtime/SimRuntime.cpp#L2143) |
-| ST | IEC 61131-3 LREAL (binary64) unary math functions (ed.3 table 33): | full | [lib/Runtime/SimRuntime.cpp:2173](../lib/Runtime/SimRuntime.cpp#L2173) |
+| ST | IEC 61131-3 ST STRING outputs observed by trace tests: the | full | [lib/Runtime/SimRuntime.cpp:2171](../lib/Runtime/SimRuntime.cpp#L2171) |
+| ST | IEC 61131-3 LREAL (binary64) unary math functions (ed.3 table 33): | full | [lib/Runtime/SimRuntime.cpp:2201](../lib/Runtime/SimRuntime.cpp#L2201) |
 | AWL | IEC 61131-3 STL memory areas P/Q/M/DB/DI/L/T/C and direct operands | full | [test/AwlGen/areas.awl:2](../test/AwlGen/areas.awl#L2) |
 | AWL | awlsim __ASSERT oracle directives -> awl.assert -> scl_rt_assert_cmp | full | [test/AwlGen/assert.awl:2](../test/AwlGen/assert.awl#L2) |
 | AWL | IEC 61131-3 STL block calls incl. FB instance DBs and parameter passing | full | [test/AwlGen/call_fb.awl:2](../test/AwlGen/call_fb.awl#L2) |

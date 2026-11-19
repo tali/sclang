@@ -6197,7 +6197,25 @@ private:
   mlir::LogicalResult mlirGen(const DebugPrintAST *debugPrint) {
     auto location = loc(debugPrint->loc());
 
-    builder.create<DebugPrintOp>(location, debugPrint->getMsg());
+    // Value form `// DEBUG PRINT <expr>;`: carry the expression's value so
+    // the LLVM-stage lowering can print it via the runtime C ABI.
+    mlir::Value value;
+    if (const ExpressionAST *expr = debugPrint->getExpr()) {
+      value = mlirGenRValue(expr); // dereference variable addresses to values
+      if (!value)
+        return mlir::failure();
+      // The value form prints through the runtime C ABI as i64/f64, so only
+      // numeric and bool values are meaningful; reject pointers/memrefs
+      // (e.g. STRING) with a proper diagnostic instead of a late verifier
+      // error in the LLVM lowering.
+      mlir::Type vt = value.getType();
+      bool numeric = llvm::isa<IntegerType, RealType, LrealType, LogicalType,
+                               mlir::IntegerType, mlir::FloatType>(vt);
+      if (!numeric)
+        return emitError(loc(debugPrint->loc()))
+               << "DEBUG PRINT value must be numeric or boolean, not " << vt;
+    }
+    builder.create<DebugPrintOp>(location, debugPrint->getMsg(), value);
     return mlir::success();
   }
 

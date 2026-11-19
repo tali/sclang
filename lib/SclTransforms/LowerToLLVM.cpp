@@ -41,7 +41,10 @@ using namespace mlir;
 
 // MARK: DebugPrintOpLowering
 
-/// Lowers `scl.debug.print` to a call to `printf`
+/// Lowers `scl.debug.print` to a call into the runtime C ABI
+/// (scl_rt_debug_print / _i / _r, ABI v14) — the same channel the
+/// awlsim-style __ASSERT oracles use, so host runtimes can capture debug
+/// output via the vtable and AOT objects need no printf linkage.
 struct DebugPrintOpLowering : public OpConversionPattern<scl::DebugPrintOp> {
   DebugPrintOpLowering(MLIRContext *context, SymbolTable &symbolTable) :
     OpConversionPattern<scl::DebugPrintOp>::OpConversionPattern(context),
@@ -52,24 +55,52 @@ struct DebugPrintOpLowering : public OpConversionPattern<scl::DebugPrintOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
     ModuleOp parentModule = op->getParentOfType<ModuleOp>();
+    auto *context = parentModule.getContext();
 
-    // Get a symbol reference to the printf function, inserting it if necessary.
-    auto printfRef = getOrInsertPrintf(rewriter, parentModule);
-    Type printfRetType = rewriter.getIntegerType(32);
-
-    Value formatSpecifierCst = getOrCreateGlobalString(loc, rewriter,
-        "_debug_print_fmt", StringRef("%s\n\0", 4), parentModule, /*reuse=*/true);
+    // Source line as the runtime id (same convention as __ASSERT).
+    uint32_t id = 0;
+    if (auto flc = llvm::dyn_cast<FileLineColLoc>(loc))
+      id = flc.getLine();
 
     std::string msg = std::string(op.getMsg());
-    // Append `\0` to follow C style string given that LLVM::createGlobalString()
-    // won't handle this directly for us.
-    msg.push_back('\0');
-    Value msgCst = getOrCreateGlobalString(loc, rewriter, "_debug_msg", msg,
-        parentModule, /*reuse=*/false);
+    msg.push_back('\0'); // C string
+    Value msgPtr = getOrCreateGlobalString(loc, rewriter, "_debug_msg", msg,
+                                           parentModule, /*reuse=*/false);
+    auto i32Ty = IntegerType::get(context, 32);
+    auto i64Ty = IntegerType::get(context, 64);
+    auto f64Ty = rewriter.getF64Type();
+    auto ptrTy = LLVM::LLVMPointerType::get(context);
+    Value idC = rewriter.create<LLVM::ConstantOp>(
+        loc, i32Ty, rewriter.getI32IntegerAttr(id));
 
-    // Generate call to `printf`.
-    SmallVector<Value, 2> printfArgs = {{ formatSpecifierCst, msgCst }};
-    rewriter.create<func::CallOp>(loc, printfRef, printfRetType, printfArgs);
+    if (!adaptor.getValue()) {
+      auto fn = getOrInsertRtFn(rewriter, parentModule, "scl_rt_debug_print",
+                                {i32Ty, ptrTy});
+      rewriter.create<func::CallOp>(loc, fn, TypeRange{},
+                                    ValueRange{idC, msgPtr});
+    } else {
+      Value v = adaptor.getValue();
+      if (llvm::isa<FloatType>(v.getType())) {
+        if (v.getType() != f64Ty)
+          v = rewriter.create<arith::ExtFOp>(loc, f64Ty, v);
+        auto fn = getOrInsertRtFn(rewriter, parentModule, "scl_rt_debug_print_r",
+                                  {i32Ty, ptrTy, f64Ty});
+        rewriter.create<func::CallOp>(loc, fn, TypeRange{},
+                                      ValueRange{idC, msgPtr, v});
+      } else {
+        // BOOL (i1) prints as 0/1, so zero-extend; wider ints sign-extend.
+        if (v.getType() != i64Ty) {
+          if (v.getType().isInteger(1))
+            v = rewriter.create<arith::ExtUIOp>(loc, i64Ty, v);
+          else
+            v = rewriter.create<arith::ExtSIOp>(loc, i64Ty, v);
+        }
+        auto fn = getOrInsertRtFn(rewriter, parentModule, "scl_rt_debug_print_i",
+                                  {i32Ty, ptrTy, i64Ty});
+        rewriter.create<func::CallOp>(loc, fn, TypeRange{},
+                                      ValueRange{idC, msgPtr, v});
+      }
+    }
 
     rewriter.eraseOp(op);
     return success();
@@ -78,26 +109,20 @@ struct DebugPrintOpLowering : public OpConversionPattern<scl::DebugPrintOp> {
 private:
   SymbolTable &symbolTable;
 
-  /// Return a symbol reference to the printf function, inserting it into the
-  /// module if necessary.
-  static FlatSymbolRefAttr getOrInsertPrintf(PatternRewriter &rewriter,
-                                             ModuleOp module) {
+  /// Return a symbol reference to a runtime C ABI function (void return),
+  /// inserting an LLVM func declaration into the module if necessary.
+  static FlatSymbolRefAttr getOrInsertRtFn(PatternRewriter &rewriter,
+                                           ModuleOp module, StringRef name,
+                                           ArrayRef<Type> paramTys) {
     auto *context = module.getContext();
-    if (module.lookupSymbol<LLVM::LLVMFuncOp>("printf"))
-      return SymbolRefAttr::get(context, "printf");
-
-    // Create a function declaration for printf, the signature is:
-    //   * `i32 (i8*, ...)`
-    auto llvmI32Ty = IntegerType::get(context, 32);
-    auto llvmI8PtrTy = LLVM::LLVMPointerType::get(context);
-    auto llvmFnType = LLVM::LLVMFunctionType::get(llvmI32Ty, llvmI8PtrTy,
-                                                  /*isVarArg=*/true);
-
-    // Insert the printf function into the body of the parent module.
+    if (module.lookupSymbol<LLVM::LLVMFuncOp>(name))
+      return SymbolRefAttr::get(context, name);
+    auto voidTy = LLVM::LLVMVoidType::get(context);
+    auto llvmFnType = LLVM::LLVMFunctionType::get(voidTy, paramTys);
     PatternRewriter::InsertionGuard insertGuard(rewriter);
     rewriter.setInsertionPointToStart(module.getBody());
-    rewriter.create<LLVM::LLVMFuncOp>(module.getLoc(), "printf", llvmFnType);
-    return SymbolRefAttr::get(context, "printf");
+    rewriter.create<LLVM::LLVMFuncOp>(module.getLoc(), name, llvmFnType);
+    return SymbolRefAttr::get(context, name);
   }
 
   /// Return a value representing an access into a global string with the given

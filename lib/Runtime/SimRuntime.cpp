@@ -2138,6 +2138,34 @@ void scl_rt_assert_cmp_r(uint32_t id, uint8_t op, double actual,
   }
 }
 
+void scl_rt_debug_print(uint32_t id, const char *msg) {
+  auto &s = state();
+  if (s.vtable && s.vtable->debug_print) {
+    s.vtable->debug_print(id, msg);
+    return;
+  }
+  (void)id;
+  fprintf(stdout, "%s\n", msg);
+}
+
+void scl_rt_debug_print_i(uint32_t id, const char *msg, int64_t value) {
+  auto &s = state();
+  if (s.vtable && s.vtable->debug_print_i) {
+    s.vtable->debug_print_i(id, msg, value);
+    return;
+  }
+  fprintf(stdout, "line %u: %s = %lld\n", id, msg, (long long)value);
+}
+
+void scl_rt_debug_print_r(uint32_t id, const char *msg, double value) {
+  auto &s = state();
+  if (s.vtable && s.vtable->debug_print_r) {
+    s.vtable->debug_print_r(id, msg, value);
+    return;
+  }
+  fprintf(stdout, "line %u: %s = %g\n", id, msg, value);
+}
+
 uint64_t scl_rt_assert_failures(void) { return state().assertFailures; }
 
 // SPEC[ST] IEC 61131-3 ST STRING outputs observed by trace tests: the

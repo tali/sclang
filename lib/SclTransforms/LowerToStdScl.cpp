@@ -197,6 +197,24 @@ struct DialectCastOpLowering : public OpConversionPattern<scl::DialectCastOp> {
 };
 
 
+// MARK: DebugPrintOpConversion
+
+// scl.debug.print stays until the LLVM lowering (it needs a char* for the
+// message); here we only convert its optional value operand to a std type,
+// so the LLVM-stage lowering sees i16/f32/... instead of !scl.* types.
+struct DebugPrintOpConversion
+    : public OpConversionPattern<scl::DebugPrintOp> {
+  using OpConversionPattern<scl::DebugPrintOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scl::DebugPrintOp op, scl::DebugPrintOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<scl::DebugPrintOp>(op, op.getMsgAttr(),
+                                                   adaptor.getValue());
+    return success();
+  }
+};
+
 // MARK: EndOpLowering
 
 struct EndOpLowering : public OpConversionPattern<scl::EndOp> {
@@ -1588,7 +1606,7 @@ void populateSclToStdPatterns(RewritePatternSet &patterns,
       ConstantDateAndTimeOpLowering, ConstantDateOpLowering,
       ConstantOpLowering, ConstantS5TimeOpLowering, ConstantTimeOfDayOpLowering,
       ConfigOpLowering, ConstantTimeOpLowering, DataBlockOpLowering,
-      DialectCastOpLowering,
+      DebugPrintOpConversion, DialectCastOpLowering,
       DivOpLowering, EndOpLowering, EqualLowering, ExpOpLowering,
       FunctionBlockOpLowering, FunctionOpLowering,
       GetDirectOpLowering, GetElementOpLowering, GetGlobalOpLowering,

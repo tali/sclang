@@ -2497,7 +2497,30 @@ private:
     std::string msg(lexer.getComment());
     lexer.consume(tok_debugprint);
 
-    return std::make_unique<DebugPrintAST>(std::move(loc), std::move(msg));
+    // Value form: `// DEBUG PRINT <expr>;` (trailing semicolon marks the
+    // text as an expression, not a message) — prints the expression's value
+    // at runtime via the same runtime C ABI channel as __ASSERT.
+    std::unique_ptr<ExpressionAST> expr;
+    std::string trimmed = msg;
+    while (!trimmed.empty() && isspace(trimmed.back()))
+      trimmed.pop_back();
+    if (!trimmed.empty() && trimmed.back() == ';') {
+      std::string exprText = trimmed.substr(0, trimmed.size() - 1);
+      LexerBuffer subLex(exprText.data(), exprText.data() + exprText.size(),
+                         lexer.getFilename(), lexer.getMode());
+      Parser sub(subLex);
+      sub.errorSink = errorSink;
+      subLex.getNextToken(); // prime the sub-lexer
+      expr = sub.ParseExpression();
+      if (!expr || sub.errorCount > 0) {
+        reportError("cannot parse DEBUG PRINT expression", "SCL1001");
+        expr = nullptr;
+      } else {
+        msg = exprText; // show the expression text as the label
+      }
+    }
+    return std::make_unique<DebugPrintAST>(std::move(loc), std::move(msg),
+                                           std::move(expr));
   }
 
   /// Get the precedence of the pending binary operator token.
