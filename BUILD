@@ -95,6 +95,7 @@ cc_library(
     ]),
     hdrs = glob([
         "include/sclang/SclTransforms/*.h",
+        "lib/SclTransforms/*.h",
     ]),
     includes = ["include"],
     deps = [

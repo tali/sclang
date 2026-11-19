@@ -34,7 +34,7 @@ one-line pointer here.
 ```
 .scl ──> sclang-gen (SclGen: Lexer → Parser → AST → MLIRGen) ──> scl dialect ops
 .awl ──> sclang-gen -x awl (AwlGen: Lexer → Parser → codegen) ──> awl dialect ops
-      both ──> LowerToStd pass (lib/SclTransforms/LowerToStd.cpp, partial conversion)
+      both ──> LowerToStd pass (lib/SclTransforms/LowerToStd.cpp + LowerToStd{Scl,Awl,Util}.cpp, partial conversion)
       ──> func/arith/memref/scf/cf (+ calls to the runtime C ABI for % areas)
       ──> sclang (sclang/LowerToLLVM.cpp: scf→cf, memref→llvm, arith/func/cf→llvm)
       ──> LLVM IR / ExecutionEngine JIT (sim runtime bound via registerSymbols)
@@ -217,6 +217,23 @@ has no `\b` — use python3 for regex edits.
   (~4 IR ops/element): a synthetic 100k-element literal costs ~0.5s to
   generate and JITs in 87s at O0 vs 13s with `--opt` — realistic SCL
   initializers are far smaller, so this is accepted as-is.
+- LowerToStd is split into TUs for build parallelism (pure code motion, same
+  pass/patterns/behavior; verified: 133/133 lit, 92/92 traces identical,
+  nop100k lowering still ~0.08s): `LowerToStd.cpp` (the pass only),
+  `LowerToStdInternal.h` (shared types/helpers, `mlir::sclang::lowering`),
+  `LowerToStdUtil.cpp` (helper definitions), `LowerToStdScl.cpp` /
+  `LowerToStdAwl.cpp` (the pattern sets, each exporting a
+  `populate*ToStdPatterns()`). Rebuilding the SclTransforms library after
+  touching all files: ~10.5s before (one 7.1s TU), ~6.5s after. Runtime
+  parallelization of the pass itself was measured and rejected for now: the
+  pass is module-anchored so MLIR runs it single-threaded (user ~= real on a
+  200-block/100k-NOP file), but lowering is only ~0.3 us/op, so per-block
+  parallel conversion would save <50ms on a 100k-line file while needing a
+  module pre-pass for the shared state (rt-func decls, FB layouts). The
+  func-level opt pipeline already parallelizes across functions. The
+  conformance harness is parallel: `run_st_traces.py --jobs N` (default
+  min(8, cores), per-test tmpdirs; 92 traces: 10.0s -> 3.5s, identical
+  results).
 - The AWL frontend tracks which SSA value each runtime ACCU register holds
   (`syncedAcc` in `lib/AwlGen/AwlGen.cpp`) and `syncAcc()` only emits
   `awl.accu_set` for registers whose value actually changed since the last

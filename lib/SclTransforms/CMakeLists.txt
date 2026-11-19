@@ -1,6 +1,10 @@
 add_llvm_library(SclTransforms
   ${SCLANG_MAIN_INCLUDE_DIR}/sclang/SclTransforms/Passes.h
   LowerToStd.cpp
+  LowerToStdInternal.h
+  LowerToStdUtil.cpp
+  LowerToStdScl.cpp
+  LowerToStdAwl.cpp
   LowerToAWL.cpp
   DEPENDS AwlOpsIncGen SclOpsIncGen mlir-headers
 )
