@@ -71,21 +71,68 @@ Related: `docs/design/` (memory-areas, awl-frontend, scl-to-awl), AGENTS.md
 | lld --incremental | incremental relink for huge binaries | not needed at PLC project sizes (decision 4) |
 | TIA Portal / awlsim | whole project compiled/loaded as one image | one module per project (decision 1) |
 
-## Phased plan
+## Implementation proposal (phases = self-contained commits)
 
-1. **Multi-file CLI**: multiple positional inputs / `--project=`; splice
-   `ModuleAST`s; one module through the existing pipeline. Validate against
-   the existing per-project conformance tier (make it native instead of
-   concatenating).
-2. **Build cache**: `--cache-dir=`; sha256(source+flags+version) ->
-   per-file MLIR; write-through on build; reuse on rebuild. Manifest of
-   project files; missing/changed entries recompile.
-3. **LSP project mode**: open docs override cache entries; runScans links
-   open (recompiled) + cached (unchanged) modules and JITs; per-file
-   diagnostics via locations.
-4. **Optional**: per-file LLVM bitcode artifacts + ORC object cache for the
-   run path when projects get large; error-tolerant parsing (rust-analyzer
-   style) so one broken file doesn't hide other files' diagnostics.
+**Phase 1 — multi-file CLI, whole-project build via AST splice.**
+- `include/sclang/SclGen/AST.h`: add `ModuleAST::spliceFrom(ModuleAST&&)`
+  (units are private; begin/end are const-only today) plus unit-name access
+  for duplicate detection (`UnitAST::getIdentifier()` exists, AST.h:1172).
+- `sclang/sclang.cpp`: `inputFilename` (sclang.cpp:81) becomes
+  `cl::list<std::string> inputFilenames` (Positional, OneOrMore) — touchpoints
+  are sclang.cpp:396/400/404/490; new `--project=<dir>` expanding to the
+  sorted `*.scl` (or `*.awl` in awl mode) files of the dir; new
+  `parseInputFiles()`: parse each file with its own name (per-file
+  locations + parser errorSink already exist via `parseSourceText`), splice
+  into one `ModuleAST`, diagnose duplicate POU names with both file:line
+  (today `functionResultTypes[name]` silently overwrites and symbol-table
+  insert of a duplicate name is a release-build hazard).
+- MLIRGen needs NO change for this: `mlirGen(const ModuleAST*)`
+  (MLIRGen.cpp:121) already runs whole-module pre-passes (types, FB names,
+  `functionResultTypes`, MLIRGen.cpp:126-209) before codegen'ing units.
+- AWL multi-file v1: concatenate the texts (one synthetic name; locations
+  become project-relative — documented limitation). Multi `.mlir` inputs:
+  rejected with a clear error in v1.
+- Tests: lit — two positional files with a cross-file FC call (check the
+  callee's real result type, not an i32 stub), duplicate-name negative
+  test; switch the conformance per-project tier from concatenation to
+  `--project=dir` and require identical pass counts (17/17).
+
+**Phase 2a — two-pass per-file codegen (prerequisite for per-file cache).**
+Extract MLIRGen's two pre-pass loops into `collectModuleGlobals(const
+ModuleAST&, Globals&)` and make unit codegen `mlirGenUnit(unit, Globals&)`
+into a per-file module. Whole-project gen = collect(all spliced units) + gen
+each unit into one module — must produce IR identical to today's single
+`mlirGen` call (lit check). Per-file path = parse all files (cheap,
+~50ms/100k lines) for globals, codegen only the file being rebuilt.
+
+**Phase 2b — content-hash cache (`sclang/ProjectCache.{h,cpp}`, `--cache-dir=`).**
+Key = SHA-256(file content + sclang version/ABI tag + lang mode); artifact
+= the file's scl-dialect module as text `<key>.mlir` (parseable via
+`parseSourceFile` from a memory buffer). Build flow: parse all project
+files → per file: cache hit ? load : `mlirGenUnit` + store → merge modules
+with `mergeModulesWithPrivateRename` (small util: on name collision where
+both symbols are private, `SymbolTable::replaceAllSymbolUses` + rename in
+the incoming module, then splice the body — same trick as `llvm::Linker`)
+→ verify → existing pipeline → JIT. No manifest needed: hashing current
+files is the invalidation (Bazel action-cache style). Tests: build twice →
+all hits; touch one file → one miss; corrupt a cache entry → recompiled;
+full suite green.
+
+**Phase 3 — LSP project mode (`sclang/Lsp.cpp`).**
+On `initialize`, take `rootUri` and scan the project files (or accept a
+custom `sclang/openProject {files[]}`). didOpen documents override disk/
+cache. didChange recompiles only that document's module and republishes
+that URI's diagnostics (bucket diagnostics by location file name — extend
+`LspDiag` with a `file` field). didSave / `sclang/runScans`: merged module =
+open docs (recompiled) + other files (cache/disk) → verify → pipeline →
+JIT → `sclang/scanResults`. Tests: extend `test/conformance/lsp_smoke.py`
+with a two-file project, a cross-file call, an error in one file
+(diagnostics only on that URI), and a didSave run with correct scan values.
+
+**Phase 4 — optional, only if measurements demand it**: per-file LLVM
+bitcode artifacts + `ExecutionEngineOptions::enableObjectCache` pointed at
+the cache dir (skip re-JIT of unchanged code on large projects);
+error-tolerant parsing (rust-analyzer style) for multi-error diagnostics.
 
 ## Open questions
 

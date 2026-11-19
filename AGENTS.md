@@ -25,7 +25,8 @@ one-line pointer here.
 - `docs/design/` — evolving design plans: memory-areas (phase 1 implemented),
   awl-frontend, scl-to-awl, multi-file-incremental (project model + per-file
   content-hash cache + LSP project mode; PLAN ONLY, not implemented — project
-  = one namespace = one MLIR module via ModuleAST unit splicing, see that doc
+  = one namespace = one MLIR module via ModuleAST unit splicing; the doc's
+  "Implementation proposal" section has the phase/commit breakdown — see it
   before touching multi-file code). Update these when the plan changes; add
   new ADRs when a decision becomes fixed.
 - README.md is user-facing (status + build); do not put design detail there.
