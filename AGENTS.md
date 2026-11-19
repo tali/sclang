@@ -95,6 +95,11 @@ one-line pointer here.
   so `scl-lower-to-std` / `scl-lower-to-awl` / `scl-lower-to-llvm` are usable in
   --pass-pipeline strings via sclang-opt. LowerToLLVM.cpp lives in
   lib/SclTransforms (the passes are library code, not binary code).
+- `sclang --emit=obj -o out.o` is the AOT path: full lowering to LLVM IR, host
+  TargetMachine object emission (respects `--opt`); `scl_rt_*` runtime symbols
+  stay undefined and are resolved when linking against a host runtime
+  (`--runtime=host --runtime-lib=...`, ADR 002). Test: test/sclang/emit_obj.scl
+  (checks the object file type and the defined/undefined symbols with nm).
 - `sclang --emit=jit` runs the full pipeline and JIT-executes. The JIT entry point is
   the `_mlir_ciface_OB1` wrapper (`engine->invoke("OB1")` resolves
   `_mlir_ciface_OB1`), which calls `function OB1` (see test/sclang/jit.scl) —
@@ -346,7 +351,7 @@ has no `\b` — use python3 for regex edits.
 
 - Test methodology and the rationale for each tier (lit / corpora / JIT smoke
   / awlsim oracle / ST traces / differential cross / fuzz, plus the
-  `jit_edge_*` scenario rationale) are in `docs/testing.md`. Current: 148
+  `jit_edge_*` scenario rationale) are in `docs/testing.md`. Current: 149
   lit tests, 92/92 ST traces with cross, plus the LSP tests
   (`test/conformance/lsp_smoke.py`, `lsp_semantic.py`, see "LSP mode" above)
   and the per-file build-cache test (`test/conformance/project_cache.py`).

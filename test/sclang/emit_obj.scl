@@ -1,0 +1,24 @@
+// RUN: sclang --emit=obj %s -o %t.o && file %t.o | FileCheck %s --check-prefix=FILE
+// RUN: sclang --opt --emit=obj %s -o %t.opt.o && file %t.opt.o | FileCheck %s --check-prefix=FILE
+// RUN: nm %t.o | FileCheck %s --check-prefix=SYM
+
+// AOT path: --emit=obj lowers all the way to LLVM IR and emits a host object
+// file via the host TargetMachine. The scl_rt_* runtime C ABI symbols stay
+// undefined (U) and are resolved when linking against a host runtime .so
+// (--runtime=host --runtime-lib=..., ADR 002); the compiled POUs are defined.
+
+// FILE: {{(Mach-O|ELF).*(object|relocatable)}}
+// SYM: T {{_?}}OB1
+// SYM: U {{_?}}scl_rt_read
+// SYM: U {{_?}}scl_rt_write
+
+function OB1 : int
+begin
+  %MB0 := 1;
+  OB1 := %MB1;
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

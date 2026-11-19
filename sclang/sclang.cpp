@@ -64,8 +64,11 @@
 #include "llvm/ExecutionEngine/Orc/Mangling.h"
 #include "llvm/ExecutionEngine/Orc/Shared/ExecutorAddress.h"
 #include "llvm/ExecutionEngine/Orc/Shared/ExecutorSymbolDef.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/CodeGen.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Target/TargetMachine.h"
 #include <atomic>
@@ -157,7 +160,8 @@ enum Action {
   DumpMLIRLLVM,
   DumpLLVMIR,
   RunJIT,
-  RunJITAwl
+  RunJITAwl,
+  EmitObj
 };
 }
 static cl::opt<enum Action> emitAction(
@@ -176,7 +180,11 @@ static cl::opt<enum Action> emitAction(
     cl::values(clEnumValN(RunJITAwl, "jit-awl",
                           "run the code via in-memory lowering to the AWL "
                           "dialect (skips the AWL text print/re-parse "
-                          "round-trip used by --emit=awl + -x=awl)")));
+                          "round-trip used by --emit=awl + -x=awl)")),
+    cl::values(clEnumValN(EmitObj, "obj",
+                          "compile to a host object file (AOT; the scl_rt_* "
+                          "runtime symbols stay undefined and are resolved "
+                          "when linking against a host runtime, ADR 002)")));
 
 // The Action enum above is ordered by pipeline depth (None < DumpAST < ... <
 // RunJITAwl). These predicates are the ONLY places that rely on that order;
@@ -187,6 +195,9 @@ static bool actionLowersToLLVM() { return emitAction >= Action::DumpMLIRLLVM; }
 static bool actionOutputsMLIR() { return emitAction <= Action::DumpMLIRLLVM; }
 
 static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
+static cl::opt<std::string> outputFilename(
+    "o", cl::desc("Output filename ('-' for stdout)"),
+    cl::value_desc("filename"), cl::init("-"));
 // Run as a minimal LSP server (JSON-RPC over stdio) instead of a batch
 // compile: see sclang/Lsp.cpp and AGENTS.md "LSP mode".
 static cl::opt<bool> lspMode("lsp", cl::desc("Run as an LSP server on stdio"),
@@ -779,6 +790,55 @@ int dumpLLVMIR(mlir::ModuleOp module) {
   return 0;
 }
 
+/// Emit the fully lowered module as a host object file (AOT path): the
+/// scl_rt_* runtime symbols stay undefined and are resolved when the object
+/// is linked against a host runtime (--runtime-lib) — see ADR 002.
+int emitObjectFile(mlir::ModuleOp module) {
+  mlir::registerBuiltinDialectTranslation(*module->getContext());
+  mlir::registerLLVMDialectTranslation(*module->getContext());
+
+  llvm::LLVMContext llvmContext;
+  auto llvmModule = mlir::translateModuleToLLVMIR(module, llvmContext);
+  if (!llvmModule) {
+    llvm::errs() << "Failed to emit LLVM IR\n";
+    return -1;
+  }
+
+  llvm::InitializeNativeTarget();
+  llvm::InitializeNativeTargetAsmPrinter();
+  auto targetMachine = createHostTargetMachine();
+  if (!targetMachine) {
+    llvm::errs() << "No host target machine\n";
+    return -1;
+  }
+  llvmModule->setTargetTriple(llvm::Triple(targetMachine->getTargetTriple()));
+  llvmModule->setDataLayout(targetMachine->createDataLayout());
+
+  auto optPipeline = mlir::makeOptimizingTransformer(
+      /*optLevel=*/enableOpt ? 3 : 0, /*sizeLevel=*/0,
+      /*targetMachine=*/targetMachine.get());
+  if (auto err = optPipeline(llvmModule.get())) {
+    llvm::errs() << "Failed to optimize LLVM IR " << err << "\n";
+    return -1;
+  }
+
+  std::error_code ec;
+  llvm::raw_fd_ostream out(outputFilename, ec, llvm::sys::fs::OF_None);
+  if (ec) {
+    llvm::errs() << "Cannot open output file '" << outputFilename << "': "
+                 << ec.message() << "\n";
+    return -1;
+  }
+  llvm::legacy::PassManager pm;
+  if (targetMachine->addPassesToEmitFile(pm, out, nullptr,
+                                         llvm::CodeGenFileType::ObjectFile)) {
+    llvm::errs() << "Target cannot emit an object file\n";
+    return -1;
+  }
+  pm.run(*llvmModule);
+  return 0;
+}
+
 /// Bind the runtime C ABI (ADR 002) to the JIT: by default the simulation
 /// runtime linked into this binary; a host process can redirect the calls by
 /// registering an SclRtVTable via scl_rt_register().
@@ -1252,6 +1312,10 @@ int main(int argc, char **argv) {
   // Check to see if we are compiling to LLVM IR.
   if (emitAction == Action::DumpLLVMIR)
     return dumpLLVMIR(*module);
+
+  // AOT: emit a host object file.
+  if (emitAction == Action::EmitObj)
+    return emitObjectFile(*module);
 
   // Otherwise, we must be running the jit.
   if (emitAction == Action::RunJIT || emitAction == Action::RunJITAwl)

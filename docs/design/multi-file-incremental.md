@@ -165,6 +165,15 @@ bitcode artifacts + `ExecutionEngineOptions::enableObjectCache` pointed at
 the cache dir (skip re-JIT of unchanged code on large projects);
 error-tolerant parsing (rust-analyzer style) for multi-error diagnostics.
 
+**Phase 3b — NOT started, design first**: running *tests* from the editor via
+the JIT. The didSave / `sclang/runScans` path already JIT-executes and returns
+per-scan values; the open question is how test assertions map to pass/fail in
+LSP (e.g. `__ASSERT(...)`-style checks evaluated per scan, expected-vs-actual
+scan outputs as `sclang/testResults` with per-assertion ranges, or comparing
+against a recorded trace). Decide the model (and whether assertions live in
+the SCL source, in a sidecar `.trace` file, or in LSP client settings) before
+implementing. Deliberately deferred per project decision.
+
 ## Open questions
 
 - Merging per-file MLIR modules directly (instead of AST splicing) hits
