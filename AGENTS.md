@@ -101,7 +101,7 @@ one-line pointer here.
   dialect loading (sclang-opt) an unloaded dialect crashes type uniquing in
   assertion-less builds (found by fuzz_invalid on an empty module;
   regression test test/SclTransforms/pass_pipeline_empty.mlir).
-- Tools (all in build.23/bin, all Bazel targets too):
+- Tools (all in build.23/bin):
   `sclang` (compiler driver: --emit=ast/mlir/awl-mlir/mlir-std/mlir-llvm/llvm/obj/jit/jit-awl,
   --pass-pipeline, -o, --lsp), `sclang-gen` (frontend: -x=scl/awl/st/mlir, --emit=mlir/awl/bytecode),
   `sclang-opt` (mlir-opt with scl/awl dialects + registered sclang passes),
@@ -224,19 +224,13 @@ ninja check-sclang              # run all lit tests (background it; poll the log
 ./bin/sclang --opt --emit=jit test/sclang/jit_for.scl # manual JIT run
 ```
 
-Build-system status (researched 2026, see "Repo hygiene" for details):
-CMake is the PRIMARY build (in-tree via LLVM_EXTERNAL_PROJECTS in build.23, or
-standalone with find_package(MLIR)); this matches the whole out-of-tree MLIR
-ecosystem (CIRCT, onnx-mlir, torch-mlir, Triton all build with CMake against a
-pinned/installed LLVM; Bazel is used almost only by Google-style monorepos like
-XLA and by upstream LLVM itself). The Bazel path is currently BROKEN on all
-platforms: `.bazelversion` pins 4.0.0 (pre-arm64-macos, needs >=4.1.0; Bazel 9
-removes WORKSPACE entirely, 8 disables it) and WORKSPACE loads
-`llvm_disable_optional_support_deps`, which LLVM 23's utils/bazel no longer
-exports (verified: `USE_BAZEL_VERSION=7.4.1 bazel query //sclang:all` fails
-exactly there; 7.4.1 itself runs fine natively on arm64 macOS). If Bazel is
-kept at all: bump to 7.x and fix WORKSPACE — but the ecosystem direction says
-CMake-first, so treat Bazel as best-effort (CI job may be dropped).
+Build system: CMake ONLY (Bazel support was dropped in 2026 after research
+showed the whole out-of-tree MLIR ecosystem — CIRCT, onnx-mlir, torch-mlir,
+Triton, IREE — builds with CMake against a pinned/installed LLVM, while Bazel
+is effectively Google-monorepo (XLA) + upstream-only and WORKSPACE is being
+removed upstream (Bazel 8/9); our WORKSPACE was also stale vs LLVM 23). Two
+modes: in-tree via LLVM_EXTERNAL_PROJECTS (build.23) or standalone with
+find_package(MLIR), following mlir/examples/standalone.
 
 CMake was configured with `-DCMAKE_MAKE_PROGRAM=/opt/homebrew/bin/ninja
 -DLLVM_TARGETS_TO_BUILD=AArch64 -DLLVM_HOST_TRIPLE=arm64-apple-darwin
@@ -1234,10 +1228,11 @@ Remaining technical gaps:
   Co-Authored-By: Mistral Vibe <vibe@mistral.ai>
   ```
 - Do NOT `git add -A`: untracked and not meant to be committed (yet):
-  `cmake/`, `REFERENCES.md`, `.clang-format`. The tool dirs `sclang-opt/`,
+  `cmake/` (stale unused add_sclang_library helper), `REFERENCES.md`,
+  `.clang-format`, `links`, `test-hinext` (2020/21 leftovers). The tool dirs `sclang-opt/`,
   `sclang-query/`, `sclang-lsp-server/`, `sclang-translate/` ARE tracked (see
   the tool list in the Architecture section).
-  `.gitignore` covers `build.*`, `*.swp`, `.DS_Store`, `.ijwb/`, `xcode/`, `bazel-*`.
+  `.gitignore` covers `build.*`, `*.swp`, `.DS_Store`, `.ijwb/`, `xcode/`.
 - History on `main` was rewritten once (filter-branch removed accidentally committed
   .swp files), so local hashes differ from any previously pushed state; pushing
   will need a force-push (nothing was pushed after the rewrite).

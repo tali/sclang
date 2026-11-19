@@ -38,11 +38,9 @@ test results.
 
 MLIR is still in active development and Sclang is regularly updated to follow that development.
 A compatible version of _llvm-project/mlir_ is provided as submodule. 
-You can choose to build it using either [CMake][CMake] or [Bazel][Bazel].
 Both MacOS and Linux are supported.
 
 [CMake]: https://cmake.org/cmake/help/latest/
-[Bazel]: https://bazel.build/
 
 ## Check out sources
 
@@ -76,18 +74,3 @@ cmake -B build -S third_party/llvm-project/llvm -GNinja \
 cmake --build build --target check-sclang
 ```
 
-## Build using Bazel
-
-```
-bazel test --config=generic_clang //test
-# alternatively:
-bazel test --config=generic_gcc //test
-```
-
-# REFERENCES
-
-- SIEMENS, *Structured Control Language (SCL) for S7-300/S7-400 Programming*
-  (the language this compiler implements):
-  <https://cache.industry.siemens.com/dl/files/188/1137188/att_27471/v1/SCLV4_e.pdf>
-- IEC 61131-3, *Programmable controllers – Programming languages*
-  (the international standard SCL is based on): <https://webstore.iec.ch/publication/4552>

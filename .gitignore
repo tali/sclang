@@ -1,6 +1,4 @@
 build.*
-bazel-*
-user.bazelrc
 
 # Editor / OS / IDE junk
 *.swp
