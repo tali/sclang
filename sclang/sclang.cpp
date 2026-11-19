@@ -198,6 +198,14 @@ static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
 static cl::opt<std::string> outputFilename(
     "o", cl::desc("Output filename ('-' for stdout)"),
     cl::value_desc("filename"), cl::init("-"));
+// mlir-opt-style pipeline override: when given, the hardcoded pipeline in
+// processModule() is skipped and this pipeline runs instead (our passes are
+// registered, see Passes.td / registerSclangTransformsPasses).
+static cl::opt<std::string> passPipelineOpt(
+    "pass-pipeline",
+    cl::desc("Run this MLIR pass pipeline instead of the built-in one, e.g. "
+             "'builtin.module(scl-lower-to-std,scl-lower-to-llvm)'"),
+    cl::value_desc("pipeline"));
 // Run as a minimal LSP server (JSON-RPC over stdio) instead of a batch
 // compile: see sclang/Lsp.cpp and AGENTS.md "LSP mode".
 static cl::opt<bool> lspMode("lsp", cl::desc("Run as an LSP server on stdio"),
@@ -664,6 +672,20 @@ int processModule(mlir::MLIRContext &context,
   // Dev-only pass timing: --mlir-timing (see AGENTS.md).
   applyDefaultTimingPassManagerCLOptions(pm);
   pm.enableVerifier(verifyEach);
+
+  if (passPipelineOpt.getNumOccurrences()) {
+    // Explicit user pipeline (mlir-opt style) — replaces the built-in one.
+    // Parse as a rooted pipeline (same as mlir-opt) and run it.
+    auto parsed = mlir::parsePassPipeline(passPipelineOpt);
+    if (mlir::failed(parsed))
+      return 4;
+    mlir::PassManager pipelinePm(&context);
+    static_cast<mlir::OpPassManager &>(pipelinePm) = std::move(*parsed);
+    pipelinePm.enableVerifier(verifyEach);
+    if (mlir::failed(pipelinePm.run(*module)))
+      return 4;
+    return 0;
+  }
 
   // Check to see what granularity of MLIR we are compiling to.
   bool isLoweringToStd = actionLowersToStd();

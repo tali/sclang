@@ -1,0 +1,18 @@
+// RUN: sclang --emit=mlir --pass-pipeline='builtin.module(scl-lower-to-std)' %s | FileCheck %s --check-prefix=STD
+// RUN: sclang --emit=mlir --pass-pipeline='builtin.module(scl-lower-to-std,scl-lower-to-llvm)' %s | FileCheck %s --check-prefix=LLVM
+// RUN: sclang --emit=mlir-std %s | FileCheck %s --check-prefix=STD
+
+// --pass-pipeline on the main driver replaces the built-in pipeline
+// (mlir-opt style); the sclang passes are registered (Passes.td), so they
+// are addressable by name. The default pipeline is unchanged (3rd RUN).
+
+function f : int
+begin
+  f := 1 + 2;
+end_function
+
+// STD-LABEL: func.func @f
+// STD-NOT: scl.
+
+// LLVM-LABEL: llvm.func @f
+// LLVM-NOT: func.func
