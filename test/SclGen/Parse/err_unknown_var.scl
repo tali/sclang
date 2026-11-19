@@ -1,0 +1,7 @@
+// RUN: not sclang-gen --emit=mlir %s 2>&1 | FileCheck %s
+// Negative test: use of an undeclared variable must be diagnosed, not crash.
+// CHECK: unknown variable 'nope'
+function f : int
+begin
+  f := nope;
+end_function

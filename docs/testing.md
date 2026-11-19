@@ -9,13 +9,14 @@ compile-only tests cannot catch wrong values, and JIT tests cannot tell you
 
 | Tier | Runner | What it checks |
 |------|--------|----------------|
-| lit (FileCheck) | `build.23/bin/llvm-lit test` (131 tests) | IR shape per pass (`--emit=mlir`, `mlir-std`, `awl-mlir`), AWL text output, and JIT-executed values via `--scan-io`/`--scan-inputs` scan lines and `--dump-areas` |
+| lit (FileCheck) | `build.23/bin/llvm-lit test` (141 tests) | IR shape per pass (`--emit=mlir`, `mlir-std`, `awl-mlir`), AWL text output, JIT-executed values via `--scan-io`/`--scan-inputs` scan lines and `--dump-areas`, plus negative tests: parse errors (`err_*.scl`) and dialect verifier rejections (`verify_bad_*.mlir`) |
 | AWL/SCL compile corpora | `run_conformance.py` compile tiers | every public `.awl`/`.scl` corpus file parses and lowers |
 | JIT smoke | `run_conformance.py` jit tier | corpus files with `OB1` run under the JIT without crashing |
 | Oracle vs awlsim | `run_conformance.py` oracle tier | `__ASSERT(...)` lines in awlsim-test `.awl` files: our sim runtime must agree with awlsim's own expectations |
 | ST trace conformance | `run_st_traces.py` (92 IEC 61131-3 `.st`/`.trace` pairs) | value-level: per-scan outputs compared to the published trace |
 | Differential cross | same, `--cross` (default) | each trace wrapper run twice: `--emit=jit` vs `--emit=jit-awl` (in-memory awl-dialect lowering); scan lines must be identical |
 | Fuzz | `fuzz_st.py` | seeded random per-scan inputs; SCL->JIT vs SCL->jit-awl must agree |
+| Invalid-input fuzz | `fuzz_invalid.py` | mutates the test corpus (byte flips/deletes/inserts/truncation/garbage); asserts the tools never die by signal or hang — invalid input must yield a diagnostic + clean exit (robustness, see AGENTS.md) |
 
 Run everything:
 
@@ -24,6 +25,7 @@ cd build.23 && ninja sclang sclang-gen && ./bin/llvm-lit ../test
 python3 test/conformance/run_conformance.py --sclang build.23/bin/sclang
 python3 test/conformance/run_st_traces.py --sclang build.23/bin/sclang --cross   # add --jobs N to parallelize (default min(8, cores); 10s -> 3.5s)
 python3 test/conformance/fuzz_st.py --sclang build.23/bin/sclang --scans 5 --seed 7
+python3 test/conformance/fuzz_invalid.py --sclang build.23/bin/sclang --iters 500 --seed 1
 ```
 
 ## Why the differential cross exists

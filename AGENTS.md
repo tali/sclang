@@ -217,6 +217,17 @@ has no `\b` — use python3 for regex edits.
   deletions, insertions, truncation, pure garbage) and asserts the tools
   never die by signal — 4000 mutations, 0 signals after the fixes (was 35
   crashes/400 before). See docs/testing.md.
+- Dialect invariants are checked by verifiers: hand-written SCL types carry
+  `verifyInvariants` hooks (IntegerType/LogicalType widths, ArrayType
+  dims lower<=upper, StructType unique members, AddressType/InstanceDbType
+  non-null, DirectType db/byte/bit/width) and the type PARSERS validate the
+  same ranges so crafted `.mlir` text is rejected with a diagnostic at
+  parse time (asserts are off, so `TypeBase::get` alone would not check).
+  Op verifiers: GetDirectOp (attrs match the direct type), LoadOp/StoreOp
+  (direct-address access width; stores allow any scalar — assignment
+  converts implicitly), GetIndexOp (index count == array rank),
+  GetElementOp (member exists in the struct). Negative lit tests:
+  test/SclGen/Parse/err_*.scl and test/SclTransforms/verify_bad_*.mlir.
 
 ## Performance
 

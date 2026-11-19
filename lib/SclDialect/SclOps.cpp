@@ -811,6 +811,96 @@ void GetDirectOp::build(OpBuilder &builder, OperationState &state,
         builder.getI32IntegerAttr(bit), builder.getI32IntegerAttr(width));
 }
 
+// MARK: memory-op verifiers
+//
+// Bit width of an SCL value type (semantic types map to their storage
+// width: time=32, s5time=16, date=16, time_of_day=32, date_and_time=64,
+// real=32, lreal=64). -1 for unknown types.
+static int sclBitWidth(Type t) {
+  if (auto it = llvm::dyn_cast<scl::IntegerType>(t))
+    return it.getWidth();
+  if (auto lt = llvm::dyn_cast<scl::LogicalType>(t))
+    return lt.getWidth();
+  if (llvm::isa<RealType>(t))
+    return 32;
+  if (llvm::isa<LrealType>(t))
+    return 64;
+  if (llvm::isa<TimeType>(t) || llvm::isa<TimeOfDayType>(t))
+    return 32;
+  if (llvm::isa<S5TimeType>(t) || llvm::isa<DateType>(t))
+    return 16;
+  if (llvm::isa<DateAndTimeType>(t))
+    return 64;
+  if (auto bt = llvm::dyn_cast<mlir::IntegerType>(t))
+    return bt.getWidth();
+  if (auto ft = llvm::dyn_cast<mlir::FloatType>(t))
+    return ft.getWidth();
+  return -1;
+}
+
+LogicalResult LoadOp::verify() {
+  // For direct (memory-area/DB) addresses the result must have the access
+  // width (the value type is the semantic type of that width — a %T store
+  // carries !scl.time, a bit access !scl.bool). For other addresses the
+  // element type is only a storage hint: byte-view addresses (i8 elements)
+  // load/store the declared member type, assembled byte-wise in the
+  // lowering — not checkable here.
+  auto elem = llvm::cast<AddressType>(getAddress().getType()).getElementType();
+  if (auto dt = llvm::dyn_cast<DirectType>(elem)) {
+    int w = sclBitWidth(getResult().getType());
+    if (w != dt.getWidth())
+      return emitOpError("result type ")
+             << getResult().getType() << " (width " << w
+             << ") must match the access width " << dt.getWidth()
+             << " of the direct address";
+  }
+  return success();
+}
+
+LogicalResult StoreOp::verify() {
+  // Stores to a direct (memory-area/DB) address may carry any scalar of
+  // known width — assignment implicitly converts to the access width and
+  // the lowering (lowerDirectStore) performs the ext/trunc. Only require
+  // that the value is a scalar (catches storing a struct/array into %M...).
+  auto elem = llvm::cast<AddressType>(getLhs().getType()).getElementType();
+  if (llvm::isa<DirectType>(elem) && sclBitWidth(getRhs().getType()) <= 0)
+    return emitOpError("value stored to a direct address must be a scalar, got ")
+           << getRhs().getType();
+  return success();
+}
+
+LogicalResult GetIndexOp::verify() {
+  auto elem = llvm::cast<AddressType>(getAddr().getType()).getElementType();
+  // The declared array type: the attr for byte-view bases, else the base's
+  // own element type when it is an array.
+  ArrayType arrTy;
+  if (auto attr = getArrayTypeAttr())
+    arrTy = llvm::cast<ArrayType>(attr.getValue());
+  else if (auto at = llvm::dyn_cast<ArrayType>(elem))
+    arrTy = at;
+  if (arrTy && getIndices().size() != arrTy.getDimensions().size())
+    return emitOpError("index count must match the array rank (")
+           << getIndices().size() << " vs " << arrTy.getDimensions().size()
+           << ")";
+  return success();
+}
+
+LogicalResult GetElementOp::verify() {
+  auto elem = llvm::cast<AddressType>(getAddr().getType()).getElementType();
+  // The struct type to look the member up in: the explicit baseType attr for
+  // byte-view bases, else the base's element type when it is a struct.
+  StructType st;
+  if (auto attr = getBaseTypeAttr())
+    st = llvm::dyn_cast<StructType>(attr.getValue());
+  else if (auto s = llvm::dyn_cast<StructType>(elem))
+    st = s;
+  if (!st)
+    return success(); // non-struct base (e.g. builtin FB via the fb attr)
+  if (!st.getElementType(getNameAttr()))
+    return emitOpError("'") << getName() << "' is not a member of " << st;
+  return success();
+}
+
 LogicalResult GetDirectOp::verify() {
   auto directTy = llvm::dyn_cast<DirectType>(
       llvm::dyn_cast<AddressType>(getResult().getType()).getElementType());

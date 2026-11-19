@@ -337,6 +337,7 @@ def ConstantDateAndTimeOp : SclOp<"constant.dt",
 
 def GetElementOp : SclOp<"getelement",
     [Pure, DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
+  let hasVerifier = 1;
   let summary = "get the address of a struct element";
   let arguments = (ins
     Scl_AddressType:$addr,
@@ -362,6 +363,7 @@ def GetGlobalOp : SclOp<"getglobal",
 }
 
 def GetIndexOp : SclOp<"getindex", [Pure]> {
+  let hasVerifier = 1;
   let summary = "get the address of an indexed element";
   let arguments = (ins
     Scl_AddressType:$addr,
@@ -411,6 +413,7 @@ def GetDirectOp : SclOp<"getdirect", [Pure]> {
 }
 
 def LoadOp : SclOp<"load", [/*SameOperandsAndResultElementType*/]> {
+  let hasVerifier = 1;
   let summary = "load a value from memory";
   let description = [{
     The "load" operation reads a value from a data block.
@@ -429,6 +432,7 @@ def LoadOp : SclOp<"load", [/*SameOperandsAndResultElementType*/]> {
 }
 
 def StoreOp : SclOp<"store", [/*SameOperandsElementType]*/]> {
+  let hasVerifier = 1;
   let summary = "store a value to memory";
   let description = [{
     The "store" operation writes a value to a data block.

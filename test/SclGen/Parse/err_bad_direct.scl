@@ -1,0 +1,7 @@
+// RUN: not sclang-gen --emit=mlir %s 2>&1 | FileCheck %s
+// Negative test: unknown memory-area letter in a direct address.
+// CHECK: expected 'valid direct address' like %I0.0 or %DB1.DBW4, got '%XW4'
+function f : int
+begin
+  %MW0 := %XW4;
+end_function
