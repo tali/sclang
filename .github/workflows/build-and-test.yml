@@ -1,42 +1,42 @@
-
 on:
   push:
     branches:
       - main
   pull_request:
-    types: [assigned, opened, synchronize, reopened]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 jobs:
-  # Build and install LLVM, then build and test Sclang
+  # Build LLVM/MLIR once (cached), then build and test Sclang standalone
+  # against it with CMake (the only supported build system).
   build-using-cmake:
     name: Build using CMake
     runs-on: ubuntu-latest
     steps:
 
       - name: Install dependencies
-        run: sudo apt-get -yq --no-install-suggests --no-install-recommends install ninja-build
+        run: sudo apt-get -yq --no-install-suggests --no-install-recommends install ninja-build python3
 
       - name: Get Sclang
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 2
           submodules: "true"
 
-      - name: Get LLVM Hash
+      - name: Get LLVM submodule hash
         id: get-llvm-hash
-        run: echo "::set-output name=hash::$(git rev-parse @:./third_party/llvm-project)"
+        run: echo "hash=$(git ls-tree HEAD third_party/llvm-project | awk '{print $3}')" >> "$GITHUB_OUTPUT"
 
       - name: Cache LLVM
         id: cache-llvm
-        uses: actions/cache@v2
+        uses: actions/cache@v4
         with:
           path: build.llvm
           key: ${{ runner.os }}-llvm-${{ steps.get-llvm-hash.outputs.hash }}
           restore-keys: |
             ${{ runner.os }}-llvm-
 
-      - name: Rebuild LLVM
+      - name: Build LLVM/MLIR
         if: steps.cache-llvm.outputs.cache-hit != 'true'
         run: |
           cmake -G Ninja -B build.llvm -S third_party/llvm-project/llvm \
@@ -46,29 +46,39 @@ jobs:
               -DCMAKE_BUILD_TYPE=Release
           cmake --build build.llvm
 
-      - name: Build Sclang
+      - name: Configure Sclang (standalone, against the built LLVM)
         run: |
           cmake -G Ninja -B build.sclang \
               -DMLIR_DIR=$PWD/build.llvm/lib/cmake/mlir \
               -DLLVM_DIR=$PWD/build.llvm/lib/cmake/llvm \
               -DLLVM_ENABLE_ASSERTIONS=ON \
               -DCMAKE_BUILD_TYPE=Release
-          cmake --build build.sclang --target sclang
 
-      - name: Test Sclang
+      - name: Build Sclang (all tools)
+        run: cmake --build build.sclang
+
+      - name: Test Sclang (lit suite)
+        run: cmake --build build.sclang --target check-sclang
+
+      - name: Test Sclang (python harnesses, no external corpora needed)
         run: |
-          cmake --build build.sclang --target check-sclang
+          python3 test/conformance/fuzz_invalid.py --sclang build.sclang/bin/sclang --iters 25 --seed 1
+          python3 test/conformance/fuzz_invalid.py --sclang build.sclang/bin/sclang --iters 15 --seed 2 --tolerant
+          python3 test/conformance/lsp_smoke.py --sclang build.sclang/bin/sclang
+          python3 test/conformance/lsp_semantic.py --sclang build.sclang/bin/sclang
+          python3 test/conformance/mlir_lsp_smoke.py --sclang-lsp-server build.sclang/bin/sclang-lsp-server
+          python3 test/conformance/project_cache.py --sclang build.sclang/bin/sclang
 
-
-  # Configure Sclang using LLVM's build system ("Unified" build).
-  # We do not actually build this configuration since it isn't as easy to cache LLVM artifacts in this mode.
+  # Smoke-check the "unified" (LLVM_EXTERNAL_PROJECTS) configuration: we only
+  # configure it here, since caching LLVM artifacts is not practical in this
+  # mode.
   configure-cmake-unified:
     name: Configure Unified Build
     runs-on: ubuntu-latest
     steps:
 
       - name: Get Sclang
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 2
           submodules: "true"
@@ -84,5 +94,3 @@ jobs:
             -DLLVM_ENABLE_ASSERTIONS=ON \
             -DLLVM_EXTERNAL_PROJECTS=sclang \
             -DLLVM_EXTERNAL_SCLANG_SOURCE_DIR=$PWD/..
-
-  # Build Sclang using Bazel

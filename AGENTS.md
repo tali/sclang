@@ -238,6 +238,17 @@ removed upstream (Bazel 8/9); our WORKSPACE was also stale vs LLVM 23). Two
 modes: in-tree via LLVM_EXTERNAL_PROJECTS (build.23) or standalone with
 find_package(MLIR), following mlir/examples/standalone.
 
+CI (.github/workflows/build-and-test.yml): two jobs on ubuntu-latest —
+build LLVM/MLIR into build.llvm (cached per submodule hash via
+actions/cache@v4), configure sclang standalone against it
+(-DMLIR_DIR/-DLLVM_DIR), build all six tools, run `check-sclang` (lit) plus
+the corpora-free python harnesses (fuzz_invalid, lsp_smoke, lsp_semantic,
+mlir_lsp_smoke, project_cache); second job only configures the unified
+LLVM_EXTERNAL_PROJECTS build. Uses actions/checkout@v4 / cache@v4 and
+$GITHUB_OUTPUT (v2 actions and ::set-output are dead and fail on current
+runners). Note: a standalone build must point at a *pure* LLVM build tree —
+an in-tree build.23 exports sclang targets as IMPORTED, which clashes.
+
 Merge note: origin/main is 2022-era llvm-project history (submodule was
 pinned at 004acbb, Jan 2022) with sclang-side adaptations for that old MLIR.
 Our branch is on LLVM release/23.x (submodule 5b10d2d), so the merge of
