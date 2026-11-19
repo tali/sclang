@@ -1,2 +1,3 @@
 add_subdirectory(SclDialect)
 add_subdirectory(AwlDialect)
+add_subdirectory(SclTransforms)

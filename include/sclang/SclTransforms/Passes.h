@@ -13,6 +13,8 @@
 #ifndef SCLANG_PASSES_H
 #define SCLANG_PASSES_H
 
+#include "mlir/Pass/PassRegistry.h"
+
 #include <memory>
 
 namespace mlir {
@@ -34,6 +36,23 @@ std::unique_ptr<mlir::Pass> createLowerToLLVMPass();
 /// `_mlir_ciface_OB1` awl wrapper block so the result can be JIT-run directly
 /// without the AWL text round-trip.
 std::unique_ptr<mlir::Pass> createLowerToAWLPass(bool synthCiface = false);
+
+// TableGen'd pass registration: makes scl-lower-to-std / scl-lower-to-awl /
+// scl-lower-to-llvm addressable by name in --pass-pipeline strings (used by
+// sclang-opt and any tool that parses pipelines after calling
+// registerSclangTransformsPasses()).
+#define GEN_PASS_DECL
+#include "sclang/SclTransforms/Passes.h.inc"
+
+#define GEN_PASS_REGISTRATION
+#include "sclang/SclTransforms/Passes.h.inc"
+
+/// Register all sclang transform passes with the global pass registry.
+inline void registerSclangTransformsPasses() {
+  registerLowerToStd();
+  registerLowerToAWL();
+  registerLowerToLLVM();
+}
 
 } // namespace sclang
 } // end namespace mlir

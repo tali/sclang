@@ -39,6 +39,9 @@ using namespace mlir::sclang::lowering;
 namespace {
 struct SclToStdLoweringPass
     : public PassWrapper<SclToStdLoweringPass, OperationPass<ModuleOp>> {
+  // Registered as "scl-lower-to-std" (Passes.td) so it is usable in
+  // --pass-pipeline strings.
+  llvm::StringRef getArgument() const override { return "scl-lower-to-std"; }
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<scf::SCFDialect>();
     registry.insert<memref::MemRefDialect>();

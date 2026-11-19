@@ -1443,6 +1443,9 @@ struct LowerToAWLPass
     : public PassWrapper<LowerToAWLPass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LowerToAWLPass)
 
+  // Registered as "scl-lower-to-awl" (Passes.td).
+  llvm::StringRef getArgument() const override { return "scl-lower-to-awl"; }
+
   /// When set (used by `sclang --emit=jit-awl`), synthesize the
   /// `_mlir_ciface_OB1` wrapper block that the JIT driver invokes, mirroring
   /// what the AWL text frontend generates (AwlGen) — the scl wrapper funcs

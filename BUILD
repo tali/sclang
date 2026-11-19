@@ -88,6 +88,31 @@ cc_library(
     ],
 )
 
+td_library(
+    name = "SclTransformsPassesTdFiles",
+    srcs = ["include/sclang/SclTransforms/Passes.td"],
+    includes = ["include"],
+    deps = [
+        "@llvm-project//mlir:PassBaseTdFiles",
+    ],
+)
+
+gentbl_cc_library(
+    name = "SclTransformsPassesIncGen",
+    strip_include_prefix = "include",
+    tbl_outs = [
+        (
+            ["-gen-pass-decls"],
+            "include/sclang/SclTransforms/Passes.h.inc",
+        ),
+    ],
+    tblgen = "@llvm-project//mlir:mlir-tblgen",
+    td_file = "include/sclang/SclTransforms/Passes.td",
+    deps = [
+        ":SclTransformsPassesTdFiles",
+    ],
+)
+
 cc_library(
     name = "SclTransforms",
     srcs = glob([
@@ -100,6 +125,7 @@ cc_library(
     includes = ["include"],
     deps = [
         ":SclDialect",
+        ":SclTransformsPassesIncGen",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:Dialect",
         "@llvm-project//mlir:MemRefDialect",

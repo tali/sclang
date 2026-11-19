@@ -1201,6 +1201,9 @@ int main(int argc, char **argv) {
   mlir::registerMLIRContextCLOptions();
   mlir::registerPassManagerCLOptions();
   mlir::registerDefaultTimingManagerCLOptions();
+  // Make our lowering passes addressable by name in pass pipelines
+  // (Passes.td registration; used by sclang-opt and --pass-pipeline).
+  mlir::sclang::registerSclangTransformsPasses();
 
   cl::ParseCommandLineOptions(argc, argv, "SCL compiler\n");
 

@@ -146,6 +146,8 @@ private:
 namespace {
 struct SclToLLVMLoweringPass
     : public PassWrapper<SclToLLVMLoweringPass, OperationPass<ModuleOp>> {
+  // Registered as "scl-lower-to-llvm" (Passes.td).
+  llvm::StringRef getArgument() const override { return "scl-lower-to-llvm"; }
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<LLVM::LLVMDialect>();
     registry.insert<math::MathDialect>();

@@ -7,7 +7,6 @@ package(
 cc_binary(
     name = "sclang",
     srcs = [
-        "LowerToLLVM.cpp",
         "Lsp.cpp",
         "ProjectCache.cpp",
         "sclang.cpp",

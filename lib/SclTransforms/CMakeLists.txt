@@ -6,6 +6,7 @@ add_llvm_library(SclTransforms
   LowerToStdScl.cpp
   LowerToStdAwl.cpp
   LowerToAWL.cpp
-  DEPENDS AwlOpsIncGen SclOpsIncGen mlir-headers
+  LowerToLLVM.cpp
+  DEPENDS AwlOpsIncGen SclOpsIncGen SclTransformsPassesIncGen mlir-headers
 )
 set_target_properties(SclTransforms PROPERTIES FOLDER "Sclang")
