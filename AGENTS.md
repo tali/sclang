@@ -238,6 +238,14 @@ removed upstream (Bazel 8/9); our WORKSPACE was also stale vs LLVM 23). Two
 modes: in-tree via LLVM_EXTERNAL_PROJECTS (build.23) or standalone with
 find_package(MLIR), following mlir/examples/standalone.
 
+Merge note: origin/main is 2022-era llvm-project history (submodule was
+pinned at 004acbb, Jan 2022) with sclang-side adaptations for that old MLIR.
+Our branch is on LLVM release/23.x (submodule 5b10d2d), so the merge of
+origin/main resolved all conflicts in our favor (our code already contains
+the same API adaptations, current for 23.x) and kept our submodule pin;
+the only tree change from that merge is the now-tracked .clang-format and
+removal of a swapfile origin had committed (sclang/.LowerToLLVM.cpp.swp).
+
 CMake was configured with `-DCMAKE_MAKE_PROGRAM=/opt/homebrew/bin/ninja
 -DLLVM_TARGETS_TO_BUILD=AArch64 -DLLVM_HOST_TRIPLE=arm64-apple-darwin
 -DLLVM_DEFAULT_TARGET_TRIPLE=arm64-apple-darwin -DLLVM_ENABLE_ASSERTIONS=OFF
