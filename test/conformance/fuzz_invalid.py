@@ -56,10 +56,10 @@ def mutate(rng, data):
 
 def tool_args(sclang, sclang_gen, path, ext, tolerant=False):
     if ext == ".awl":
-        return [sclang_gen, "-x=awl", "--emit=mlir-std", path]
+        return [sclang_gen, "-x=awl", "--test-builtins", "--emit=mlir-std", path]
     if ext == ".mlir":
         return [sclang_gen, "--emit=mlir-std", path]
-    args = [sclang, "--emit=jit", "--jit-cycles=1"]
+    args = [sclang, "--test-builtins", "--emit=jit", "--jit-cycles=1"]
     if tolerant:
         args.append("--parse-tolerant")  # recovery paths must not crash/hang either
     return args + [path]

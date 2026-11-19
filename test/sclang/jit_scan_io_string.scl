@@ -1,4 +1,4 @@
-// RUN: sclang --emit=jit --jit-cycles=2 --area-size M=8192 --scan-io=out:s=M/0/0 --scan-io=out:t=M/256/0 %s 2>&1 | FileCheck %s
+// RUN: sclang --test-builtins --emit=jit --jit-cycles=2 --area-size M=8192 --scan-io=out:s=M/0/0 --scan-io=out:t=M/256/0 %s 2>&1 | FileCheck %s
 // String scan-io slots (width 0): __STRTO_M(base, maxlen, str) copies the
 // flat string buffer into the M area as S7 layout (maxlen@0, actlen@1,
 // chars@2..) and the driver reports it as name='...' with IEC $ escapes.

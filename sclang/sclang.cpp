@@ -25,6 +25,7 @@
 #include "sclang/SclGen/MLIRGen.h"
 #include "sclang/SclGen/Parser.h"
 #include "sclang/AwlGen/AwlGen.h"
+#include "sclang/FrontendOptions.h"
 #include "sclang/Runtime/Runtime.h"
 #include "sclang/SclTransforms/Passes.h"
 
@@ -139,6 +140,16 @@ static cl::opt<sclang::LangMode> stdMode(
 static sclang::LangMode langMode() {
   return inputType == InputType::St ? sclang::LangMode::IEC : stdMode;
 }
+
+// Test-builtin gate (SCL/ST: __ASSERT, __DEBUG_PRINT, __BITS, ...; AWL:
+// __ASSERT). Off by default so normal source files cannot depend on them;
+// LSP mode turns it on unless explicitly disabled.
+static cl::opt<bool> testBuiltinsOpt(
+    "test-builtins",
+    cl::desc("Enable test builtins: __ASSERT, __DEBUG_PRINT, __BITS, "
+             "__UNBITS, __STRTO_M, __LOADM64, __STOREM64 (SCL/ST) and "
+             "__ASSERT (AWL)"),
+    cl::init(false));
 
 /// Error-tolerant parsing (Parser::tolerantErrors): report all parse errors
 /// with panic-mode recovery at unit/statement/declaration boundaries instead
@@ -506,7 +517,8 @@ int loadMLIRFromBuffer(
         sclang::awlRegisterNamedDb(ds.substr(0, eq),
                                    (int32_t)atoi(ds.substr(eq + 1).c_str()));
       }
-      module = sclang::awlGen(context, text, std::string(name));
+      module = sclang::awlGen(context, text, std::string(name),
+                              sclang::g_testBuiltins);
       return !module ? 1 : 0;
     }
     auto moduleAST = parseSourceText(text, std::string(name), parserSink);
@@ -651,7 +663,7 @@ int loadMLIR(mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &modu
       sclang::awlRegisterNamedDb(ds.substr(0, eq),
                                  (int32_t)atoi(ds.substr(eq + 1).c_str()));
     }
-    module = sclang::awlGen(context, text, name);
+    module = sclang::awlGen(context, text, name, sclang::g_testBuiltins);
     return !module ? 1 : 0;
   }
   auto moduleAST = parseInputFiles(files);
@@ -1291,6 +1303,11 @@ int main(int argc, char **argv) {
   mlir::sclang::registerSclangTransformsPasses();
 
   cl::ParseCommandLineOptions(argc, argv, "SCL compiler\n");
+  // LSP is a development/test context: enable test builtins unless the user
+  // explicitly passed --test-builtins=0.
+  sclang::g_testBuiltins =
+      testBuiltinsOpt.getNumOccurrences() ? testBuiltinsOpt : lspMode;
+
 
   if (lspMode) {
     // Cancellable parsing for the server: abort on shutdown or when the

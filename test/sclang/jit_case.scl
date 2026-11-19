@@ -1,4 +1,4 @@
-// RUN: sclang --opt --emit=jit %s 2>&1 | FileCheck %s
+// RUN: sclang --test-builtins --opt --emit=jit %s 2>&1 | FileCheck %s
 // CHECK-NOT: failed
 
 // CHECK: start OB1
@@ -11,21 +11,17 @@ end_var
 begin
   x := 2;
   case x of
-    1: // DEBUG PRINT one
-      ;
-    2: // DEBUG PRINT two
-      ;
-    3: // DEBUG PRINT three
-      ;
+    1: __DEBUG_PRINT('one');
+    2: __DEBUG_PRINT('two');
+    3: __DEBUG_PRINT('three');
   else
-    // DEBUG PRINT other
-    ;
+    __DEBUG_PRINT('other');
   end_case;
 end_function
 
 function _mlir_ciface_OB1 : void
 begin
-  // DEBUG PRINT start OB1
+  __DEBUG_PRINT('start OB1');
   OB1();
-  // DEBUG PRINT exit OB1
+  __DEBUG_PRINT('exit OB1');
 end_function

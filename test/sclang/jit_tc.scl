@@ -1,4 +1,4 @@
-// RUN: sclang --opt --emit=jit %s 2>&1 | FileCheck %s
+// RUN: sclang --test-builtins --opt --emit=jit %s 2>&1 | FileCheck %s
 // CHECK-NOT: failed
 
 // CHECK: tc ok
@@ -14,11 +14,11 @@ begin
   %TW2 := 300;
   x := %CD0;
   IF x = 7 THEN
-    // DEBUG PRINT tc ok
+    __DEBUG_PRINT('tc ok');
   END_IF;
   x := %TW2;
   IF x = 300 THEN
-    // DEBUG PRINT tw ok
+    __DEBUG_PRINT('tw ok');
   END_IF;
 end_function
 

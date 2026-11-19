@@ -1,0 +1,9 @@
+// RUN: not sclang -x awl --emit=mlir %s 2>&1 | FileCheck %s
+// RUN: not sclang-gen -x awl --emit=mlir %s 2>&1 | FileCheck %s
+
+// __ASSERT is a test builtin: without --test-builtins it is an error.
+// CHECK: __ASSERT is a test builtin: enable it with --test-builtins
+FUNCTION_BLOCK FB1
+BEGIN
+__ASSERT== 1, 1
+END_FUNCTION_BLOCK

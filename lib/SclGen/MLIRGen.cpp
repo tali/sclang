@@ -94,12 +94,15 @@ public:
 /// analysis and transformation based on these high level semantics.
 class MLIRGenImpl {
 public:
-  MLIRGenImpl(mlir::MLIRContext &context, LangMode mode = LangMode::S7)
-      : builder(&context), mode(mode) {}
+  MLIRGenImpl(mlir::MLIRContext &context, LangMode mode = LangMode::S7,
+              bool testBuiltins = false)
+      : builder(&context), mode(mode), testBuiltins(testBuiltins) {}
 
   /// Source-language mode (ADR 004), from the ModuleAST.
   LangMode mode;
   bool iecMode() const { return mode == LangMode::IEC; }
+  /// --test-builtins gate for __ASSERT/__DEBUG_PRINT/... (ModuleAST).
+  bool testBuiltins;
 
   /// Set when any error diagnostic was emitted. Lets mlirGen fail cleanly
   /// (return nullptr) instead of crashing on null types/values when
@@ -1563,9 +1566,6 @@ private:
         })
         .Case<WhileDoAST>([&](auto whileDo) {
           return mlirGen(whileDo);
-        })
-        .Case<DebugPrintAST>([&](auto debugPrint) {
-          return mlirGen(debugPrint);
         })
         .Case<CaseOfAST>([&](auto caseOf) { return mlirGen(caseOf); })
         .Case<JumpLabelAST>([&](auto label) { return mlirGen(label); })
@@ -4814,9 +4814,15 @@ private:
     auto context = builder.getContext();
 
     // SPEC[SCL] Test-support builtins (awlsim-style oracles in SCL form,
-    // used by test/conformance/run_st_traces.py and SCL oracle lit tests):
+    // used by test/conformance/run_st_traces.py and SCL oracle lit tests).
+    // They are only recognized with --test-builtins; in normal source files
+    // they are diagnosed as errors (see the gate below):
     //   __ASSERT(<bool expr>) -> awl.assert (id=line, op ==, actual=i64(expr),
     //                            expected=1) -> scl_rt_assert_cmp
+    //   __DEBUG_PRINT(arg, ...) -> scl.debug.print per argument: string
+    //                            literals print as a message, other
+    //                            expressions as `line N: <text> = <value>` via
+    //                            the runtime C ABI (same channel as __ASSERT)
     //   __BITS(<value>)       -> bit.cast to the same-width integer (lets the
     //                            trace driver observe REAL bit patterns)
     //   __STRTO_M(<byteBase>, <string lvalue>)
@@ -4824,6 +4830,46 @@ private:
     //                            buffer into the M area at byteBase (lets
     //                            --scan-io observe STRING outputs)
     std::string upTest = std::string(callee.upper());
+    static const char *const kTestBuiltins[] = {
+        "__ASSERT", "__DEBUG_PRINT", "__BITS",    "__UNBITS",
+        "__STRTO_M", "__LOADM64",     "__STOREM64"};
+    if (llvm::is_contained(kTestBuiltins, upTest) && !testBuiltins) {
+      emitError(location) << upTest
+                          << " is a test builtin: enable it with --test-builtins";
+      return nullptr;
+    }
+    if (upTest == "__DEBUG_PRINT") {
+      auto params = expr->getParameters();
+      if (params.empty()) {
+        emitError(location) << "__DEBUG_PRINT needs at least one argument";
+        return nullptr;
+      }
+      for (const auto &param : params) {
+        // String literal argument: plain message form.
+        if (auto *str = llvm::dyn_cast<StringConstantAST>(param.get())) {
+          builder.create<DebugPrintOp>(location, str->getValue(), mlir::Value());
+          continue;
+        }
+        // Any other argument: value form, labelled with the expression text.
+        mlir::Value v = mlirGenRValue(param.get());
+        if (!v)
+          return nullptr;
+        // The value prints through the runtime C ABI as i64/f64, so only
+        // numeric and bool values are meaningful; reject pointers/memrefs
+        // (e.g. STRING) with a proper diagnostic instead of a late verifier
+        // error in the LLVM lowering.
+        mlir::Type vt = v.getType();
+        bool numeric = llvm::isa<IntegerType, RealType, LrealType, LogicalType,
+                                 mlir::IntegerType, mlir::FloatType>(vt);
+        if (!numeric) {
+          emitError(loc(param->loc()))
+              << "__DEBUG_PRINT value must be numeric or boolean, not " << vt;
+          return nullptr;
+        }
+        builder.create<DebugPrintOp>(location, exprToString(param.get()), v);
+      }
+      return nullptr; // statement, no value
+    }
     if (upTest == "__STRTO_M") {
       auto params = expr->getParameters();
       if (params.size() != 3) {
@@ -6194,30 +6240,6 @@ private:
     return mlir::success();
   }
 
-  mlir::LogicalResult mlirGen(const DebugPrintAST *debugPrint) {
-    auto location = loc(debugPrint->loc());
-
-    // Value form `// DEBUG PRINT <expr>;`: carry the expression's value so
-    // the LLVM-stage lowering can print it via the runtime C ABI.
-    mlir::Value value;
-    if (const ExpressionAST *expr = debugPrint->getExpr()) {
-      value = mlirGenRValue(expr); // dereference variable addresses to values
-      if (!value)
-        return mlir::failure();
-      // The value form prints through the runtime C ABI as i64/f64, so only
-      // numeric and bool values are meaningful; reject pointers/memrefs
-      // (e.g. STRING) with a proper diagnostic instead of a late verifier
-      // error in the LLVM lowering.
-      mlir::Type vt = value.getType();
-      bool numeric = llvm::isa<IntegerType, RealType, LrealType, LogicalType,
-                               mlir::IntegerType, mlir::FloatType>(vt);
-      if (!numeric)
-        return emitError(loc(debugPrint->loc()))
-               << "DEBUG PRINT value must be numeric or boolean, not " << vt;
-    }
-    builder.create<DebugPrintOp>(location, debugPrint->getMsg(), value);
-    return mlir::success();
-  }
 
 };
 
@@ -6228,13 +6250,15 @@ namespace sclang {
 // The public API for codegen.
 mlir::OwningOpRef<mlir::ModuleOp> mlirGen(mlir::MLIRContext &context,
                               ModuleAST &moduleAST) {
-  return MLIRGenImpl(context, moduleAST.getMode()).mlirGen(&moduleAST);
+  return MLIRGenImpl(context, moduleAST.getMode(), moduleAST.getTestBuiltins())
+      .mlirGen(&moduleAST);
 }
 
 mlir::OwningOpRef<mlir::ModuleOp>
 mlirGenPerFile(mlir::MLIRContext &context, ModuleAST &moduleAST,
                llvm::StringMap<llvm::SmallVector<mlir::Operation *, 4>> &opsByFile) {
-  return MLIRGenImpl(context, moduleAST.getMode()).mlirGen(&moduleAST, &opsByFile);
+  return MLIRGenImpl(context, moduleAST.getMode(), moduleAST.getTestBuiltins())
+      .mlirGen(&moduleAST, &opsByFile);
 }
 
 } // namespace sclang

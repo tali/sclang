@@ -29,6 +29,8 @@
 #include "sclang/SclGen/AST.h"
 #include "sclang/SclGen/Lexer.h"
 
+#include "sclang/FrontendOptions.h"
+
 #include <algorithm>
 #include <functional>
 #include <optional>
@@ -113,7 +115,9 @@ public:
       }
     }
 
-    return std::make_unique<ModuleAST>(std::move(units), lexer.getMode());
+    return std::make_unique<ModuleAST>(std::move(units),
+                                                lexer.getMode(),
+                                                g_testBuiltins);
   }
 
 private:
@@ -1436,7 +1440,6 @@ private:
     case tok_return:
     case tok_exit:
     case tok_goto:
-    case tok_debugprint:
     // expression starts (ParseExpressionPrimary) reachable as statements
     case tok_identifier:
     case tok_symbol:
@@ -1536,7 +1539,7 @@ private:
         continue;
       }
 
-      if (!llvm::isa<DebugPrintAST, JumpLabelAST, CaseLabelAST>(instr)) {
+      if (!llvm::isa<JumpLabelAST, CaseLabelAST>(instr)) {
         if (lexer.getCurToken() != tok_semicolon) {
           if (!tolerantErrors)
             return parseError<CodeSectionAST>(tok_semicolon,
@@ -1585,8 +1588,6 @@ private:
       return ParseExit();
     case tok_goto:
       return ParseGoto();
-    case tok_debugprint:
-      return ParseDebugPrint();
     }
   }
 
@@ -2492,36 +2493,6 @@ private:
     return std::make_unique<GotoAST>(std::move(loc), label);
   }
 
-  std::unique_ptr<DebugPrintAST> ParseDebugPrint() {
-    auto loc = lexer.getLastLocation();
-    std::string msg(lexer.getComment());
-    lexer.consume(tok_debugprint);
-
-    // Value form: `// DEBUG PRINT <expr>;` (trailing semicolon marks the
-    // text as an expression, not a message) — prints the expression's value
-    // at runtime via the same runtime C ABI channel as __ASSERT.
-    std::unique_ptr<ExpressionAST> expr;
-    std::string trimmed = msg;
-    while (!trimmed.empty() && isspace(trimmed.back()))
-      trimmed.pop_back();
-    if (!trimmed.empty() && trimmed.back() == ';') {
-      std::string exprText = trimmed.substr(0, trimmed.size() - 1);
-      LexerBuffer subLex(exprText.data(), exprText.data() + exprText.size(),
-                         lexer.getFilename(), lexer.getMode());
-      Parser sub(subLex);
-      sub.errorSink = errorSink;
-      subLex.getNextToken(); // prime the sub-lexer
-      expr = sub.ParseExpression();
-      if (!expr || sub.errorCount > 0) {
-        reportError("cannot parse DEBUG PRINT expression", "SCL1001");
-        expr = nullptr;
-      } else {
-        msg = exprText; // show the expression text as the label
-      }
-    }
-    return std::make_unique<DebugPrintAST>(std::move(loc), std::move(msg),
-                                           std::move(expr));
-  }
 
   /// Get the precedence of the pending binary operator token.
   int GetTokPrecedence() {

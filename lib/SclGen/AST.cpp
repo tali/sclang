@@ -114,7 +114,6 @@ private:
   void dump(const ReturnAST *node);
   void dump(const ExitAST *node);
   void dump(const GotoAST *node);
-  void dump(const DebugPrintAST *node);
   void dump(const JumpLabelAST *node);
   void dump(const CaseLabelAST *node);
 
@@ -513,7 +512,6 @@ void ASTDumper::dump(const InstructionAST *code) {
   dispatch(ReturnAST);
   dispatch(ExitAST);
   dispatch(GotoAST);
-  dispatch(DebugPrintAST);
   dispatch(JumpLabelAST);
   dispatch(CaseLabelAST);
 #undef dispatch
@@ -769,10 +767,6 @@ void ASTDumper::dump(const GotoAST *node) {
   outs << "Goto " << node->getLabel() << "\n";
 }
 
-void ASTDumper::dump(const DebugPrintAST *node) {
-  INDENT();
-  outs << "DebugPrint " << node->getMsg() << "\n";
-}
 
 void ASTDumper::dump(const JumpLabelAST *node) {
   INDENT();
@@ -808,5 +802,80 @@ namespace sclang {
 
 // Public API
 void dump(const ModuleAST &module) { ASTDumper(llvm::outs()).dump(&module); }
+
+namespace {
+void exprToStringImpl(const ExpressionAST *expr, llvm::raw_ostream &os) {
+  using llvm::isa;
+  using llvm::dyn_cast;
+  if (!expr) {
+    os << "<null>";
+    return;
+  }
+  if (auto *c = dyn_cast<IntegerConstantAST>(expr)) {
+    os << c->getValue();
+    return;
+  }
+  if (auto *c = dyn_cast<RealConstantAST>(expr)) {
+    os << c->getValue();
+    return;
+  }
+  if (auto *c = dyn_cast<StringConstantAST>(expr)) {
+    os << "'" << c->getValue() << "'";
+    return;
+  }
+  if (auto *v = dyn_cast<SimpleVariableAST>(expr)) {
+    os << v->getName();
+    return;
+  }
+  if (auto *v = dyn_cast<DirectVariableAST>(expr)) {
+    os << v->getText();
+    return;
+  }
+  if (auto *v = dyn_cast<IndexedVariableAST>(expr)) {
+    exprToStringImpl(v->getBase(), os);
+    os << '[';
+    llvm::interleaveComma(v->getIndices(), os,
+                          [&](const std::unique_ptr<ExpressionAST> &i) {
+                            exprToStringImpl(i.get(), os);
+                          });
+    os << ']';
+    return;
+  }
+  if (auto *b = dyn_cast<BinaryExpressionAST>(expr)) {
+    os << '(';
+    exprToStringImpl(b->getLhs(), os);
+    os << ' ' << b->getOp() << ' ';
+    exprToStringImpl(b->getRhs(), os);
+    os << ')';
+    return;
+  }
+  if (auto *u = dyn_cast<UnaryExpressionAST>(expr)) {
+    os << u->getOp();
+    exprToStringImpl(u->getRhs(), os);
+    return;
+  }
+  if (auto *c = dyn_cast<FunctionCallAST>(expr)) {
+    if (auto *f = dyn_cast<SimpleVariableAST>(c->getFunction()))
+      os << f->getName();
+    else
+      os << "<callee>";
+    os << '(';
+    llvm::interleaveComma(c->getParameters(), os,
+                          [&](const std::unique_ptr<ExpressionAST> &a) {
+                            exprToStringImpl(a.get(), os);
+                          });
+    os << ')';
+    return;
+  }
+  os << "<expr>";
+}
+} // namespace
+
+std::string exprToString(const ExpressionAST *expr) {
+  std::string out;
+  llvm::raw_string_ostream os(out);
+  exprToStringImpl(expr, os);
+  return os.str();
+}
 
 } // namespace sclang

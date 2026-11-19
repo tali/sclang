@@ -582,7 +582,6 @@ public:
     Instr_Return,
     Instr_Exit,
     Instr_Goto,
-    Instr_DebugPrint,
     Instr_CaseLabel,
   };
 
@@ -957,28 +956,6 @@ public:
   /// LLVM style RTTI
   static bool classof(const InstructionAST *i) {
     return i->getKind() == Instr_CaseLabel;
-  }
-};
-
-class DebugPrintAST : public InstructionAST {
-  std::string msg;
-  // Set for the value form `// DEBUG PRINT <expr>;` — the expression whose
-  // value is printed at runtime (harmonized with __ASSERT: both flow through
-  // the runtime C ABI with the source line as id).
-  std::unique_ptr<ExpressionAST> expr;
-
-public:
-  DebugPrintAST(Location loc, std::string msg,
-                std::unique_ptr<ExpressionAST> expr = nullptr)
-      : InstructionAST(std::move(loc), Instr_DebugPrint), msg(std::move(msg)),
-        expr(std::move(expr)) {}
-
-  llvm::StringRef getMsg() const { return msg; }
-  const ExpressionAST *getExpr() const { return expr.get(); }
-
-  /// LLVM style RTTI
-  static bool classof(const InstructionAST *i) {
-    return i->getKind() == Instr_DebugPrint;
   }
 };
 
@@ -1383,17 +1360,19 @@ public:
 class ModuleAST {
   std::vector<std::unique_ptr<UnitAST>> units;
   LangMode mode = LangMode::S7; ///< source-language mode (ADR 004)
+  bool testBuiltins = false; ///< --test-builtins: allow __ASSERT/__DEBUG_PRINT
 
 public:
   ModuleAST(std::vector<std::unique_ptr<UnitAST>> units,
-            LangMode mode = LangMode::S7)
-      : units(std::move(units)), mode(mode) {}
+            LangMode mode = LangMode::S7, bool testBuiltins = false)
+      : units(std::move(units)), mode(mode), testBuiltins(testBuiltins) {}
 
   auto begin() const -> decltype(units.begin()) { return units.begin(); }
   auto end() const -> decltype(units.end()) { return units.end(); }
   size_t size() const { return units.size(); }
   LangMode getMode() const { return mode; }
   bool iecMode() const { return mode == LangMode::IEC; }
+  bool getTestBuiltins() const { return testBuiltins; }
 
   /// Multi-file projects: one project is one namespace (STEP 7 FC/FB/DB
   /// names are globally unique), so the units of all source files are
@@ -1405,6 +1384,10 @@ public:
 };
 
 void dump(const ModuleAST &);
+
+/// Render an expression back to (approximate) source text, e.g. "x + 1" or
+/// "a[i]". Used as the label of __DEBUG_PRINT value output.
+std::string exprToString(const ExpressionAST *expr);
 
 /// True for a POU with an empty body: a STEP 7 forward declaration
 /// (FUNCTION x ... BEGIN END_FUNCTION in a separate file), which a later

@@ -1,10 +1,11 @@
-// RUN: sclang-gen --emit=mlir %s 2>&1 | sclang-gen -x mlir --emit=mlir | FileCheck %s
+// RUN: sclang-gen --test-builtins --emit=mlir %s 2>&1 | sclang-gen -x mlir --emit=mlir | FileCheck %s
 
 // CHECK-LABEL: scl.function @debug_print()
 // CHECK:  scl.debug.print "abc"
-// CHECK-NEXT:  scl.debug.print "123"
+// CHECK:  scl.debug.print "123"
 // CHECK:  scl.debug.print "x" = %{{.*}} : !scl.int
 // CHECK:  scl.debug.print "r" = %{{.*}} : !scl.real
+// CHECK:  scl.debug.print "(x + 1)" = %{{.*}} : !scl.int
 // CHECK:  scl.return
 function debug_print : void
 var_temp
@@ -12,9 +13,10 @@ var_temp
   r : real;
 end_var
 begin
-  // DEBUG PRINT abc
-  // DEBUG PRINT 123
-  // DEBUG PRINT x;
-  // DEBUG PRINT r;
+  __DEBUG_PRINT('abc');
+  __DEBUG_PRINT('123');
+  __DEBUG_PRINT(x);
+  __DEBUG_PRINT(r);
+  __DEBUG_PRINT(x + 1);
   ;
 end_function

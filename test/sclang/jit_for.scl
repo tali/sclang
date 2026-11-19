@@ -1,4 +1,4 @@
-// RUN: sclang --opt --emit=jit %s 2>&1 | FileCheck %s
+// RUN: sclang --test-builtins --opt --emit=jit %s 2>&1 | FileCheck %s
 // CHECK-NOT: failed
 
 // CHECK: start OB1
@@ -15,13 +15,13 @@ begin
     sum := sum + i;
   end_for;
   if sum = 55 then
-    // DEBUG PRINT sum ok
+    __DEBUG_PRINT('sum ok');
   end_if;
 end_function
 
 function _mlir_ciface_OB1 : void
 begin
-  // DEBUG PRINT start OB1
+  __DEBUG_PRINT('start OB1');
   OB1();
-  // DEBUG PRINT exit OB1
+  __DEBUG_PRINT('exit OB1');
 end_function

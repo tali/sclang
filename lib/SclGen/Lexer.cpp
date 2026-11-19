@@ -21,9 +21,15 @@
 
 #include "sclang/SclGen/Lexer.h"
 
+#include "sclang/FrontendOptions.h"
+
 #include "llvm/Support/raw_ostream.h"
 
 namespace sclang {
+
+/// Test-builtin gate, set by the driver from --test-builtins (FrontendOptions.h).
+bool g_testBuiltins = false;
+
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &s, Token token) {
   switch (token) {
@@ -247,8 +253,6 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &s, Token token) {
     return s << "*)";
   case tok_linecomment:
     return s << "//";
-  case tok_debugprint:
-    return s << "DEBUG PRINT";
 
     // multi character operators
   case tok_assignment:

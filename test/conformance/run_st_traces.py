@@ -506,6 +506,9 @@ def gen_inputs_file(trace, in_slots):
 
 
 def run_sclang(sclang, args, timeout=TIMEOUT_S):
+    # traces use the test builtins (__ASSERT/__BITS/__STOREM64 in the
+    # generated wrappers), so always enable --test-builtins
+    args = ['--test-builtins'] + list(args)
     try:
         p = subprocess.run([sclang] + args, capture_output=True, text=True,
                            timeout=timeout)

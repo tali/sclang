@@ -121,7 +121,7 @@ def awlpro_db_syms(path):
 # oracles failed (oracle tier), anything else = compile/lower/run failure.
 def run_one(sclang, path, xflag, emit='mlir', extra=(), project=None):
     extra = tuple(extra) + awlpro_db_syms(path)
-    cmd = [sclang, xflag, '--emit=' + emit, *extra]
+    cmd = [sclang, xflag, '--test-builtins', '--emit=' + emit, *extra]
     # project= compiles all sources of the directory as one multi-file
     # project (native --project= mode) instead of the single `path` file.
     cmd.append('--project=' + project if project is not None else path)
@@ -138,7 +138,7 @@ def run_files(sclang, files, xflag, emit='mlir'):
     # --project= would). `files[0]` anchors the awlpro db-sym lookup.
     extra = awlpro_db_syms(files[0])
     try:
-        p = subprocess.run([sclang, xflag, '--emit=' + emit, *extra, *files],
+        p = subprocess.run([sclang, xflag, '--test-builtins', '--emit=' + emit, *extra, *files],
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                            timeout=TIMEOUT_S)
         return p.returncode, p.stderr.decode('utf-8', 'replace').splitlines()

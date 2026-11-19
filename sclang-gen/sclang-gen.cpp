@@ -26,6 +26,7 @@
 #include "sclang/SclGen/MLIRGen.h"
 #include "sclang/SclGen/Parser.h"
 #include "sclang/AwlGen/AwlGen.h"
+#include "sclang/FrontendOptions.h"
 #include "sclang/SclTransforms/Passes.h"
 #include <memory>
 
@@ -87,6 +88,14 @@ static sclang::LangMode langMode() {
   return inputType == InputType::St ? sclang::LangMode::IEC : stdMode;
 }
 
+// Test-builtin gate (SCL/ST: __ASSERT, __DEBUG_PRINT, ...; AWL: __ASSERT).
+static cl::opt<bool> testBuiltinsOpt(
+    "test-builtins",
+    cl::desc("Enable test builtins: __ASSERT, __DEBUG_PRINT, __BITS, "
+             "__UNBITS, __STRTO_M, __LOADM64, __STOREM64 (SCL/ST) and "
+             "__ASSERT (AWL)"),
+    cl::init(false));
+
 namespace {
 enum Action { None, DumpAST, DumpMLIR, DumpMLIRStd, DumpAWL, DumpBytecode };
 }
@@ -137,7 +146,8 @@ int loadMLIR(mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &modu
         return 6;
       }
       module = sclang::awlGen(context, fileOrErr.get()->getBuffer(),
-                              std::string(inputFilename));
+                              std::string(inputFilename),
+                              sclang::g_testBuiltins);
       return !module ? 1 : 0;
     }
     auto moduleAST = parseInputFile(inputFilename);
@@ -246,6 +256,7 @@ int main(int argc, char **argv) {
   mlir::registerPassManagerCLOptions();
   mlir::registerDefaultTimingManagerCLOptions();
   cl::ParseCommandLineOptions(argc, argv, "SCL compiler\n");
+  sclang::g_testBuiltins = testBuiltinsOpt;
 
   if (emitAction == Action::DumpAST)
     return dumpAST();

@@ -1,0 +1,13 @@
+// RUN: not sclang --opt --emit=mlir %s 2>&1 | FileCheck %s
+// RUN: not sclang-gen --emit=mlir %s 2>&1 | FileCheck %s
+
+// Test builtins are gated behind --test-builtins: in a normal file they
+// must be diagnosed as errors, not silently accepted.
+// CHECK: __DEBUG_PRINT is a test builtin: enable it with --test-builtins
+// CHECK: __ASSERT is a test builtin: enable it with --test-builtins
+function OB1 : int
+begin
+  __DEBUG_PRINT('nope');
+  __ASSERT(1 = 1);
+  OB1 := 0;
+end_function

@@ -1,11 +1,11 @@
-// RUN: sclang --opt --emit=jit %s 2>&1 | FileCheck %s
+// RUN: sclang --test-builtins --opt --emit=jit %s 2>&1 | FileCheck %s
 // CHECK-NOT: failed
 
-// Message form: unchanged output, one line of text.
+// Message form: one line of text. Value/multi-arg form: one
+// `line N: <expr text> = <value>` per argument, via the runtime C ABI.
 // CHECK: hello message
-// Value form: `line N: <expr text> = <value>` via the runtime C ABI.
 // CHECK: line {{[0-9]+}}: x = 42
-// CHECK: line {{[0-9]+}}: x + 1 = 43
+// CHECK: line {{[0-9]+}}: (x + 1) = 43
 // CHECK: line {{[0-9]+}}: r = 1.5
 // CHECK: line {{[0-9]+}}: b = 1
 function OB1 : int
@@ -18,11 +18,9 @@ begin
   x := 42;
   r := 1.5;
   b := true;
-  // DEBUG PRINT hello message
-  // DEBUG PRINT x;
-  // DEBUG PRINT x + 1;
-  // DEBUG PRINT r;
-  // DEBUG PRINT b;
+  __DEBUG_PRINT('hello message');
+  __DEBUG_PRINT(x);
+  __DEBUG_PRINT(x + 1, r, b);
   OB1 := 0;
 end_function
 function _mlir_ciface_OB1 : void

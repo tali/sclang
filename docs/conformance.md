@@ -33,6 +33,10 @@ What is run (two tiers):
   - every `*.scl` (except `makefile.scl`) individually with `-x=scl`;
   - every directory of `.scl` files concatenated (newline-separated) as one
     project with `-x=scl` (TIA exports are multi-file);
+- All tiers run sclang with `--test-builtins`: the awlsim-style test
+  builtins (`__ASSERT`, and in SCL/ST also `__DEBUG_PRINT`, `__BITS`,
+  `__UNBITS`, `__STRTO_M`, `__LOADM64`, `__STOREM64`) are only recognized
+  in that mode; in normal source files they are compile errors.
 - **JIT smoke tier** (`--emit=jit --jit-cycles=2`) on every file defining
   OB 1: the full pipeline — LowerToStd, LowerToLLVM, ExecutionEngine — and
   two scan cycles of `_mlir_ciface_OB1`. This is a *smoke test*: it proves

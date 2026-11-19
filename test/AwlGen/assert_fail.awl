@@ -1,4 +1,4 @@
-// RUN: not sclang -x awl --emit=jit --jit-cycles=2 %s 2>&1 | FileCheck %s
+// RUN: not sclang -x awl --test-builtins --emit=jit --jit-cycles=2 %s 2>&1 | FileCheck %s
 // A failing awlsim __ASSERT oracle makes the sim runtime report the
 // mismatch and the driver exit with code 2 (oracle tier, see
 // docs/conformance.md).

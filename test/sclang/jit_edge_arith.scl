@@ -1,4 +1,4 @@
-// RUN: printf '0 a=-5 b=4 r=1065353216\n1 a=5 b=-4 r=0\n2 a=-7 b=3 r=3212836864\n' > %t.in && sclang -x=st --emit=jit --jit-cycles=3 --cycle-ms=100 --scan-io=in:a=M/0/2 --scan-io=in:b=M/2/2 --scan-io=in:r=M/4/4 --scan-io=out:m1=M/8/2 --scan-io=out:d1=M/10/2 --scan-io=out:rdiv=M/12/4 --scan-io=out:radd=M/16/4 --scan-io=out:r2i_p=M/20/2 --scan-io=out:r2i_n=M/22/2 --scan-io=out:r2i_p3=M/24/2 --scan-inputs=%t.in %s 2>&1 | FileCheck %s
+// RUN: printf '0 a=-5 b=4 r=1065353216\n1 a=5 b=-4 r=0\n2 a=-7 b=3 r=3212836864\n' > %t.in && sclang --test-builtins -x=st --emit=jit --jit-cycles=3 --cycle-ms=100 --scan-io=in:a=M/0/2 --scan-io=in:b=M/2/2 --scan-io=in:r=M/4/4 --scan-io=out:m1=M/8/2 --scan-io=out:d1=M/10/2 --scan-io=out:rdiv=M/12/4 --scan-io=out:radd=M/16/4 --scan-io=out:r2i_p=M/20/2 --scan-io=out:r2i_n=M/22/2 --scan-io=out:r2i_p3=M/24/2 --scan-inputs=%t.in %s 2>&1 | FileCheck %s
 // Arithmetic edge values (value-level, pinned). REAL scan-io slots move raw
 // f32 bit patterns: r=1065353216 is 1.0, r=0 is 0.0, r=3212836864 is -1.0.
 // - INT / and MOD truncate toward zero (IEC 61131-3 ed.3 table 34):

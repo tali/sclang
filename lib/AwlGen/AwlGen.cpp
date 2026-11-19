@@ -1257,11 +1257,13 @@ done:
 class AwlGenImpl {
 public:
   AwlGenImpl(mlir::MLIRContext &context, llvm::StringRef source,
-             llvm::StringRef filename)
+             llvm::StringRef filename, bool testBuiltins = false)
       : builder(&context), lexer(source, filename), file(filename),
-        sourceText(source) {}
+        sourceText(source), testBuiltins(testBuiltins) {}
 
   llvm::StringRef sourceText;
+  /// --test-builtins gate for the __ASSERT oracle directive.
+  bool testBuiltins;
   // data model collected by a pre-scan over the whole file (declarations may
   // appear after the blocks that reference them)
   std::map<std::string, Layout> udtLayouts;  // TYPE "name" ... END_TYPE
@@ -3836,9 +3838,14 @@ private:
       pushAcc(builder.create<awl::OrOp>(loc(), i32, hi, swapped).getResult());
       return true;
     }
-    // SPEC[AWL] awlsim test directive __ASSERT<cmp> (value oracles, runtime scl_rt_assert_cmp[_r])
-    if (m.rfind("__ASSERT", 0) == 0)
+    // SPEC[AWL] awlsim test directive __ASSERT<cmp> (value oracles, runtime scl_rt_assert_cmp[_r]).
+    // Only recognized with --test-builtins; in normal AWL files it is an
+    // error (an un-gated assert would silently vanish from test runs).
+    if (m.rfind("__ASSERT", 0) == 0) {
+      if (!testBuiltins)
+        return error("__ASSERT is a test builtin: enable it with --test-builtins");
       return parseAssert();
+    }
     // SPEC[AWL] IEC 61131-3 STL block calls (CALL/UC/CC, incl. parameterized CALL and indirect UC FC [MW x]), see parseCall
     if (m == "CALL" || m == "UC" || m == "CC")
       return parseCall(m == "CC");
@@ -7720,8 +7727,9 @@ private:
 
 mlir::OwningOpRef<mlir::ModuleOp> awlGen(mlir::MLIRContext &context,
                                          llvm::StringRef source,
-                                         llvm::StringRef filename) {
-  return AwlGenImpl(context, source, filename).run();
+                                         llvm::StringRef filename,
+                                         bool testBuiltins) {
+  return AwlGenImpl(context, source, filename, testBuiltins).run();
 }
 
 } // namespace sclang

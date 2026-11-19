@@ -152,7 +152,6 @@ enum Token : int {
   tok_blockcomment_open = -85,  // (*
   tok_blockcomment_close = -86, // *)
   tok_linecomment = -87,        // //
-  tok_debugprint = -88,         // // DEBUG PRINT
 
   // multi character operators
   tok_assignment = -90,    // :=
@@ -306,7 +305,7 @@ public:
   }
 
   llvm::StringRef getComment() {
-    assert(curTok == tok_linecomment || curTok == tok_debugprint);
+    assert(curTok == tok_linecomment);
     return stringValue;
   }
 
@@ -1058,12 +1057,6 @@ private:
             return tok_eof;
           stringValue += (char)lastChar;
         } while (lastChar != '\n' && lastChar != '\r');
-        std::string debugPrefix(" DEBUG PRINT ");
-        if (!stringValue.compare(0, debugPrefix.size(), debugPrefix)) {
-          stringValue = stringValue.substr(
-              debugPrefix.size(), stringValue.size() - debugPrefix.size() - 1);
-          return tok_debugprint;
-        }
         return tok_linecomment;
       } else
         return Token('/');

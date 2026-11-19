@@ -16,10 +16,13 @@
 namespace sclang {
 
 /// Parse and codegen an AWL (STL) source buffer into a module of `awl`
-/// dialect ops (ADR 003). Returns null on error.
+/// dialect ops (ADR 003). Returns null on error. `testBuiltins` enables the
+/// awlsim-style __ASSERT oracle directive (normally passed from the driver's
+/// --test-builtins flag).
 mlir::OwningOpRef<mlir::ModuleOp> awlGen(mlir::MLIRContext &context,
                                          llvm::StringRef source,
-                                         llvm::StringRef filename);
+                                         llvm::StringRef filename,
+                                         bool testBuiltins = false);
 
 /// Register a named DB from an external symbol table (e.g. an awlsim
 /// .awlpro "Symbol table": `126,Data DB 42`), so that P#"Data".VAR and

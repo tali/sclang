@@ -229,7 +229,7 @@ typedef struct SclRtVTable {
   void (*edge_fb)(uint8_t mode, uint64_t idbPtr);
   /* Appended for debug prints (v14). May be NULL in older host runtimes;
      the sim then prints to stdout itself. id = source line. Harmonizes
-     `// DEBUG PRINT` with the __ASSERT oracles: both flow through this
+     __DEBUG_PRINT with the __ASSERT oracles: both flow through this
      vtable with the source line as id. */
   void (*debug_print)(uint32_t id, const char *msg);
   void (*debug_print_i)(uint32_t id, const char *msg, int64_t value);
@@ -265,10 +265,10 @@ void scl_rt_assert_cmp(uint32_t id, uint8_t op, int64_t actual,
                        int64_t expected);
 void scl_rt_assert_cmp_r(uint32_t id, uint8_t op, double actual,
                          double expected);
-/// Debug prints (ABI v14): `// DEBUG PRINT <text>` and the value form
-/// `// DEBUG PRINT <expr>;` (scl.debug.print with a value operand), both
-/// lowered from SCL. The sim prints the message (value form: "line %u:
-/// <expr text> = <value>") to stdout; a host vtable can capture them.
+/// Debug prints (ABI v14): lowered from the __DEBUG_PRINT test builtin
+/// (scl.debug.print, optionally with a value operand). The sim prints the
+/// message (value form: "line %u: <expr text> = <value>") to stdout; a host
+/// vtable can capture them.
 void scl_rt_debug_print(uint32_t id, const char *msg);
 void scl_rt_debug_print_i(uint32_t id, const char *msg, int64_t value);
 void scl_rt_debug_print_r(uint32_t id, const char *msg, double value);

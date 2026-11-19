@@ -1,4 +1,4 @@
-// RUN: sclang --opt --emit=jit %s 2>&1 | FileCheck %s
+// RUN: sclang --test-builtins --opt --emit=jit %s 2>&1 | FileCheck %s
 // CHECK-NOT: failed
 
 // CHECK: be ok
@@ -17,11 +17,11 @@ begin
   x := %MB20;
   y := %DB1.DBB1;
   IF %M10.3 AND x = 1 AND y = 2 THEN
-    // DEBUG PRINT be ok
+    __DEBUG_PRINT('be ok');
   END_IF;
   %Q0.0 := %I0.0;
   IF %Q0.0 = FALSE THEN
-    // DEBUG PRINT q ok
+    __DEBUG_PRINT('q ok');
   END_IF;
 end_function
 

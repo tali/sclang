@@ -1,6 +1,6 @@
 # ADR 002: Peripheral/memory access via a fixed C ABI runtime
 
-- **Status**: accepted and implemented (sim runtime + JIT binding + host vtable via --runtime-lib; v2 appends timer_start/counter_op, v14 appends debug_print/debug_print_i/debug_print_r for `// DEBUG PRINT`, all to the END of the vtable so older host runtimes can leave them NULL)
+- **Status**: accepted and implemented (sim runtime + JIT binding + host vtable via --runtime-lib; v2 appends timer_start/counter_op, v14 appends debug_print/debug_print_i/debug_print_r for the `__DEBUG_PRINT` test builtin, all to the END of the vtable so older host runtimes can leave them NULL)
 - **Date**: 2025 (review session)
 
 ## Context
