@@ -29,8 +29,10 @@
 #include "sclang/SclGen/AST.h"
 #include "sclang/SclGen/Lexer.h"
 
+#include <functional>
 #include <optional>
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -49,6 +51,12 @@ class Parser {
 public:
   /// Create a Parser for the supplied lexer.
   Parser(Lexer &lexer) : lexer(lexer) {}
+
+  /// Optional structured error sink (used by the LSP server to collect
+  /// diagnostics as JSON instead of printing to stderr): called with
+  /// 1-based (line, col) and the message. When unset, errors print to
+  /// llvm::errs() as before.
+  std::function<void(int line, int col, const std::string &msg)> errorSink;
 
   /// Parse a full Module. A module is a list of function definitions.
   std::unique_ptr<ModuleAST> ParseModule() {
@@ -2357,12 +2365,26 @@ private:
   template <typename R, typename T, typename U = const char *>
   std::unique_ptr<R> parseError(T &&expected, U &&context = "") {
     auto curToken = lexer.getCurToken();
-    llvm::errs() << "Parse error (" << lexer.getLastLocation().line << ", "
-                 << lexer.getLastLocation().col << "): expected '" << expected
-                 << "' " << context << " but has Token " << curToken;
-    if (isprint(curToken))
-      llvm::errs() << " '" << (char)curToken << "'";
-    llvm::errs() << "\n";
+    std::string msg;
+    {
+      llvm::raw_string_ostream ms(msg);
+      ms << "expected '" << expected << "' " << context << " but has Token ";
+      msg = ms.str();
+    }
+    {
+      std::string tokStr;
+      llvm::raw_string_ostream ts(tokStr);
+      ts << curToken;
+      msg += tokStr;
+      if (isprint(curToken))
+        msg += " '" + std::string(1, (char)curToken) + "'";
+    }
+    if (errorSink) {
+      errorSink(lexer.getLastLocation().line, lexer.getLastLocation().col, msg);
+    } else {
+      llvm::errs() << "Parse error (" << lexer.getLastLocation().line << ", "
+                   << lexer.getLastLocation().col << "): " << msg << "\n";
+    }
     return nullptr;
   }
 };

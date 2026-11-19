@@ -17,6 +17,7 @@ compile-only tests cannot catch wrong values, and JIT tests cannot tell you
 | Differential cross | same, `--cross` (default) | each trace wrapper run twice: `--emit=jit` vs `--emit=jit-awl` (in-memory awl-dialect lowering); scan lines must be identical |
 | Fuzz | `fuzz_st.py` | seeded random per-scan inputs; SCL->JIT vs SCL->jit-awl must agree |
 | Invalid-input fuzz | `fuzz_invalid.py` | mutates the test corpus (byte flips/deletes/inserts/truncation/garbage); asserts the tools never die by signal or hang — invalid input must yield a diagnostic + clean exit (robustness, see AGENTS.md) |
+| LSP smoke | `lsp_smoke.py` | drives `sclang --lsp` over stdio (JSON-RPC): syntax-error diagnostics with correct 0-based positions, diagnostics cleared by a ranged didChange, and a didSave JIT run whose per-scan values are checked (`scan 0: mw=1`, `scan 1: mw=2`) — i.e. it tests executed results, not just that the server responds |
 
 Run everything:
 
@@ -26,6 +27,7 @@ python3 test/conformance/run_conformance.py --sclang build.23/bin/sclang
 python3 test/conformance/run_st_traces.py --sclang build.23/bin/sclang --cross   # add --jobs N to parallelize (default min(8, cores); 10s -> 3.5s)
 python3 test/conformance/fuzz_st.py --sclang build.23/bin/sclang --scans 5 --seed 7
 python3 test/conformance/fuzz_invalid.py --sclang build.23/bin/sclang --iters 500 --seed 1
+python3 test/conformance/lsp_smoke.py --sclang build.23/bin/sclang
 ```
 
 ## Why the differential cross exists

@@ -144,6 +144,10 @@ static cl::opt<enum Action> emitAction(
                           "round-trip used by --emit=awl + -x=awl)")));
 
 static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
+// Run as a minimal LSP server (JSON-RPC over stdio) instead of a batch
+// compile: see sclang/Lsp.cpp and AGENTS.md "LSP mode".
+static cl::opt<bool> lspMode("lsp", cl::desc("Run as an LSP server on stdio"),
+                             cl::init(false));
 // Verify the IR after every pass (default on; disable with
 // --verify-each=0 to speed up large compilations, see AGENTS.md).
 static cl::opt<bool> verifyEach("verify-each",
@@ -324,6 +328,18 @@ static bool parseScanInputsFile(
 }
 } // namespace
 
+/// Parse SCL source text held in memory (LSP mode); `name` is used for
+/// locations. `parserSink`, when set, receives structured parse errors.
+std::unique_ptr<sclang::ModuleAST>
+parseSourceText(llvm::StringRef text, std::string name,
+                std::function<void(int, int, const std::string &)> parserSink =
+                    nullptr) {
+  LexerBuffer lexer(text.begin(), text.end(), std::move(name), langMode());
+  Parser parser(lexer);
+  parser.errorSink = std::move(parserSink);
+  return parser.ParseModule();
+}
+
 /// Returns a SCL AST resulting from parsing the file or a nullptr on error.
 std::unique_ptr<sclang::ModuleAST> parseInputFile(llvm::StringRef filename) {
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> FileOrErr =
@@ -333,25 +349,20 @@ std::unique_ptr<sclang::ModuleAST> parseInputFile(llvm::StringRef filename) {
     return nullptr;
   }
   auto buffer = FileOrErr.get()->getBuffer();
-  LexerBuffer lexer(buffer.begin(), buffer.end(), std::string(filename),
-                    langMode());
-  Parser parser(lexer);
-  return parser.ParseModule();
+  return parseSourceText(buffer, std::string(filename));
 }
 
-int loadMLIR(mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &module) {
-  // Handle '.scl' / '.awl' input to the compiler.
-  if (inputType != InputType::MLIR &&
-      !llvm::StringRef(inputFilename).ends_with(".mlir")) {
+/// Load a module from in-memory source text (LSP mode). `name` selects the
+/// language by extension (`.awl` -> AWL, `.mlir` -> MLIR text, else SCL);
+/// `parserSink` receives structured parse errors for SCL input.
+int loadMLIRFromBuffer(
+    mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &module,
+    llvm::StringRef text, llvm::StringRef name,
+    std::function<void(int, int, const std::string &)> parserSink = nullptr) {
+  if (inputType != InputType::MLIR && !llvm::StringRef(name).ends_with(".mlir")) {
     bool isAwl = inputType == InputType::Awl ||
-                 llvm::StringRef(inputFilename).ends_with(".awl");
+                 llvm::StringRef(name).ends_with(".awl");
     if (isAwl) {
-      llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
-          llvm::MemoryBuffer::getFileOrSTDIN(inputFilename);
-      if (std::error_code EC = fileOrErr.getError()) {
-        llvm::errs() << "Could not open input file: " << EC.message() << "\n";
-        return 6;
-      }
       for (auto &ds : dbSyms) {
         auto eq = ds.find('=');
         if (eq == std::string::npos)
@@ -359,11 +370,10 @@ int loadMLIR(mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &modu
         sclang::awlRegisterNamedDb(ds.substr(0, eq),
                                    (int32_t)atoi(ds.substr(eq + 1).c_str()));
       }
-      module = sclang::awlGen(context, fileOrErr.get()->getBuffer(),
-                              std::string(inputFilename));
+      module = sclang::awlGen(context, text, std::string(name));
       return !module ? 1 : 0;
     }
-    auto moduleAST = parseInputFile(inputFilename);
+    auto moduleAST = parseSourceText(text, std::string(name), parserSink);
     if (!moduleAST)
       return 6;
     module = mlirGen(context, *moduleAST);
@@ -371,29 +381,34 @@ int loadMLIR(mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &modu
   }
 
   // Otherwise, the input is '.mlir'.
+  llvm::SourceMgr sourceMgr;
+  sourceMgr.AddNewSourceBuffer(
+      llvm::MemoryBuffer::getMemBuffer(text, std::string(name)),
+      llvm::SMLoc());
+  module = mlir::parseSourceFile<mlir::ModuleOp>(sourceMgr, &context);
+  if (!module)
+    return 3;
+  return 0;
+}
+
+int loadMLIR(mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &module) {
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
       llvm::MemoryBuffer::getFileOrSTDIN(inputFilename);
   if (std::error_code EC = fileOrErr.getError()) {
     llvm::errs() << "Could not open input file: " << EC.message() << "\n";
-    return -1;
+    bool isMlir = inputType == InputType::MLIR ||
+                  llvm::StringRef(inputFilename).ends_with(".mlir");
+    return isMlir ? -1 : 6;
   }
-
-  // Parse the input mlir.
-  llvm::SourceMgr sourceMgr;
-  sourceMgr.AddNewSourceBuffer(std::move(*fileOrErr), llvm::SMLoc());
-  module = mlir::parseSourceFile<mlir::ModuleOp>(sourceMgr, &context);
-  if (!module) {
-    llvm::errs() << "Error can't load file " << inputFilename << "\n";
-    return 3;
-  }
-  return 0;
+  return loadMLIRFromBuffer(context, module, fileOrErr.get()->getBuffer(),
+                            inputFilename);
 }
 
-int loadAndProcessMLIR(mlir::MLIRContext &context,
-                       mlir::OwningOpRef<mlir::ModuleOp> &module) {
-  if (int error = loadMLIR(context, module))
-    return error;
-
+/// Run the lowering/optimization pass pipeline on an already-loaded module
+/// (split out of loadAndProcessMLIR so the LSP server can run it on an
+/// in-memory module).
+int processModule(mlir::MLIRContext &context,
+                  mlir::OwningOpRef<mlir::ModuleOp> &module) {
   mlir::PassManager pm(&context);
   // Apply any generic pass manager command line options and run the pipeline.
   applyPassManagerCLOptions(pm);
@@ -457,6 +472,13 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
   if (mlir::failed(pm.run(*module)))
     return 4;
   return 0;
+}
+
+int loadAndProcessMLIR(mlir::MLIRContext &context,
+                       mlir::OwningOpRef<mlir::ModuleOp> &module) {
+  if (int error = loadMLIR(context, module))
+    return error;
+  return processModule(context, module);
 }
 
 int dumpAST() {
@@ -669,7 +691,8 @@ static bool configureRuntimeBinding() {
   return true;
 }
 
-int runJit(mlir::ModuleOp module) {
+int runJit(mlir::ModuleOp module, llvm::raw_ostream *scanOut = nullptr) {
+  llvm::raw_ostream &scanOS = scanOut ? *scanOut : llvm::outs();
   // Initialize LLVM targets.
   llvm::InitializeNativeTarget();
   llvm::InitializeNativeTargetAsmPrinter();
@@ -782,7 +805,7 @@ int runJit(mlir::ModuleOp module) {
       }
       // After the scan: report the out-slots as `scan N: name=value ...`.
       if (!scanSlots.empty()) {
-        llvm::outs() << "scan " << i << ":";
+        scanOS << "scan " << i << ":";
         for (auto &slot : scanSlots) {
           if (slot.isInput)
             continue;
@@ -798,8 +821,7 @@ int runJit(mlir::ModuleOp module) {
             for (uint32_t i = 0; i < actlen; ++i)
               s += (char)(uint8_t)scl_rt_read(slot.area, 0,
                                               slot.byteOff + 2 + i, 1);
-            llvm::outs() << " " << slot.name << "='" << encodeScanString(s)
-                         << "'";
+            scanOS << " " << slot.name << "='" << encodeScanString(s) << "'";
             continue;
           }
           int64_t v = slot.bit >= 0
@@ -808,9 +830,9 @@ int runJit(mlir::ModuleOp module) {
                                  ? 1
                                  : 0)
                           : scl_rt_read(slot.area, 0, slot.byteOff, slot.width);
-          llvm::outs() << " " << slot.name << "=" << v;
+          scanOS << " " << slot.name << "=" << v;
         }
-        llvm::outs() << "\n";
+        scanOS << "\n";
       }
       if (scl_rt_stop_requested())
         break; // SFC 46 (STOP) / SFC -3 (SHUTDOWN): awlsim halts the CPU
@@ -831,6 +853,94 @@ int runJit(mlir::ModuleOp module) {
   return 0;
 }
 
+namespace sclang {
+
+/// One structured diagnostic (1-based line/col, 0 = unknown).
+struct LspDiag {
+  int line;
+  int col;
+  std::string message;
+  bool warning;
+};
+
+/// Load every dialect the compiler emits or consumes into `context`.
+/// Shared by main() and the LSP server so both see the same dialect set.
+void registerSclangDialects(mlir::MLIRContext &context) {
+  context.getOrLoadDialect<mlir::scl::SclDialect>();
+  context.getOrLoadDialect<mlir::awl::AwlDialect>();
+  context.getOrLoadDialect<mlir::cf::ControlFlowDialect>();
+  context.getOrLoadDialect<mlir::math::MathDialect>();
+  context.getOrLoadDialect<mlir::func::FuncDialect>();
+  context.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
+  context.getOrLoadDialect<mlir::memref::MemRefDialect>();
+  context.getOrLoadDialect<mlir::scf::SCFDialect>();
+  context.getOrLoadDialect<mlir::arith::ArithDialect>();
+}
+
+// Set by lspCompile; the MLIR diagnostic handler appends to it.
+static std::vector<LspDiag> *g_lspDiags = nullptr;
+
+static void lspDiagHandler(mlir::Diagnostic &d) {
+  if (!g_lspDiags)
+    return;
+  LspDiag out{0, 0, {}, d.getSeverity() == mlir::DiagnosticSeverity::Warning};
+  if (auto flc = llvm::dyn_cast<mlir::FileLineColLoc>(d.getLocation())) {
+    out.line = flc.getLine();
+    out.col = flc.getColumn();
+  }
+  llvm::raw_string_ostream os(out.message);
+  d.print(os);
+  out.message = os.str();
+  g_lspDiags->push_back(std::move(out));
+}
+
+/// Compile in-memory source text (LSP mode). `name` picks the language by
+/// extension. Diagnostics (parse errors via the parser sink + MLIR/verifier
+/// diagnostics via the context handler) are appended to `diags`. When
+/// `fullPipeline` is set, the lowering pipeline runs too (forced to full
+/// depth). Returns 0 on success.
+int lspCompile(mlir::MLIRContext &ctx, llvm::StringRef text, llvm::StringRef name,
+               bool fullPipeline, std::vector<LspDiag> &diags,
+               mlir::OwningOpRef<mlir::ModuleOp> &module) {
+  static bool handlerRegistered = false;
+  if (!handlerRegistered) {
+    ctx.getDiagEngine().registerHandler(lspDiagHandler);
+    handlerRegistered = true;
+  }
+  g_lspDiags = &diags;
+  int rc = loadMLIRFromBuffer(ctx, module, text, name,
+                              [&](int line, int col, const std::string &msg) {
+                                diags.push_back({line, col, msg, false});
+                              });
+  if (rc == 0 && module)
+    rc = mlir::failed(mlir::verify(*module)) ? 1 : 0;
+  if (rc == 0 && fullPipeline && module) {
+    Action saved = emitAction;
+    emitAction = Action::RunJIT; // full lowering depth
+    rc = processModule(ctx, module);
+    emitAction = saved;
+  }
+  g_lspDiags = nullptr;
+  return rc;
+}
+
+/// Run the JIT scan loop on a fully lowered module; scan output lines go to
+/// `out`. Returns 0 on success.
+int lspRunJit(mlir::ModuleOp module, unsigned cycles, llvm::raw_ostream &out) {
+  unsigned saved = jitCycles;
+  jitCycles = cycles;
+  int rc = runJit(module, &out);
+  jitCycles = saved;
+  return rc;
+}
+
+} // namespace sclang
+
+namespace sclang {
+// Defined in Lsp.cpp: minimal LSP server (JSON-RPC over stdio).
+int runLspServer(unsigned jitCycles);
+} // namespace sclang
+
 int main(int argc, char **argv) {
   // Register any command line options.
   mlir::registerAsmPrinterCLOptions();
@@ -839,6 +949,9 @@ int main(int argc, char **argv) {
   mlir::registerDefaultTimingManagerCLOptions();
 
   cl::ParseCommandLineOptions(argc, argv, "SCL compiler\n");
+
+  if (lspMode)
+    return sclang::runLspServer(jitCycles);
 
   if (emitAction == Action::DumpAST)
     return dumpAST();
@@ -853,19 +966,8 @@ int main(int argc, char **argv) {
     llvm::errs() << "\n";
     return mlir::success();
   });
-  // Load our Dialect in this MLIR Context.
-  context.getOrLoadDialect<mlir::scl::SclDialect>();
-  context.getOrLoadDialect<mlir::awl::AwlDialect>();
-  context.getOrLoadDialect<mlir::cf::ControlFlowDialect>();
-  context.getOrLoadDialect<mlir::math::MathDialect>();
-  context.getOrLoadDialect<mlir::func::FuncDialect>();
-  // Load other target dialects
-  context.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
-  context.getOrLoadDialect<mlir::memref::MemRefDialect>();
-  context.getOrLoadDialect<mlir::scf::SCFDialect>();
-  context.getOrLoadDialect<mlir::func::FuncDialect>();
-  context.getOrLoadDialect<mlir::arith::ArithDialect>();
-  context.getOrLoadDialect<mlir::cf::ControlFlowDialect>();
+  // Load our dialects in this MLIR Context.
+  sclang::registerSclangDialects(context);
 
   mlir::OwningOpRef<mlir::ModuleOp> module;
   if (int error = loadAndProcessMLIR(context, module))

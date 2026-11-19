@@ -277,12 +277,40 @@ has no `\b` — use python3 for regex edits.
   may clobber the runtime ACCUs) and refreshed by `reloadAcc()` at labels and
   block entries.
 
+## LSP mode (editor integration)
+
+- `sclang --lsp` runs a minimal LSP server (JSON-RPC over stdio) implemented in
+  `sclang/Lsp.cpp`: initialize/shutdown/exit, textDocument/didOpen/didChange
+  (full-text and ranged splices)/didSave/didClose; after every open/change it
+  sends `textDocument/publishDiagnostics`; on didSave (or the custom
+  `sclang/runScans` request) it runs the full lowering + JIT scan loop and
+  answers with a `sclang/scanResults` notification (honors `--jit-cycles`,
+  `--scan-io`, ...). Design rationale (incremental parsing): the
+  recursive-descent parser does ~100k lines in ~50ms, so each change triggers
+  a full re-parse of the document inside the persistent process — no
+  tree-sitter-style green tree is needed at SCL file sizes; only the
+  expensive part (lowering + JIT) is deferred to save.
+- Implementation notes: the server keeps its own `mlir::MLIRContext` and must
+  call `sclang::registerSclangDialects(context)` (shared with main(), see
+  sclang.cpp) — an unregistered scl dialect makes mlirGen dereference a null
+  dialect and segfault in release builds. Parse errors are routed through
+  `Parser::errorSink` (include/sclang/SclGen/Parser.h) into structured
+  `LspDiag`s; MLIR/verifier diagnostics go through a context diag handler
+  installed once by `lspCompile`. All JIT scan output must go to the
+  `scanOS` stream (runJit's `scanOut` param), never directly to `llvm::outs()`
+  — unframed bytes on stdout corrupt the JSON-RPC framing.
+- Test: `python3 test/conformance/lsp_smoke.py --sclang build.23/bin/sclang`
+  drives initialize / didOpen(syntax error) / ranged didChange / full didChange
+  / didSave(JIT) and checks the diagnostic position, that it clears, and the
+  actual per-scan values (`scan 0: mw=1`, `scan 1: mw=2`).
+
 ## Tests
 
 - Test methodology and the rationale for each tier (lit / corpora / JIT smoke
   / awlsim oracle / ST traces / differential cross / fuzz, plus the
-  `jit_edge_*` scenario rationale) are in `docs/testing.md`. Current: 133
-  lit tests, 92/92 ST traces with cross.
+  `jit_edge_*` scenario rationale) are in `docs/testing.md`. Current: 141
+  lit tests, 92/92 ST traces with cross, plus the LSP smoke test
+  (`test/conformance/lsp_smoke.py`, see "LSP mode" above).
 - lit tests live in `test/SclGen/Parse`, `test/SclGen/MLIR`, `test/SclTransforms`,
   `test/AwlGen`, `test/sclang`; BUILD files glob `*.scl` (sclang dir also `*.awl`),
   so new files are picked up automatically. `test/lit.cfg.py` suffixes include

@@ -10,6 +10,7 @@ set(LLVM_LINK_COMPONENTS
 
 add_llvm_executable(sclang
   LowerToLLVM.cpp
+  Lsp.cpp
   sclang.cpp
 
   DEPENDS
