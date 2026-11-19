@@ -19,6 +19,7 @@ compile-only tests cannot catch wrong values, and JIT tests cannot tell you
 | Invalid-input fuzz | `fuzz_invalid.py` | mutates the test corpus (byte flips/deletes/inserts/truncation/garbage); asserts the tools never die by signal or hang — invalid input must yield a diagnostic + clean exit (robustness, see AGENTS.md) |
 | Project build cache | `project_cache.py` | multi-file project with `--cache-dir`: hit/miss counts per build, cached output byte-identical to uncached (`--emit=mlir` and JIT scan values), edit-one-file -> one miss, corrupted entries rebuilt, duplicate POU across files still an error |
 | LSP smoke | `lsp_smoke.py` | drives `sclang --lsp` over stdio (JSON-RPC): syntax-error diagnostics with correct 0-based positions, diagnostics cleared by a ranged didChange, and a didSave JIT run whose per-scan values are checked (`scan 0: mw=1`, `scan 1: mw=2`) — i.e. it tests executed results, not just that the server responds |
+| LSP semantic edits | `lsp_semantic.py` | scripted editing sessions (typing a POU incrementally, renaming a variable via ranged multi-change didChange): asserts parse diagnostics (SCL codes) turn into semantic diagnostics (`unknown variable`, MLIR code) at the exact use site, that errors in several POUs are all reported in one pass (tolerant MLIRGen), that renaming one occurrence vs. the declaration moves the diagnostic accordingly, and that a didSave of the fixed document JIT-runs with the expected scan values. Shared JSON-RPC client: `lsp_client.py` |
 
 Run everything:
 
@@ -29,6 +30,7 @@ python3 test/conformance/run_st_traces.py --sclang build.23/bin/sclang --cross  
 python3 test/conformance/fuzz_st.py --sclang build.23/bin/sclang --scans 5 --seed 7
 python3 test/conformance/fuzz_invalid.py --sclang build.23/bin/sclang --iters 500 --seed 1   # add --tolerant to also fuzz the --parse-tolerant recovery paths
 python3 test/conformance/lsp_smoke.py --sclang build.23/bin/sclang
+python3 test/conformance/lsp_semantic.py --sclang build.23/bin/sclang
 python3 test/conformance/project_cache.py --sclang build.23/bin/sclang
 ```
 

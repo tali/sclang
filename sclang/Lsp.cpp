@@ -29,6 +29,8 @@
 
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -206,8 +208,7 @@ private:
       if (it == docs.end())
         return true;
       if (auto *changes = params->getArray("contentChanges"))
-        for (const Value &ch : *changes)
-          applyChange(it->second.text, ch);
+        applyChanges(it->second.text, *changes);
       publishDiagnostics(uri);
     } else if (method == "textDocument/didSave") {
       if (params)
@@ -254,39 +255,54 @@ private:
     return uri.str();
   }
 
-  // Apply one LSP contentChange (full text, or ranged splice; positions are
-  // treated as byte offsets within the line — fine for ASCII SCL/AWL).
-  static void applyChange(std::string &text, const Value &ch) {
-    const Object *c = ch.getAsObject();
-    if (!c)
-      return;
-    auto newText = c->getString("text");
-    if (!newText)
-      return;
-    const Object *range = c->getObject("range");
-    if (!range) {
-      text = newText->str();
-      return;
+  // Byte offset of an LSP (line, character) position. Positions are treated
+  // as byte offsets within the line — fine for ASCII SCL/AWL.
+  static size_t offsetOf(llvm::StringRef text, const Object *p) {
+    long line = *p->getInteger("line");
+    long col = *p->getInteger("character");
+    size_t off = 0;
+    for (long l = 0; l < line && off < text.size(); ++l) {
+      size_t nl = text.find('\n', off);
+      off = (nl == std::string::npos) ? text.size() : nl + 1;
     }
-    // compute byte offset of a (line, character) position
-    auto offsetOf = [&](const Object *p) {
-      long line = *p->getInteger("line");
-      long col = *p->getInteger("character");
-      size_t off = 0;
-      for (long l = 0; l < line && off < text.size(); ++l) {
-        size_t nl = text.find('\n', off);
-        off = (nl == std::string::npos) ? text.size() : nl + 1;
-      }
-      return off + std::min<size_t>(col, text.size() - off);
+    return off + std::min<size_t>(col, text.size() - off);
+  }
+
+  // Apply a batch of contentChanges. Per the LSP spec a didChange may carry
+  // several changes whose ranges all refer to the document state *before* the
+  // batch (this is what editors send for multi-cursor edits / rename), so all
+  // offsets are computed against the original text and applied back-to-front.
+  // A change without a range replaces the whole document.
+  static void applyChanges(std::string &text, const Array &changes) {
+    struct Edit {
+      size_t s, e;
+      std::string ins;
     };
-    const Object *start = range->getObject("start");
-    const Object *end = range->getObject("end");
-    if (!start || !end)
-      return;
-    size_t s = offsetOf(start), e = offsetOf(end);
-    if (s > e)
-      std::swap(s, e);
-    text.replace(s, e - s, newText->str());
+    llvm::SmallVector<Edit, 4> edits;
+    for (const Value &ch : changes) {
+      const Object *c = ch.getAsObject();
+      if (!c)
+        continue;
+      auto newText = c->getString("text");
+      if (!newText)
+        continue;
+      const Object *range = c->getObject("range");
+      if (!range) {
+        text = newText->str();
+        return;
+      }
+      const Object *start = range->getObject("start");
+      const Object *end = range->getObject("end");
+      if (!start || !end)
+        continue;
+      size_t s = offsetOf(text, start), e = offsetOf(text, end);
+      if (s > e)
+        std::swap(s, e);
+      edits.push_back({s, e, newText->str()});
+    }
+    llvm::sort(edits, [](const Edit &a, const Edit &b) { return a.s > b.s; });
+    for (const Edit &ed : edits)
+      text.replace(ed.s, ed.e - ed.s, ed.ins);
   }
 
   Value diagnosticsToJson(const std::vector<LspDiag> &diags) {

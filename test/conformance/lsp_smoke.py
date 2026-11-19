@@ -10,78 +10,20 @@
 #
 # Usage: python3 test/conformance/lsp_smoke.py --sclang build.23/bin/sclang
 import argparse
-import json
-import subprocess
 import sys
 
-
-def frame(obj):
-    body = json.dumps(obj).encode()
-    return b"Content-Length: %d\r\n\r\n" % len(body) + body
-
-
-class Lsp:
-    def __init__(self, sclang):
-        # --scan-io makes the JIT print `scan N: mw=value` per cycle so the
-        # test can check the *executed* result, not just the exit code.
-        self.p = subprocess.Popen([sclang, '--lsp', '--jit-cycles=2',
-                                   '--scan-io=out:mw=M/500/2'],
-                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        self.buf = b""
-
-    def send(self, obj):
-        self.p.stdin.write(frame(obj))
-        self.p.stdin.flush()
-
-    def recv(self, timeout=30):
-        # read one framed message
-        while b"\r\n\r\n" not in self.buf:
-            chunk = self.p.stdout.read1(65536)
-            if not chunk:
-                raise EOFError("server closed stdout")
-            self.buf += chunk
-        head, rest = self.buf.split(b"\r\n\r\n", 1)
-        length = None
-        for line in head.split(b"\r\n"):
-            if line.lower().startswith(b"content-length:"):
-                length = int(line.split(b":")[1])
-        while len(rest) < length:
-            chunk = self.p.stdout.read1(65536)
-            if not chunk:
-                raise EOFError("server closed stdout mid-body")
-            rest += chunk
-        self.buf = rest[length:]
-        return json.loads(rest[:length])
-
-    def request(self, method, params, id):
-        self.send({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
-        while True:
-            m = self.recv()
-            if m.get("id") == id:
-                return m
-
-    def notify(self, method, params):
-        self.send({"jsonrpc": "2.0", "method": method, "params": params})
-
-    def wait_notification(self, method, timeout=30):
-        import time
-        t0 = time.time()
-        while time.time() - t0 < timeout:
-            m = self.recv()
-            if m.get("method") == method:
-                return m
-        raise TimeoutError(method)
+from lsp_client import Lsp
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--sclang', required=True)
     args = ap.parse_args()
-    lsp = Lsp(args.sclang)
-    r = lsp.request("initialize", {"processId": None, "rootUri": None,
-                                   "capabilities": {}}, 1)
-    assert "result" in r and r["result"]["capabilities"]["textDocumentSync"] == 1, r
-    lsp.notify("initialized", {})
+    # --scan-io makes the JIT print `scan N: mw=value` per cycle so the test
+    # can check the *executed* result, not just the exit code.
+    lsp = Lsp(args.sclang, ['--jit-cycles=2', '--scan-io=out:mw=M/500/2'])
+    r = lsp.initialize()
+    assert r["result"]["capabilities"]["textDocumentSync"] == 1, r
 
     uri = "file:///tmp/lsp_smoke.scl"
     bad = "function f : int\nvar\n  x : int;\nend_var\nbegin\n  x := ;\nend_function\n"
@@ -144,10 +86,7 @@ def main():
     assert all(c.startswith("SCL1") for c in codes), diags  # stable codes
     print("PASS tolerant multi-error diagnostics: lines", lines, "codes", codes)
 
-    r = lsp.request("shutdown", None, 2)
-    assert r.get("result") is None, r
-    lsp.notify("exit", {})
-    lsp.p.wait(timeout=10)
+    lsp.shutdown()
     print("lsp_smoke: all PASS")
     return 0
 

@@ -316,20 +316,35 @@ has no `\b` — use python3 for regex edits.
   `LspDiag`s; MLIR/verifier diagnostics go through a context diag handler
   installed once by `lspCompile`. All JIT scan output must go to the
   `scanOS` stream (runJit's `scanOut` param), never directly to `llvm::outs()`
-  — unframed bytes on stdout corrupt the JSON-RPC framing.
-- Test: `python3 test/conformance/lsp_smoke.py --sclang build.23/bin/sclang`
+  — unframed bytes on stdout corrupt the JSON-RPC framing. A didChange batch
+  may carry several ranged changes whose ranges all refer to the document
+  state BEFORE the batch (editor multi-cursor/rename style), so
+  `LspServer::applyChanges` computes all offsets against the original text
+  and applies them back-to-front; a rangeless change replaces the whole text.
+- Semantic diagnostics: MLIRGen is error-tolerant like the parser — a failed
+  instruction or POU does not stop codegen of the rest (lib/SclGen/MLIRGen.cpp,
+  code-section and module loops), so one compile reports every bad statement
+  and every bad unit (still fails overall; the partial module is discarded).
+- Tests: `python3 test/conformance/lsp_smoke.py --sclang build.23/bin/sclang`
   drives initialize / didOpen(syntax error) / ranged didChange / full didChange
   / didSave(JIT) and checks the diagnostic position, that it clears, and the
   actual per-scan values (`scan 0: mw=1`, `scan 1: mw=2`).
+  `python3 test/conformance/lsp_semantic.py --sclang build.23/bin/sclang`
+  drives scripted semantic edits: typing a POU incrementally (parse error ->
+  undeclared-variable diagnostic at the use site -> clean once declared;
+  errors in two POUs reported in one pass), renaming a variable via ranged
+  editor-style edits (rename one use / only the decl / all occurrences in one
+  multi-change didChange), and a didSave JIT run of the fixed document. Both
+  share the JSON-RPC client in `test/conformance/lsp_client.py`.
 
 ## Tests
 
 - Test methodology and the rationale for each tier (lit / corpora / JIT smoke
   / awlsim oracle / ST traces / differential cross / fuzz, plus the
   `jit_edge_*` scenario rationale) are in `docs/testing.md`. Current: 147
-  lit tests, 92/92 ST traces with cross, plus the LSP smoke test
-  (`test/conformance/lsp_smoke.py`, see "LSP mode" above) and the per-file
-  build-cache test (`test/conformance/project_cache.py`).
+  lit tests, 92/92 ST traces with cross, plus the LSP tests
+  (`test/conformance/lsp_smoke.py`, `lsp_semantic.py`, see "LSP mode" above)
+  and the per-file build-cache test (`test/conformance/project_cache.py`).
 - lit tests live in `test/SclGen/Parse`, `test/SclGen/MLIR`, `test/SclTransforms`,
   `test/AwlGen`, `test/sclang`; BUILD files glob `*.scl` (sclang dir also `*.awl`),
   so new files are picked up automatically. `test/lit.cfg.py` suffixes include
