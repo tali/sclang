@@ -23,8 +23,11 @@ one-line pointer here.
   (NO new dialect; LangMode threaded through Lexer/Parser/MLIRGen, dialect
   only gains LREAL f64 type + `scl.config` op).
 - `docs/design/` — evolving design plans: memory-areas (phase 1 implemented),
-  awl-frontend, scl-to-awl. Update these when the plan changes; add new ADRs
-  when a decision becomes fixed.
+  awl-frontend, scl-to-awl, multi-file-incremental (project model + per-file
+  content-hash cache + LSP project mode; PLAN ONLY, not implemented — project
+  = one namespace = one MLIR module via ModuleAST unit splicing, see that doc
+  before touching multi-file code). Update these when the plan changes; add
+  new ADRs when a decision becomes fixed.
 - README.md is user-facing (status + build); do not put design detail there.
 - In-code rationale lives next to the code: `.td` description fields, and the
   runtime ABI contract in the header comments of `include/sclang/Runtime/Runtime.h`.
