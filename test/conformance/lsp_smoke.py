@@ -125,6 +125,23 @@ def main():
     assert "scan 0: mw=1" in out and "scan 1: mw=2" in out, out
     print("PASS didSave JIT run:", " | ".join(out.split()))
 
+    # error-tolerant parsing in LSP mode: a document with several errors on
+    # different lines gets one diagnostic per error (not just the first)
+    uri2 = "file:///tmp/lsp_smoke2.scl"
+    multi_err = ("function f1 : int\nvar\n  x : int;\nend_var\nbegin\n"
+                 "  x := ;\n  x := 1 + ;\nend_function\n"
+                 "123 garbage\n"
+                 "function f3 : int\nbegin\n  f3 := 1;\nend_function\n")
+    lsp.notify("textDocument/didOpen",
+               {"textDocument": {"uri": uri2, "languageId": "scl", "version": 1,
+                                 "text": multi_err}})
+    d = lsp.wait_notification("textDocument/publishDiagnostics")
+    assert d["params"]["uri"] == uri2, d
+    diags = d["params"]["diagnostics"]
+    lines = sorted(x["range"]["start"]["line"] for x in diags)
+    assert len(diags) >= 3 and lines == [5, 6, 8], diags  # 0-based: 6,7,9
+    print("PASS tolerant multi-error diagnostics: lines", lines)
+
     r = lsp.request("shutdown", None, 2)
     assert r.get("result") is None, r
     lsp.notify("exit", {})

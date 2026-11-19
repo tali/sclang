@@ -54,12 +54,15 @@ def mutate(rng, data):
     return bytes(b)
 
 
-def tool_args(sclang, sclang_gen, path, ext):
+def tool_args(sclang, sclang_gen, path, ext, tolerant=False):
     if ext == ".awl":
         return [sclang_gen, "-x=awl", "--emit=mlir-std", path]
     if ext == ".mlir":
         return [sclang_gen, "--emit=mlir-std", path]
-    return [sclang, "--emit=jit", "--jit-cycles=1", path]
+    args = [sclang, "--emit=jit", "--jit-cycles=1"]
+    if tolerant:
+        args.append("--parse-tolerant")  # recovery paths must not crash/hang either
+    return args + [path]
 
 
 def main():
@@ -68,6 +71,8 @@ def main():
     ap.add_argument('--sclang-gen', default=None)
     ap.add_argument('--iters', type=int, default=500)
     ap.add_argument('--seed', type=int, default=1)
+    ap.add_argument('--tolerant', action='store_true',
+                    help='also fuzz with --parse-tolerant (error-recovery paths)')
     args = ap.parse_args()
     if not args.sclang_gen:
         args.sclang_gen = os.path.join(os.path.dirname(args.sclang),
@@ -90,7 +95,7 @@ def main():
             open(path, 'wb').write(data)
             try:
                 r = subprocess.run(tool_args(args.sclang, args.sclang_gen,
-                                             path, ext),
+                                             path, ext, args.tolerant),
                                    capture_output=True, timeout=TIMEOUT_S)
             except subprocess.TimeoutExpired:
                 crashes.append((i, src, 'TIMEOUT', path))
@@ -98,8 +103,8 @@ def main():
             n += 1
             if r.returncode < 0:  # killed by a signal = real crash
                 crashes.append((i, src, r.returncode, path))
-    print('fuzz-invalid: %d mutations, %d crashes (seed %d)'
-          % (n, len(crashes), args.seed))
+    print('fuzz-invalid: %d mutations, %d crashes (seed %d%s)'
+          % (n, len(crashes), args.seed, ', tolerant' if args.tolerant else ''))
     for i, src, rc, path in crashes[:10]:
         print('  CRASH iter=%d seed-file=%s rc=%s input-kept=%s'
               % (i, src, rc, path))

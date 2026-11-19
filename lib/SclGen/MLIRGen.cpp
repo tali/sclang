@@ -2090,6 +2090,11 @@ private:
         .Case<BinaryExpressionAST>([&](auto expr) { return mlirGen(expr); })
         .Case<UnaryExpressionAST>([&](auto expr) { return mlirGen(expr); })
         .Case<FunctionCallAST>([&](auto expr) { return mlirGen(expr); })
+        .Case<ErrorExprAST>([&](auto expr) {
+          // Tolerant-parse placeholder for a failed sub-expression (the
+          // parse error was already reported): treat as 0.
+          return intConst(loc(expr->loc()), getType(tok_int), 16, 0);
+        })
         .Default([&](auto expr) {
           emitError(loc(expr->loc())) << "expression kind not implemented";
           return nullptr; // TODO: TBD

@@ -1,0 +1,36 @@
+// RUN: not sclang --parse-tolerant --emit=mlir %s 2>&1 | FileCheck %s
+// RUN: not sclang --emit=mlir %s 2>&1 | FileCheck %s --check-prefix=STRICT
+// Error-tolerant parsing (--parse-tolerant, also on in --lsp mode): instead
+// of aborting at the first error, the parser recovers at synchronization
+// points (program unit / statement / declaration boundaries) and reports
+// EVERY error with its own position. Strict mode (STRICT) keeps the
+// historical abort-at-first-error cascade.
+// CHECK: Parse error (20, 8): expected 'expression'  but has Token ; ';'
+// CHECK: Parse error (22, 12): expected 'expression'  but has Token ; ';'
+// CHECK: Parse error (26, 7): expected 'data type'  but has Token ; ';'
+// CHECK: Parse error (32, 1): expected 'program unit' on module level
+// CHECK-NOT: Parse error
+// STRICT: Parse error (20, 8): expected 'expression'  but has Token ; ';'
+// STRICT-NOT: Parse error (22,
+function f1 : int
+var
+  x : int;
+end_var
+begin
+  x := ;
+  y := 2;
+  x := 1 + ;
+end_function
+function f2 : int
+var
+  a : ;
+  b : int;
+end_var
+begin
+  f2 := b;
+end_function
+123 garbage
+function f3 : int
+begin
+  f3 := 1;
+end_function

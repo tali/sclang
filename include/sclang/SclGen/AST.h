@@ -68,6 +68,8 @@ public:
     Expr_FunctionCall,
     Expr_Binary,
     Expr_Unary,
+    Expr_Error, ///< placeholder for a sub-expression that failed to parse
+                ///< (tolerant mode; codegen treats it as 0)
   };
 
   ExpressionAST(Location loc, ExprASTKind kind)
@@ -80,6 +82,18 @@ public:
 private:
   Location location;
   ExprASTKind kind;
+};
+
+/// Placeholder produced by the parser in tolerant mode when a sub-expression
+/// fails to parse: the surrounding expression/statement still parses, and
+/// codegen treats it as the integer 0.
+class ErrorExprAST : public ExpressionAST {
+public:
+  ErrorExprAST(Location loc) : ExpressionAST(std::move(loc), Expr_Error) {}
+
+  static bool classof(const ExpressionAST *e) {
+    return e->getKind() == Expr_Error;
+  }
 };
 
 class ExpressionListAST : public ExpressionAST {

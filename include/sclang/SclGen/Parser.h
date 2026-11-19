@@ -29,6 +29,7 @@
 #include "sclang/SclGen/AST.h"
 #include "sclang/SclGen/Lexer.h"
 
+#include <algorithm>
 #include <functional>
 #include <optional>
 #include "llvm/ADT/STLExtras.h"
@@ -58,6 +59,19 @@ public:
   /// llvm::errs() as before.
   std::function<void(int line, int col, const std::string &msg)> errorSink;
 
+  /// Error-tolerant mode (rust-analyzer style): instead of aborting at the
+  /// first error, report it and recover at synchronization points (unit /
+  /// statement / declaration boundaries), so one pass collects many
+  /// diagnostics and still produces a (partial) AST. Off by default: batch
+  /// mode stays strict (single deterministic error). Set by `sclang --lsp`
+  /// and `--parse-tolerant`.
+  bool tolerantErrors = false;
+  /// Number of errors reported so far (strict mode: always 1).
+  int errorCount = 0;
+  /// Hard cap on reported errors before giving up even in tolerant mode
+  /// (protects against error cascades / pathological input).
+  static constexpr int kMaxParseErrors = 100;
+
   /// Parse a full Module. A module is a list of function definitions.
   std::unique_ptr<ModuleAST> ParseModule() {
     lexer.getNextToken(); // prime the lexer
@@ -65,9 +79,20 @@ public:
     // Parse functions one at a time and accumulate in this vector.
     std::vector<std::unique_ptr<UnitAST>> units;
     while (lexer.getCurToken() != tok_eof) {
+      Token before = lexer.getCurToken();
       auto unit = ParseSCLProgramUnit();
-      if (!unit)
-        return parseError<ModuleAST>("program unit", "on module level");
+      if (!unit) {
+        if (!tolerantErrors)
+          return parseError<ModuleAST>("program unit", "on module level");
+        if (errorCount > kMaxParseErrors)
+          return nullptr;
+        // Panic-mode recovery: skip to the next program-unit keyword.
+        synchronize({tok_organization_block, tok_function, tok_function_block,
+                     tok_data_block, tok_type, tok_configuration});
+        if (lexer.getCurToken() == before && lexer.getCurToken() != tok_eof)
+          lexer.getNextToken(); // guarantee progress
+        continue;
+      }
       units.push_back(std::move(unit));
       // A TYPE block may declare several types; ParseUDType queues the
       // additional ones here.
@@ -121,6 +146,12 @@ private:
       break;
     }
     if (lexer.getCurToken() != tok_identifier) {
+      // Route through reportError so the LSP errorSink sees it too (strict
+      // mode keeps the historical stderr text).
+      if (tolerantErrors) {
+        reportExpected(tok_identifier, "as identifier");
+        return "";
+      }
       llvm::errs() << "expected identifier, got " << lexer.getCurToken()
                    << "\n";
       return "";
@@ -154,6 +185,8 @@ private:
   std::unique_ptr<UnitAST> ParseSCLProgramUnit() {
     switch (lexer.getCurToken()) {
     default:
+      if (tolerantErrors)
+        return parseError<UnitAST>("program unit", "on module level");
       llvm::errs() << "unknown token '" << lexer.getCurToken()
                    << "' when expecting a program unit\n";
       return nullptr;
@@ -678,7 +711,24 @@ private:
 
     // Parse subsections one at a time and accumulate in this vector.
     std::vector<std::unique_ptr<DeclarationSubsectionAST>> subsections;
-    while (auto unit = ParseDeclarationSubsection()) {
+    while (lexer.getCurToken() != tok_begin && !isEndToken(lexer.getCurToken())) {
+      auto unit = ParseDeclarationSubsection();
+      if (!unit) {
+        if (!tolerantErrors)
+          break;
+        if (errorCount > kMaxParseErrors)
+          return nullptr;
+        // Tolerant: skip to the next subsection start / section end.
+        Token before = lexer.getCurToken();
+        synchronize({tok_var, tok_var_temp, tok_var_input, tok_var_output,
+                     tok_var_in_out, tok_var_external, tok_var_global,
+                     tok_var_config, tok_const, tok_label, tok_begin,
+                     tok_eof});
+        if (lexer.getCurToken() == before && before != tok_eof &&
+            before != tok_begin && !isEndToken(before))
+          lexer.getNextToken(); // guarantee progress
+        continue;
+      }
       subsections.push_back(std::move(unit));
     }
 
@@ -770,8 +820,13 @@ private:
     std::vector<std::unique_ptr<ConstantDeclarationAST>> consts;
     while (lexer.getCurToken() != tok_end_const) {
       auto constant = ParseConstantDeclaration();
-      if (!constant)
-        break;
+      if (!constant) {
+        if (!tolerantErrors)
+          break;
+        if (!recoverDecl(tok_end_const))
+          return nullptr;
+        continue;
+      }
       consts.push_back(std::move(constant));
     }
     if (lexer.getCurToken() != tok_end_const)
@@ -816,8 +871,13 @@ private:
     std::vector<std::unique_ptr<JumpLabelDeclarationAST>> consts;
     while (lexer.getCurToken() != tok_end_label) {
       auto constant = ParseJumpLabelDeclaration();
-      if (!constant)
-        break;
+      if (!constant) {
+        if (!tolerantErrors)
+          break;
+        if (!recoverDecl(tok_end_label))
+          return nullptr;
+        continue;
+      }
       consts.push_back(std::move(constant));
     }
     if (lexer.getCurToken() != tok_end_label)
@@ -895,9 +955,14 @@ private:
     std::vector<std::unique_ptr<VariableDeclarationAST>> vars;
     while (lexer.getCurToken() != tok_end_var) {
       auto var = ParseVariableDeclaration();
-      if (!var)
-        return parseError<VariableDeclarationSubsectionAST>(
-          "variable name", "to start a new variable declaration");
+      if (!var) {
+        if (!tolerantErrors)
+          return parseError<VariableDeclarationSubsectionAST>(
+            "variable name", "to start a new variable declaration");
+        if (!recoverDecl(tok_end_var))
+          return nullptr;
+        continue;
+      }
       vars.push_back(std::move(var));
     }
     lexer.consume(tok_end_var);
@@ -1397,13 +1462,41 @@ private:
       }
 
       auto instr = ParseInstruction();
-      if (!instr)
-        return parseError<CodeSectionAST>("instruction", "in code section");
+      if (!instr) {
+        if (!tolerantErrors)
+          return parseError<CodeSectionAST>("instruction", "in code section");
+        if (errorCount > kMaxParseErrors)
+          return nullptr;
+        // Tolerant: the inner parser already reported the error; skip to
+        // the next statement boundary (`;` is consumed by this loop, end
+        // tokens terminate it).
+        Token before = lexer.getCurToken();
+        synchronize({tok_semicolon, tok_eof, tok_else, tok_elsif,
+                     tok_end_case, tok_end_for, tok_end_function,
+                     tok_end_function_block, tok_end_if, tok_end_method,
+                     tok_end_organization_block, tok_end_repeat,
+                     tok_end_while, tok_until});
+        if (lexer.getCurToken() == before && lexer.getCurToken() != tok_eof &&
+            lexer.getCurToken() != tok_semicolon)
+          lexer.getNextToken(); // guarantee progress
+        continue;
+      }
 
       if (!llvm::isa<DebugPrintAST, JumpLabelAST, CaseLabelAST>(instr)) {
-        if (lexer.getCurToken() != tok_semicolon)
-          return parseError<CodeSectionAST>(tok_semicolon,
-                                            "to end the instruction");
+        if (lexer.getCurToken() != tok_semicolon) {
+          if (!tolerantErrors)
+            return parseError<CodeSectionAST>(tok_semicolon,
+                                              "to end the instruction");
+          if (!reportExpected(tok_semicolon, "to end the instruction"))
+            return nullptr;
+          instructions.push_back(std::move(instr));
+          synchronize({tok_semicolon, tok_eof, tok_end_function,
+                       tok_end_function_block, tok_end_if, tok_end_case,
+                       tok_end_for, tok_end_while, tok_end_repeat,
+                       tok_until, tok_else, tok_elsif, tok_end_method,
+                       tok_end_organization_block});
+          continue;
+        }
         lexer.consume(tok_semicolon);
       }
 
@@ -1526,6 +1619,16 @@ private:
   std::unique_ptr<ExpressionAST> ParseExpressionPrimary() {
     switch (lexer.getCurToken()) {
     default:
+      if (tolerantErrors) {
+        // Error node: report and return a placeholder WITHOUT consuming the
+        // token, so the surrounding expression/statement still parses (the
+        // binary-op loop stops at a non-operator; the statement recovers at
+        // its `;`). Codegen treats the placeholder as 0.
+        reportExpected("expression");
+        if (errorCount > kMaxParseErrors)
+          return nullptr;
+        return std::make_unique<ErrorExprAST>(lexer.getLastLocation());
+      }
       return parseError<ExpressionAST>("expression");
     case tok_parenthese_open:
       return ParseParenExpression();
@@ -2359,11 +2462,24 @@ private:
     }
   }
 
-  /// Helper function to signal errors while parsing, it takes an argument
-  /// indicating the expected token and another argument giving more context.
-  /// Location is retrieved from the lexer to enrich the error message.
-  template <typename R, typename T, typename U = const char *>
-  std::unique_ptr<R> parseError(T &&expected, U &&context = "") {
+  /// Report one parse error at the current lexer position (via errorSink if
+  /// set, else stderr) and count it. Returns true while more errors may be
+  /// reported (errorCount <= kMaxParseErrors).
+  bool reportError(const std::string &msg) {
+    ++errorCount;
+    if (errorSink) {
+      errorSink(lexer.getLastLocation().line, lexer.getLastLocation().col, msg);
+    } else {
+      llvm::errs() << "Parse error (" << lexer.getLastLocation().line << ", "
+                   << lexer.getLastLocation().col << "): " << msg << "\n";
+    }
+    return errorCount <= kMaxParseErrors;
+  }
+
+  /// Build the standard "expected X ... but has Token Y" message for the
+  /// current token and report it. Returns false when the error cap was hit.
+  template <typename T, typename U = const char *>
+  bool reportExpected(T &&expected, U &&context = "") {
     auto curToken = lexer.getCurToken();
     std::string msg;
     {
@@ -2379,13 +2495,42 @@ private:
       if (isprint(curToken))
         msg += " '" + std::string(1, (char)curToken) + "'";
     }
-    if (errorSink) {
-      errorSink(lexer.getLastLocation().line, lexer.getLastLocation().col, msg);
-    } else {
-      llvm::errs() << "Parse error (" << lexer.getLastLocation().line << ", "
-                   << lexer.getLastLocation().col << "): " << msg << "\n";
-    }
+    return reportError(msg);
+  }
+
+  /// Helper function to signal errors while parsing, it takes an argument
+  /// indicating the expected token and another argument giving more context.
+  /// Location is retrieved from the lexer to enrich the error message.
+  template <typename R, typename T, typename U = const char *>
+  std::unique_ptr<R> parseError(T &&expected, U &&context = "") {
+    reportExpected(expected, context);
     return nullptr;
+  }
+
+  /// Panic-mode recovery (tolerant mode): skip tokens until the current
+  /// token is in `sync` or EOF. The caller's loop must consume/handle the
+  /// sync token itself, which guarantees progress.
+  void synchronize(std::initializer_list<Token> sync) {
+    while (lexer.getCurToken() != tok_eof &&
+           std::find(sync.begin(), sync.end(), lexer.getCurToken()) ==
+               sync.end())
+      lexer.getNextToken();
+  }
+
+  /// Tolerant recovery inside a declaration loop (const/label/var): skip to
+  /// the declaration terminator `;` (consumed) or the subsection's end
+  /// token. Returns false when the error cap was hit.
+  bool recoverDecl(Token endTok) {
+    if (errorCount > kMaxParseErrors)
+      return false;
+    Token before = lexer.getCurToken();
+    synchronize({tok_semicolon, endTok, tok_eof});
+    if (lexer.getCurToken() == tok_semicolon)
+      lexer.consume(tok_semicolon); // declaration terminator
+    else if (lexer.getCurToken() == before && before != endTok &&
+             before != tok_eof)
+      lexer.getNextToken(); // guarantee progress
+    return true;
   }
 };
 

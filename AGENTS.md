@@ -233,8 +233,18 @@ has no `\b` — use python3 for regex edits.
   parse time (asserts are off, so `TypeBase::get` alone would not check).
 - Parser diagnostics: `parseError` prints line/col, the expected item and
   the actual token (the Token printer is total — unknown bytes print as
-  `<token N> 'c'`). The parser aborts at the first error on purpose: no
-  panic-mode recovery, so a broken program is never silently mis-compiled.
+  `<token N> 'c'`). Batch mode is STRICT by default: abort at the first
+  error, so a broken program is never silently mis-compiled. Tolerant mode
+  (`Parser::tolerantErrors`, on with `--parse-tolerant` and always in
+  `--lsp`) does rust-analyzer-style panic-mode recovery: report + skip to a
+  synchronization point at program-unit / statement / declaration-loop
+  boundaries (`Parser::synchronize`/`recoverDecl`), an `ErrorExprAST`
+  placeholder keeps expressions parsing, and a 100-error cap
+  (`kMaxParseErrors`) bounds cascades — one pass then reports EVERY error
+  with its own position (see test/SclGen/Parse/err_tolerant.scl,
+  lsp_smoke.py, fuzz_invalid.py --tolerant). Exit code is still non-zero
+  when any error was reported; the partial AST is discarded (never
+  mis-compiled).
   Op verifiers: GetDirectOp (attrs match the direct type), LoadOp/StoreOp
   (direct-address access width; stores allow any scalar — assignment
   converts implicitly), GetIndexOp (index count == array rank),
@@ -316,7 +326,7 @@ has no `\b` — use python3 for regex edits.
 
 - Test methodology and the rationale for each tier (lit / corpora / JIT smoke
   / awlsim oracle / ST traces / differential cross / fuzz, plus the
-  `jit_edge_*` scenario rationale) are in `docs/testing.md`. Current: 145
+  `jit_edge_*` scenario rationale) are in `docs/testing.md`. Current: 146
   lit tests, 92/92 ST traces with cross, plus the LSP smoke test
   (`test/conformance/lsp_smoke.py`, see "LSP mode" above) and the per-file
   build-cache test (`test/conformance/project_cache.py`).

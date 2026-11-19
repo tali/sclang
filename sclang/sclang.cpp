@@ -134,6 +134,16 @@ static sclang::LangMode langMode() {
   return inputType == InputType::St ? sclang::LangMode::IEC : stdMode;
 }
 
+/// Error-tolerant parsing (Parser::tolerantErrors): report all parse errors
+/// with panic-mode recovery at unit/statement/declaration boundaries instead
+/// of aborting at the first one. On in LSP mode and with --parse-tolerant.
+static cl::opt<bool> parseTolerantFlag(
+    "parse-tolerant",
+    cl::desc("Error-tolerant parsing: collect multiple parse errors per file "
+             "(recover at synchronization points) instead of stopping at the "
+             "first"),
+    cl::init(false));
+
 namespace {
 enum Action {
   None,
@@ -359,7 +369,13 @@ parseSourceText(llvm::StringRef text, std::string name,
   LexerBuffer lexer(text.begin(), text.end(), std::move(name), langMode());
   Parser parser(lexer);
   parser.errorSink = std::move(parserSink);
-  return parser.ParseModule();
+  // Tolerant mode (LSP / --parse-tolerant): collect many diagnostics per
+  // pass; the partial AST is discarded when any error was reported.
+  parser.tolerantErrors = parseTolerantFlag || lspMode;
+  auto ast = parser.ParseModule();
+  if (parser.errorCount > 0)
+    return nullptr;
+  return ast;
 }
 
 std::unique_ptr<sclang::ModuleAST>

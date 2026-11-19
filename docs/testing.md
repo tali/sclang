@@ -27,7 +27,7 @@ cd build.23 && ninja sclang sclang-gen && ./bin/llvm-lit ../test
 python3 test/conformance/run_conformance.py --sclang build.23/bin/sclang
 python3 test/conformance/run_st_traces.py --sclang build.23/bin/sclang --cross   # add --jobs N to parallelize (default min(8, cores); 10s -> 3.5s)
 python3 test/conformance/fuzz_st.py --sclang build.23/bin/sclang --scans 5 --seed 7
-python3 test/conformance/fuzz_invalid.py --sclang build.23/bin/sclang --iters 500 --seed 1
+python3 test/conformance/fuzz_invalid.py --sclang build.23/bin/sclang --iters 500 --seed 1   # add --tolerant to also fuzz the --parse-tolerant recovery paths
 python3 test/conformance/lsp_smoke.py --sclang build.23/bin/sclang
 python3 test/conformance/project_cache.py --sclang build.23/bin/sclang
 ```
