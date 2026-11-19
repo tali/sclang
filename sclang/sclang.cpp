@@ -68,6 +68,9 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Target/TargetMachine.h"
+#include <atomic>
+#include <chrono>
+
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
@@ -364,7 +367,7 @@ static bool parseScanInputsFile(
 /// locations. `parserSink`, when set, receives structured parse errors.
 std::unique_ptr<sclang::ModuleAST>
 parseSourceText(llvm::StringRef text, std::string name,
-                std::function<void(int, int, const std::string &)> parserSink =
+                std::function<void(int, int, const std::string &, const char *)> parserSink =
                     nullptr) {
   LexerBuffer lexer(text.begin(), text.end(), std::move(name), langMode());
   Parser parser(lexer);
@@ -380,7 +383,8 @@ parseSourceText(llvm::StringRef text, std::string name,
 
 std::unique_ptr<sclang::ModuleAST>
 parseInputFiles(llvm::ArrayRef<std::string> files,
-                std::function<void(int, int, const std::string &)> sink);
+                std::function<void(int, int, const std::string &,
+                                   const char *)> sink);
 
 /// Expand the positional inputs + `--project` into a sorted, de-duplicated
 /// file list. With no positional input, reads stdin ("-").
@@ -415,8 +419,8 @@ static llvm::SmallVector<std::string, 4> expandInputFiles() {
 /// declaration plus one real definition is legal.
 std::unique_ptr<sclang::ModuleAST>
 parseInputFiles(llvm::ArrayRef<std::string> files,
-                std::function<void(int, int, const std::string &)> sink =
-                    nullptr) {
+                std::function<void(int, int, const std::string &,
+                                   const char *)> sink = nullptr) {
   auto merged = std::make_unique<sclang::ModuleAST>(
       std::vector<std::unique_ptr<sclang::UnitAST>>{}, langMode());
   // upper-cased unit name -> (definition site, is-forward-decl)
@@ -446,7 +450,7 @@ parseInputFiles(llvm::ArrayRef<std::string> files,
         llvm::errs() << (loc.file ? *loc.file : f) << ":" << loc.line << ":"
                      << loc.col << ": error: " << msg << "\n";
         if (sink)
-          sink(loc.line, loc.col, msg);
+          sink(loc.line, loc.col, msg, "SCL1006");
         return nullptr;
       }
       if (it == seen.end() || it->second.second)
@@ -463,7 +467,7 @@ parseInputFiles(llvm::ArrayRef<std::string> files,
 int loadMLIRFromBuffer(
     mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &module,
     llvm::StringRef text, llvm::StringRef name,
-    std::function<void(int, int, const std::string &)> parserSink = nullptr) {
+    std::function<void(int, int, const std::string &, const char *)> parserSink = nullptr) {
   if (inputType != InputType::MLIR && !llvm::StringRef(name).ends_with(".mlir")) {
     bool isAwl = inputType == InputType::Awl ||
                  llvm::StringRef(name).ends_with(".awl");
@@ -1081,12 +1085,19 @@ int runJit(mlir::ModuleOp module, llvm::raw_ostream *scanOut = nullptr) {
 
 namespace sclang {
 
+/// LSP cancellation state, read by Parser::abortCheck (set in main when
+/// --lsp): set on exit, plus a per-compile parse deadline (ms since epoch,
+/// 0 = none) so a pathological document cannot hang the server.
+std::atomic<bool> g_lspShutdown{false};
+std::atomic<int64_t> g_parseDeadlineMs{0};
+
 /// One structured diagnostic (1-based line/col, 0 = unknown).
 struct LspDiag {
   int line;
   int col;
   std::string message;
   bool warning;
+  std::string code; // stable diagnostic code, e.g. SCL1001 (parse) / MLIR
 };
 
 /// Load every dialect the compiler emits or consumes into `context`.
@@ -1109,7 +1120,8 @@ static std::vector<LspDiag> *g_lspDiags = nullptr;
 static void lspDiagHandler(mlir::Diagnostic &d) {
   if (!g_lspDiags)
     return;
-  LspDiag out{0, 0, {}, d.getSeverity() == mlir::DiagnosticSeverity::Warning};
+  LspDiag out{0, 0, {}, d.getSeverity() == mlir::DiagnosticSeverity::Warning,
+              "MLIR"};
   if (auto flc = llvm::dyn_cast<mlir::FileLineColLoc>(d.getLocation())) {
     out.line = flc.getLine();
     out.col = flc.getColumn();
@@ -1134,9 +1146,16 @@ int lspCompile(mlir::MLIRContext &ctx, llvm::StringRef text, llvm::StringRef nam
     handlerRegistered = true;
   }
   g_lspDiags = &diags;
+  g_parseDeadlineMs =
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+              .count() +
+      10000; // 10s parse budget per LSP compile
   int rc = loadMLIRFromBuffer(ctx, module, text, name,
-                              [&](int line, int col, const std::string &msg) {
-                                diags.push_back({line, col, msg, false});
+                              [&](int line, int col, const std::string &msg,
+                                  const char *code) {
+                                diags.push_back(
+                                    {line, col, msg, false, code});
                               });
   if (rc == 0 && module)
     rc = mlir::failed(mlir::verify(*module)) ? 1 : 0;
@@ -1147,6 +1166,7 @@ int lspCompile(mlir::MLIRContext &ctx, llvm::StringRef text, llvm::StringRef nam
     emitAction = saved;
   }
   g_lspDiags = nullptr;
+  g_parseDeadlineMs = 0;
   return rc;
 }
 
@@ -1176,8 +1196,20 @@ int main(int argc, char **argv) {
 
   cl::ParseCommandLineOptions(argc, argv, "SCL compiler\n");
 
-  if (lspMode)
+  if (lspMode) {
+    // Cancellable parsing for the server: abort on shutdown or when the
+    // per-compile deadline (set in lspCompile) has passed.
+    sclang::Parser::abortCheck = [] {
+      if (sclang::g_lspShutdown.load(std::memory_order_relaxed))
+        return true;
+      int64_t dl = sclang::g_parseDeadlineMs.load(std::memory_order_relaxed);
+      return dl > 0 &&
+             std::chrono::duration_cast<std::chrono::milliseconds>(
+                 std::chrono::steady_clock::now().time_since_epoch())
+                     .count() > dl;
+    };
     return sclang::runLspServer(jitCycles);
+  }
 
   if (emitAction == Action::DumpAST)
     return dumpAST();

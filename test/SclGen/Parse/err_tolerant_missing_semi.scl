@@ -1,0 +1,18 @@
+// RUN: not sclang --parse-tolerant --emit=mlir %s 2>&1 | FileCheck %s
+// Tolerant recovery hybrid (Roslyn/tree-sitter style): a missing ';' before
+// a token that can start a new instruction is treated as a VIRTUAL ';'
+// (nothing skipped); a garbage token syncs to the next instruction start.
+// Here all three problems on line 17 are reported — the old panic-mode skip
+// swallowed `y := ;` after the first error.
+// CHECK: Parse error (17, 10) [SCL1002]: expected ';' to end the instruction
+// CHECK: Parse error (17, 12) [SCL1000]: expected 'instruction' in code block
+// CHECK: Parse error (17, 17) [SCL1001]: expected 'expression'  but has Token ; ';'
+// CHECK-NOT: Parse error
+function f : int
+var
+  x : int;
+  y : int;
+end_var
+begin
+  x := 1 2 y := ;
+end_function

@@ -140,7 +140,9 @@ def main():
     diags = d["params"]["diagnostics"]
     lines = sorted(x["range"]["start"]["line"] for x in diags)
     assert len(diags) >= 3 and lines == [5, 6, 8], diags  # 0-based: 6,7,9
-    print("PASS tolerant multi-error diagnostics: lines", lines)
+    codes = sorted(x.get("code", "") for x in diags)
+    assert all(c.startswith("SCL1") for c in codes), diags  # stable codes
+    print("PASS tolerant multi-error diagnostics: lines", lines, "codes", codes)
 
     r = lsp.request("shutdown", None, 2)
     assert r.get("result") is None, r

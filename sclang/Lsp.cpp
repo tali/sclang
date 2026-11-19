@@ -32,6 +32,7 @@
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <atomic>
 #include <cstdio>
 #include <map>
 #include <string>
@@ -45,7 +46,9 @@ struct LspDiag {
   int col;
   std::string message;
   bool warning;
+  std::string code;
 };
+extern std::atomic<bool> g_lspShutdown;
 int lspCompile(mlir::MLIRContext &ctx, llvm::StringRef text, llvm::StringRef name,
                bool fullPipeline, std::vector<LspDiag> &diags,
                mlir::OwningOpRef<mlir::ModuleOp> &module);
@@ -183,6 +186,7 @@ private:
     } else if (method == "shutdown") {
       respond(id, Value(nullptr));
     } else if (method == "exit") {
+      g_lspShutdown = true; // cancel any in-flight parse
       std::exit(0);
     } else if (method == "textDocument/didOpen") {
       if (!params)
@@ -299,6 +303,7 @@ private:
       diag["range"] = Value(std::move(range));
       diag["severity"] = d.warning ? 2 : 1;
       diag["source"] = "sclang";
+      diag["code"] = d.code;
       diag["message"] = d.message;
       arr.push_back(Value(std::move(diag)));
     }

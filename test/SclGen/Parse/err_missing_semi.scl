@@ -1,7 +1,7 @@
 // RUN: not sclang-gen --emit=mlir %s 2>&1 | FileCheck %s
 // Negative test: a missing ';' must be diagnosed with a line/col and a
 // clean non-zero exit (no crash) — see AGENTS.md "Robustness".
-// CHECK: Parse error (8, 1): expected ';' to end variable declaration
+// CHECK: Parse error (8, 1){{.*}}: expected ';' to end variable declaration
 function f : int
 var
   x : int

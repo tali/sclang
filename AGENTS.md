@@ -326,7 +326,7 @@ has no `\b` — use python3 for regex edits.
 
 - Test methodology and the rationale for each tier (lit / corpora / JIT smoke
   / awlsim oracle / ST traces / differential cross / fuzz, plus the
-  `jit_edge_*` scenario rationale) are in `docs/testing.md`. Current: 146
+  `jit_edge_*` scenario rationale) are in `docs/testing.md`. Current: 147
   lit tests, 92/92 ST traces with cross, plus the LSP smoke test
   (`test/conformance/lsp_smoke.py`, see "LSP mode" above) and the per-file
   build-cache test (`test/conformance/project_cache.py`).

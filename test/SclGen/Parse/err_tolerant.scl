@@ -5,12 +5,12 @@
 // points (program unit / statement / declaration boundaries) and reports
 // EVERY error with its own position. Strict mode (STRICT) keeps the
 // historical abort-at-first-error cascade.
-// CHECK: Parse error (20, 8): expected 'expression'  but has Token ; ';'
-// CHECK: Parse error (22, 12): expected 'expression'  but has Token ; ';'
-// CHECK: Parse error (26, 7): expected 'data type'  but has Token ; ';'
-// CHECK: Parse error (32, 1): expected 'program unit' on module level
+// CHECK: Parse error (20, 8) [SCL1001]: expected 'expression'  but has Token ; ';'
+// CHECK: Parse error (22, 12) [SCL1001]: expected 'expression'  but has Token ; ';'
+// CHECK: Parse error (26, 7) [SCL1005]: expected 'data type'  but has Token ; ';'
+// CHECK: Parse error (32, 1) [SCL1003]: expected 'program unit' on module level
 // CHECK-NOT: Parse error
-// STRICT: Parse error (20, 8): expected 'expression'  but has Token ; ';'
+// STRICT: Parse error (20, 8) [SCL1001]: expected 'expression'  but has Token ; ';'
 // STRICT-NOT: Parse error (22,
 function f1 : int
 var

@@ -61,6 +61,39 @@ Two different use cases:
    alternative for VS Code. This is the sweet spot if we want tree-sitter
    at all: **as a separate editor artifact, never wired into the compiler**.
 
+## Lessons adopted from Roslyn / tree-sitter (implemented)
+
+1. **Virtual missing tokens** (Roslyn's missing-token insertion, tree-sitter
+   MISSING nodes): in tolerant mode, a missing `;` before a token that can
+   start a new instruction is treated as a zero-width virtual token — the
+   parser continues WITHOUT skipping real tokens (`canStartInstruction`);
+   only genuine garbage triggers the panic-mode skip, and that skip now also
+   stops at instruction-start tokens (`isCodeSectionSync`). Previously the
+   skip swallowed the following valid statement. Test:
+   test/SclGen/Parse/err_tolerant_missing_semi.scl.
+2. **Stable diagnostic codes** (Roslyn CSxxxx): every parse error carries a
+   code (SCL1001 expression, SCL1002 missing ';', SCL1003 program unit,
+   SCL1004 identifier, SCL1005 data type, SCL1006 duplicate POU, SCL1000
+   other; MLIR/verifier diags are "MLIR"), printed in CLI output and sent as
+   the LSP `code` field — clients can filter/suppress by code.
+3. **Cancellable parsing** (tree-sitter's cancellation flag): a
+   `Parser::abortCheck` hook is checked at every parser loop boundary and in
+   the recovery skip; the LSP server installs it (abort on `exit`, plus a 10s
+   per-compile deadline set in `lspCompile`) so a pathological document
+   cannot hang the server. Batch mode leaves it empty.
+
+## Lessons considered and deferred (with reasons)
+
+- **Green/red incremental trees** (both): not needed — full reparse is
+  ~50ms/100k lines; revisit above ~100k-line files.
+- **Lossless CST with trivia** (both): our AST drops comments/whitespace;
+  only needed for formatter/refactor-grade tooling; LSP hover/rename works
+  from node Locations already.
+- **Parent pointers / red tree** (Roslyn): useful for "enclosing POU" LSP
+  navigation; cheap to add later as a post-parse pass.
+- **Grammar as data + corpus tests** (tree-sitter): we keep the grammar in
+  code; the spec mapping is documented via SPEC tags (docs/spec-conformance.md).
+
 ## Verdict
 
 Keep the hand-written RD parser in the compiler (it is fast, dependency-free,

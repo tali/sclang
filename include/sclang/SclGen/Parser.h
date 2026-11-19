@@ -57,7 +57,8 @@ public:
   /// diagnostics as JSON instead of printing to stderr): called with
   /// 1-based (line, col) and the message. When unset, errors print to
   /// llvm::errs() as before.
-  std::function<void(int line, int col, const std::string &msg)> errorSink;
+  std::function<void(int line, int col, const std::string &msg,
+                     const char *code)> errorSink;
 
   /// Error-tolerant mode (rust-analyzer style): instead of aborting at the
   /// first error, report it and recover at synchronization points (unit /
@@ -72,6 +73,14 @@ public:
   /// (protects against error cascades / pathological input).
   static constexpr int kMaxParseErrors = 100;
 
+  /// Optional cancellation hook (tree-sitter-style cancellable parsing),
+  /// checked at parser loop boundaries. The LSP server sets it to abort a
+  /// parse on shutdown or when a per-request deadline expires; batch mode
+  /// leaves it empty.
+  inline static std::function<bool()> abortCheck;
+
+  bool aborted() const { return abortCheck && abortCheck(); }
+
   /// Parse a full Module. A module is a list of function definitions.
   std::unique_ptr<ModuleAST> ParseModule() {
     lexer.getNextToken(); // prime the lexer
@@ -79,6 +88,8 @@ public:
     // Parse functions one at a time and accumulate in this vector.
     std::vector<std::unique_ptr<UnitAST>> units;
     while (lexer.getCurToken() != tok_eof) {
+      if (aborted())
+        return nullptr;
       Token before = lexer.getCurToken();
       auto unit = ParseSCLProgramUnit();
       if (!unit) {
@@ -712,6 +723,8 @@ private:
     // Parse subsections one at a time and accumulate in this vector.
     std::vector<std::unique_ptr<DeclarationSubsectionAST>> subsections;
     while (lexer.getCurToken() != tok_begin && !isEndToken(lexer.getCurToken())) {
+      if (aborted())
+        return nullptr;
       auto unit = ParseDeclarationSubsection();
       if (!unit) {
         if (!tolerantErrors)
@@ -1407,6 +1420,48 @@ private:
   // MARK: C.4 Code Section
 
   /// end of current code section?
+  /// True if `tok` can start an instruction/statement (used by tolerant
+  /// recovery: a missing ';' before such a token is virtual, not skipped).
+  bool canStartInstruction(Token tok) {
+    switch (tok) {
+    default:
+      return false;
+    // statement keywords (ParseInstruction dispatch)
+    case tok_if:
+    case tok_case:
+    case tok_for:
+    case tok_while:
+    case tok_repeat:
+    case tok_continue:
+    case tok_return:
+    case tok_exit:
+    case tok_goto:
+    case tok_debugprint:
+    // expression starts (ParseExpressionPrimary) reachable as statements
+    case tok_identifier:
+    case tok_symbol:
+    case tok_direct_address:
+    case tok_counter:
+    case tok_timer:
+    case tok_ok:
+    case tok_en:
+    case tok_eno:
+    case tok_parenthese_open:
+    case tok_not:
+    case tok_plus:
+    case tok_minus:
+    case tok_false:
+    case tok_true:
+    case tok_integer_literal:
+    case tok_real_number_literal:
+    case tok_string_literal:
+    case tok_time_literal:
+    case tok_sbracket_open:
+    case tok_bracket_open: // attribute block
+      return true;
+    }
+  }
+
   bool isEndToken(Token tok) {
     switch (tok) {
     default:
@@ -1441,6 +1496,8 @@ private:
 
     std::vector<std::unique_ptr<InstructionAST>> instructions;
     while (!isEndToken(lexer.getCurToken())) {
+      if (aborted())
+        return nullptr;
       if (lexer.getCurToken() == tok_semicolon) {
         lexer.consume(tok_semicolon);
         continue;
@@ -1471,13 +1528,10 @@ private:
         // the next statement boundary (`;` is consumed by this loop, end
         // tokens terminate it).
         Token before = lexer.getCurToken();
-        synchronize({tok_semicolon, tok_eof, tok_else, tok_elsif,
-                     tok_end_case, tok_end_for, tok_end_function,
-                     tok_end_function_block, tok_end_if, tok_end_method,
-                     tok_end_organization_block, tok_end_repeat,
-                     tok_end_while, tok_until});
-        if (lexer.getCurToken() == before && lexer.getCurToken() != tok_eof &&
-            lexer.getCurToken() != tok_semicolon)
+        synchronizeWhile([this](Token t) {
+          return t == tok_semicolon || isEndToken(t) || canStartInstruction(t);
+        });
+        if (lexer.getCurToken() == before && !isCodeSectionSync(before))
           lexer.getNextToken(); // guarantee progress
         continue;
       }
@@ -1490,11 +1544,13 @@ private:
           if (!reportExpected(tok_semicolon, "to end the instruction"))
             return nullptr;
           instructions.push_back(std::move(instr));
-          synchronize({tok_semicolon, tok_eof, tok_end_function,
-                       tok_end_function_block, tok_end_if, tok_end_case,
-                       tok_end_for, tok_end_while, tok_end_repeat,
-                       tok_until, tok_else, tok_elsif, tok_end_method,
-                       tok_end_organization_block});
+          // Roslyn/tree-sitter style recovery: if the next token can start
+          // a new instruction, the ';' is MISSING — treat it as a virtual
+          // (zero-width) token and continue without skipping any real
+          // tokens. Only genuine garbage triggers the panic-mode skip.
+          if (canStartInstruction(lexer.getCurToken()))
+            continue; // virtual ';' — don't skip real tokens
+          synchronizeWhile([this](Token t) { return isCodeSectionSync(t); });
           continue;
         }
         lexer.consume(tok_semicolon);
@@ -2464,16 +2520,34 @@ private:
 
   /// Report one parse error at the current lexer position (via errorSink if
   /// set, else stderr) and count it. Returns true while more errors may be
-  /// reported (errorCount <= kMaxParseErrors).
-  bool reportError(const std::string &msg) {
+  /// reported (errorCount <= kMaxParseErrors). `code` is a stable diagnostic
+  /// code (Roslyn CSxxxx-style, e.g. SCL1001) so LSP clients can map/filter.
+  bool reportError(const std::string &msg, const char *code = "SCL1000") {
     ++errorCount;
     if (errorSink) {
-      errorSink(lexer.getLastLocation().line, lexer.getLastLocation().col, msg);
+      errorSink(lexer.getLastLocation().line, lexer.getLastLocation().col, msg,
+                code);
     } else {
       llvm::errs() << "Parse error (" << lexer.getLastLocation().line << ", "
-                   << lexer.getLastLocation().col << "): " << msg << "\n";
+                   << lexer.getLastLocation().col << ") [" << code << "]: "
+                   << msg << "\n";
     }
     return errorCount <= kMaxParseErrors;
+  }
+
+  /// Stable diagnostic code for an "expected ..." item.
+  static const char *codeForExpected(const std::string &expected) {
+    if (expected.find("expression") != std::string::npos)
+      return "SCL1001";
+    if (expected == ";")
+      return "SCL1002";
+    if (expected.find("program unit") != std::string::npos)
+      return "SCL1003";
+    if (expected.find("identifier") != std::string::npos)
+      return "SCL1004";
+    if (expected.find("data type") != std::string::npos)
+      return "SCL1005";
+    return "SCL1000";
   }
 
   /// Build the standard "expected X ... but has Token Y" message for the
@@ -2495,7 +2569,12 @@ private:
       if (isprint(curToken))
         msg += " '" + std::string(1, (char)curToken) + "'";
     }
-    return reportError(msg);
+    std::string expStr;
+    {
+      llvm::raw_string_ostream es(expStr);
+      es << expected;
+    }
+    return reportError(msg, codeForExpected(expStr));
   }
 
   /// Helper function to signal errors while parsing, it takes an argument
@@ -2510,11 +2589,22 @@ private:
   /// Panic-mode recovery (tolerant mode): skip tokens until the current
   /// token is in `sync` or EOF. The caller's loop must consume/handle the
   /// sync token itself, which guarantees progress.
-  void synchronize(std::initializer_list<Token> sync) {
-    while (lexer.getCurToken() != tok_eof &&
-           std::find(sync.begin(), sync.end(), lexer.getCurToken()) ==
-               sync.end())
+  template <typename Pred>
+  void synchronizeWhile(Pred stop) {
+    while (!aborted() && lexer.getCurToken() != tok_eof &&
+           !stop(lexer.getCurToken()))
       lexer.getNextToken();
+  }
+  void synchronize(std::initializer_list<Token> sync) {
+    synchronizeWhile([&](Token t) {
+      return std::find(sync.begin(), sync.end(), t) != sync.end();
+    });
+  }
+  /// Sync set for the code-section loop: `;`, end tokens, and anything that
+  /// can start a new instruction (tree-sitter stops at sibling-rule starts
+  /// too, so one bad token doesn't swallow the next valid statement).
+  bool isCodeSectionSync(Token t) {
+    return t == tok_semicolon || isEndToken(t) || canStartInstruction(t);
   }
 
   /// Tolerant recovery inside a declaration loop (const/label/var): skip to
