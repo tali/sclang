@@ -1,6 +1,10 @@
-# Multi-file projects and incremental compilation (plan, not yet implemented)
+# Multi-file projects and incremental compilation
 
-Status: design only. Nothing below is implemented except where noted.
+Status: **phase 1 implemented** (multi-file CLI: multiple positional inputs +
+`--project=<dir>`, ModuleAST unit splicing, forward-declaration semantics,
+duplicate-POU diagnostics; conformance per-project tier runs natively, 17/17).
+Phases 2-4 (per-file codegen split, content-hash cache, LSP project mode) are
+plans below.
 Related: `docs/design/` (memory-areas, awl-frontend, scl-to-awl), AGENTS.md
 "LSP mode", ADR 002 (runtime C ABI), ADR 004 (ST as a mode).
 
@@ -73,7 +77,26 @@ Related: `docs/design/` (memory-areas, awl-frontend, scl-to-awl), AGENTS.md
 
 ## Implementation proposal (phases = self-contained commits)
 
-**Phase 1 — multi-file CLI, whole-project build via AST splice.**
+**Phase 1 — multi-file CLI, whole-project build via AST splice. DONE.**
+Notes from the implementation:
+- STEP 7 forward declarations are legal: a unit with an empty body
+  (e.g. `Forward-declarations.scl`) may share its name with the real
+  definition. `parseInputFiles` (sclang.cpp) allows fwd-decl + one real
+  definition and rejects two real definitions with both sites. MLIRGen's
+  pre-passes must dedup signatures per name (`registerCallableSignature`,
+  MLIRGen.cpp) or the call gets the parameters twice; the main loop must
+  not re-`push_back` a returned existing op (fwd-decl after the definition
+  used to corrupt the module and hang — fixed by checking
+  `func->getParentOp() != theModule`).
+- Implemented as: multiple positional inputs, `--project=<dir>` (sorted
+  `*.scl`/`*.awl`/`*.st` by `-x`), `ModuleAST::spliceFrom`; AWL multi-file
+  concatenates texts (v1 limitation: locations refer to the concatenated
+  text); multi `.mlir` inputs rejected.
+- Tests: `test/sclang/multi_file{,_callee,_dup,_fwddecl}.scl` (cross-file
+  call with real result type, both file orders, fwd-decl both orders with
+  JIT scan values, duplicate-name negative); conformance per-project tier
+  uses explicit positional file lists (and `--project=` on dirs without
+  non-SCL files like `makefile.scl`).
 - `include/sclang/SclGen/AST.h`: add `ModuleAST::spliceFrom(ModuleAST&&)`
   (units are private; begin/end are const-only today) plus unit-name access
   for duplicate detection (`UnitAST::getIdentifier()` exists, AST.h:1172).

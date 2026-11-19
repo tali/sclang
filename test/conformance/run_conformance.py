@@ -119,10 +119,26 @@ def awlpro_db_syms(path):
 
 # Returns (exit_code, stderr_lines). 0 = success, 2 = executed but __ASSERT
 # oracles failed (oracle tier), anything else = compile/lower/run failure.
-def run_one(sclang, path, xflag, emit='mlir', extra=()):
+def run_one(sclang, path, xflag, emit='mlir', extra=(), project=None):
     extra = tuple(extra) + awlpro_db_syms(path)
+    cmd = [sclang, xflag, '--emit=' + emit, *extra]
+    # project= compiles all sources of the directory as one multi-file
+    # project (native --project= mode) instead of the single `path` file.
+    cmd.append('--project=' + project if project is not None else path)
     try:
-        p = subprocess.run([sclang, xflag, '--emit=' + emit, *extra, path],
+        p = subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.PIPE, timeout=TIMEOUT_S)
+        return p.returncode, p.stderr.decode('utf-8', 'replace').splitlines()
+    except subprocess.TimeoutExpired:
+        return -1, ['TIMEOUT (possible intra-block jump loop)']
+
+
+def run_files(sclang, files, xflag, emit='mlir'):
+    # Multi-file project as explicit positional inputs (sorted like
+    # --project= would). `files[0]` anchors the awlpro db-sym lookup.
+    extra = awlpro_db_syms(files[0])
+    try:
+        p = subprocess.run([sclang, xflag, '--emit=' + emit, *extra, *files],
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                            timeout=TIMEOUT_S)
         return p.returncode, p.stderr.decode('utf-8', 'replace').splitlines()
@@ -241,7 +257,11 @@ def main():
                               extra=('--jit-cycles=1', '--cycle-ms=0'))
             oracle_ok += record(rc == 0, p, xflag + ' oracle', err)
 
-    # --- compile tier, SCL per-project: concatenate all .scl files of a dir ---
+    # --- compile tier, SCL per-project: all .scl files of a dir as one
+    # multi-file project, given as explicit positional inputs (the primary
+    # multi-file path). For dirs without non-SCL files (e.g. makefile.scl),
+    # additionally check native --project=dir. (Was: concatenate into one
+    # temp file — see docs/design/multi-file-incremental.md.)
     dirs = sorted(set(os.path.dirname(p) for p in all_scl_files))
     proj_ok = 0
     proj_total = 0
@@ -250,14 +270,15 @@ def main():
         if not files:
             continue
         proj_total += 1
-        tmp = os.path.join('/tmp', 'sclang-conformance-proj.scl')
-        with open(tmp, 'w') as out:
-            for i, p in enumerate(files):
-                if i:
-                    out.write('\n')
-                out.write(read_text(p))
-        rc, err = run_one(args.sclang, tmp, '-x=scl')
-        proj_ok += record(rc == 0, d + ' (project)', '-x=scl', err)
+        rc, err = run_files(args.sclang, files, '-x=scl')
+        ok = rc == 0
+        if all(os.path.basename(p) != 'makefile.scl' for p in
+               [os.path.join(d, f) for f in os.listdir(d)]):
+            rc2, err2 = run_one(args.sclang, files[0], '-x=scl', project=d)
+            if rc2 != 0:
+                ok = False
+                err = err2
+        proj_ok += record(ok, d + ' (project)', '-x=scl', err)
 
     def rate(ok, total):
         return ok / total if total else 1.0

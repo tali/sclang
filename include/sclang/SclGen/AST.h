@@ -29,6 +29,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Casting.h"
+#include <iterator>
 #include <vector>
 
 namespace sclang {
@@ -1369,8 +1370,17 @@ public:
 
   auto begin() const -> decltype(units.begin()) { return units.begin(); }
   auto end() const -> decltype(units.end()) { return units.end(); }
+  size_t size() const { return units.size(); }
   LangMode getMode() const { return mode; }
   bool iecMode() const { return mode == LangMode::IEC; }
+
+  /// Multi-file projects: one project is one namespace (STEP 7 FC/FB/DB
+  /// names are globally unique), so the units of all source files are
+  /// simply concatenated into one module AST.
+  void spliceFrom(ModuleAST &&other) {
+    units.insert(units.end(), std::make_move_iterator(other.units.begin()),
+                 std::make_move_iterator(other.units.end()));
+  }
 };
 
 void dump(const ModuleAST &);

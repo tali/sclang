@@ -68,6 +68,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorOr.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/DynamicLibrary.h"
@@ -78,10 +79,17 @@
 using namespace sclang;
 namespace cl = llvm::cl;
 
-static cl::opt<std::string> inputFilename(cl::Positional,
-                                          cl::desc("<input SCL file>"),
-                                          cl::init("-"),
-                                          cl::value_desc("filename"));
+static cl::list<std::string> inputFilenames(
+    cl::Positional, cl::desc("<input source file(s)> — multiple files are "
+                             "compiled as one project (one namespace)"),
+    cl::value_desc("filename"), cl::ZeroOrMore);
+/// Compile all source files of a project directory as one project (see
+/// docs/design/multi-file-incremental.md): sorted *.scl (or *.awl with
+/// -x=awl, *.st with -x=st) in the directory.
+static cl::opt<std::string> projectDir(
+    "project", cl::desc("Compile all source files of this directory as one "
+                        "project (sorted, by extension of -x)"),
+    cl::init(""), cl::value_desc("dir"));
 
 namespace {
 enum InputType { Scl, MLIR, Awl, St };
@@ -340,16 +348,105 @@ parseSourceText(llvm::StringRef text, std::string name,
   return parser.ParseModule();
 }
 
-/// Returns a SCL AST resulting from parsing the file or a nullptr on error.
-std::unique_ptr<sclang::ModuleAST> parseInputFile(llvm::StringRef filename) {
-  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> FileOrErr =
-      llvm::MemoryBuffer::getFileOrSTDIN(filename);
-  if (std::error_code EC = FileOrErr.getError()) {
-    llvm::errs() << "Could not open input file: " << EC.message() << "\n";
-    return nullptr;
+std::unique_ptr<sclang::ModuleAST>
+parseInputFiles(llvm::ArrayRef<std::string> files,
+                std::function<void(int, int, const std::string &)> sink);
+
+/// Expand the positional inputs + `--project` into a sorted, de-duplicated
+/// file list. With no positional input, reads stdin ("-").
+static llvm::SmallVector<std::string, 4> expandInputFiles() {
+  llvm::SmallVector<std::string, 4> files;
+  if (!projectDir.empty()) {
+    std::string ext = inputType == InputType::Awl
+                          ? ".awl"
+                          : (inputType == InputType::St ? ".st" : ".scl");
+    std::error_code ec;
+    for (llvm::sys::fs::directory_iterator it(projectDir, ec), end;
+         !ec && it != end; it.increment(ec)) {
+      if (llvm::StringRef(it->path()).ends_with(ext))
+        files.push_back(it->path());
+    }
+    if (ec)
+      llvm::errs() << "sclang: cannot read project dir '" << projectDir
+                   << "': " << ec.message() << "\n";
+    llvm::sort(files); // deterministic order
   }
-  auto buffer = FileOrErr.get()->getBuffer();
-  return parseSourceText(buffer, std::string(filename));
+  for (auto &f : inputFilenames)
+    files.push_back(f);
+  if (files.empty())
+    files.push_back("-");
+  return files;
+}
+
+/// True for a POU with an empty body: a STEP 7 forward declaration
+/// (FUNCTION x ... BEGIN END_FUNCTION in a separate file), which a later
+/// real definition replaces (MLIRGen handles the replace; see
+/// lib/SclGen/MLIRGen.cpp).
+static bool isForwardDecl(const sclang::UnitAST *unit) {
+  const sclang::CodeSectionAST *code = nullptr;
+  switch (unit->getKind()) {
+  case sclang::UnitAST::Unit_Function:
+    code = static_cast<const sclang::FunctionAST *>(unit)->getCode();
+    break;
+  case sclang::UnitAST::Unit_OrganizationBlock:
+    code = static_cast<const sclang::OrganizationBlockAST *>(unit)->getCode();
+    break;
+  case sclang::UnitAST::Unit_FunctionBlock:
+    code = static_cast<const sclang::FunctionBlockAST *>(unit)->getCode();
+    break;
+  default:
+    return false;
+  }
+  return code && code->getInstructions().empty();
+}
+
+/// Parse all input files and splice their units into one ModuleAST: a
+/// project is one namespace (STEP 7 FC/FB/DB names are globally unique),
+/// see docs/design/multi-file-incremental.md. Two real definitions of the
+/// same unit are a project error (diagnosed with both sites); a forward
+/// declaration plus one real definition is legal.
+std::unique_ptr<sclang::ModuleAST>
+parseInputFiles(llvm::ArrayRef<std::string> files,
+                std::function<void(int, int, const std::string &)> sink =
+                    nullptr) {
+  auto merged = std::make_unique<sclang::ModuleAST>(
+      std::vector<std::unique_ptr<sclang::UnitAST>>{}, langMode());
+  // upper-cased unit name -> (definition site, is-forward-decl)
+  llvm::StringMap<std::pair<std::string, bool>> seen;
+  for (auto &f : files) {
+    llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
+        llvm::MemoryBuffer::getFileOrSTDIN(f);
+    if (std::error_code ec = fileOrErr.getError()) {
+      llvm::errs() << "Could not open input file: " << ec.message() << "\n";
+      return nullptr;
+    }
+    auto ast = parseSourceText(fileOrErr.get()->getBuffer(), f, sink);
+    if (!ast)
+      return nullptr;
+    for (const auto &unit : *ast) {
+      std::string up = unit->getIdentifier().upper();
+      const auto &loc = unit->loc();
+      std::string site =
+          (loc.file ? *loc.file : f) + ":" + std::to_string(loc.line);
+      bool fwd = isForwardDecl(unit.get());
+      auto it = seen.find(up);
+      if (it != seen.end() && !it->second.second && !fwd) {
+        // two real definitions of the same unit
+        std::string msg = "duplicate program unit '" +
+                          unit->getIdentifier().str() + "' (also defined at " +
+                          it->second.first + ")";
+        llvm::errs() << (loc.file ? *loc.file : f) << ":" << loc.line << ":"
+                     << loc.col << ": error: " << msg << "\n";
+        if (sink)
+          sink(loc.line, loc.col, msg);
+        return nullptr;
+      }
+      if (it == seen.end() || it->second.second)
+        seen[up] = {site, fwd}; // a real definition replaces a fwd decl
+    }
+    merged->spliceFrom(std::move(*ast));
+  }
+  return merged;
 }
 
 /// Load a module from in-memory source text (LSP mode). `name` selects the
@@ -392,16 +489,63 @@ int loadMLIRFromBuffer(
 }
 
 int loadMLIR(mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &module) {
-  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
-      llvm::MemoryBuffer::getFileOrSTDIN(inputFilename);
-  if (std::error_code EC = fileOrErr.getError()) {
-    llvm::errs() << "Could not open input file: " << EC.message() << "\n";
-    bool isMlir = inputType == InputType::MLIR ||
-                  llvm::StringRef(inputFilename).ends_with(".mlir");
-    return isMlir ? -1 : 6;
+  llvm::SmallVector<std::string, 4> files = expandInputFiles();
+  bool isMlirInput = inputType == InputType::MLIR;
+  for (auto &f : files)
+    isMlirInput = isMlirInput || llvm::StringRef(f).ends_with(".mlir");
+  if (files.size() == 1) {
+    llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
+        llvm::MemoryBuffer::getFileOrSTDIN(files[0]);
+    if (std::error_code EC = fileOrErr.getError()) {
+      llvm::errs() << "Could not open input file: " << EC.message() << "\n";
+      return isMlirInput ? -1 : 6;
+    }
+    return loadMLIRFromBuffer(context, module, fileOrErr.get()->getBuffer(),
+                              files[0]);
   }
-  return loadMLIRFromBuffer(context, module, fileOrErr.get()->getBuffer(),
-                            inputFilename);
+  // Multi-file project (docs/design/multi-file-incremental.md).
+  if (isMlirInput) {
+    llvm::errs() << "sclang: multiple .mlir inputs are not supported (merge "
+                    "them into one file first)\n";
+    return -1;
+  }
+  if (inputType == InputType::Awl ||
+      llvm::all_of(files,
+                   [](const std::string &f) {
+                     return llvm::StringRef(f).ends_with(".awl");
+                   })) {
+    // AWL is a linear instruction list: concatenate the files (locations
+    // then refer to the concatenated text; v1 limitation, see design doc).
+    std::string text, name;
+    for (auto &f : files) {
+      llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
+          llvm::MemoryBuffer::getFileOrSTDIN(f);
+      if (std::error_code EC = fileOrErr.getError()) {
+        llvm::errs() << "Could not open input file: " << EC.message() << "\n";
+        return 6;
+      }
+      text += fileOrErr.get()->getBuffer();
+      text += '\n';
+      if (name.empty())
+        name = f;
+      else
+        name += "+";
+    }
+    for (auto &ds : dbSyms) {
+      auto eq = ds.find('=');
+      if (eq == std::string::npos)
+        continue;
+      sclang::awlRegisterNamedDb(ds.substr(0, eq),
+                                 (int32_t)atoi(ds.substr(eq + 1).c_str()));
+    }
+    module = sclang::awlGen(context, text, name);
+    return !module ? 1 : 0;
+  }
+  auto moduleAST = parseInputFiles(files);
+  if (!moduleAST)
+    return 6;
+  module = mlirGen(context, *moduleAST);
+  return !module ? 1 : 0;
 }
 
 /// Run the lowering/optimization pass pipeline on an already-loaded module
@@ -487,7 +631,7 @@ int dumpAST() {
     return 5;
   }
 
-  auto moduleAST = parseInputFile(inputFilename);
+  auto moduleAST = parseInputFiles(expandInputFiles());
   if (!moduleAST)
     return 1;
 

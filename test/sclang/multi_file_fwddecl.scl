@@ -1,0 +1,12 @@
+// RUN: sclang --emit=mlir %s | FileCheck %s
+// STEP 7 forward declaration (empty body) of double_it. When compiled
+// together with the real definition (multi_file_callee.scl) as one project,
+// the real definition wins — tested via the extra RUN lines in
+// multi_file.scl (both orders must give the same scan values).
+// CHECK-LABEL: scl.function @double_it
+function double_it : int
+var_input
+  x : int;
+end_var
+begin
+end_function

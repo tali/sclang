@@ -1,0 +1,25 @@
+// RUN: sclang --emit=mlir %s %S/multi_file_callee.scl | FileCheck %s
+// RUN: sclang --emit=mlir %S/multi_file_callee.scl %s | FileCheck %s
+// RUN: sclang --emit=jit --jit-cycles=3 --scan-io=out:mw=M/500/2 %s %S/multi_file_callee.scl 2>&1 | FileCheck %s --check-prefix=SCAN
+// Forward declaration + real definition as one project (both orders):
+// RUN: sclang --emit=jit --jit-cycles=3 --scan-io=out:mw=M/500/2 %S/multi_file_fwddecl.scl %s %S/multi_file_callee.scl 2>&1 | FileCheck %s --check-prefix=SCAN
+// RUN: sclang --emit=jit --jit-cycles=3 --scan-io=out:mw=M/500/2 %S/multi_file_callee.scl %S/multi_file_fwddecl.scl %s 2>&1 | FileCheck %s --check-prefix=SCAN
+// Multi-file project: the callee lives in multi_file_callee.scl. Both file
+// orders must work (whole-project signature pre-pass) and produce the same
+// IR as the concatenated single file. The call must get the callee's real
+// result type (!scl.int), not an external i32 stub.
+// CHECK-LABEL: scl.function @OB1
+// CHECK: [[V:%[0-9]+]] = scl.call.fc @double_it({{.*}}) {argNames = ["x"]} : (!scl.int) -> !scl.int
+// CHECK: scl.store {{.*}} = [[V]] : !scl.int
+// SCAN: scan 0: mw=15
+// SCAN: scan 1: mw=30
+// SCAN: scan 2: mw=45
+function OB1 : int
+begin
+  %MW500 := double_it(%MW500 + 5);
+end_function
+
+function _mlir_ciface_OB1 : void
+begin
+  OB1();
+end_function

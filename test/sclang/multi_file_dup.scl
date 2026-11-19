@@ -1,0 +1,11 @@
+// RUN: not sclang --emit=mlir %S/multi_file_callee.scl %s 2>&1 | FileCheck %s
+// Negative test: two files defining the same program unit must be a
+// project error naming both definition sites (one project = one namespace).
+// CHECK: duplicate program unit 'double_it' (also defined at {{.*}}multi_file_callee.scl{{.*}})
+function double_it : int
+var_input
+  x : int;
+end_var
+begin
+  double_it := x;
+end_function

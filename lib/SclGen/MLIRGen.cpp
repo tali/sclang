@@ -172,41 +172,22 @@ public:
           }
       }
       if (auto *fn = llvm::dyn_cast<FunctionAST>(unit.get())) {
-        functionResultTypes[fn->getIdentifier()] = getType(fn->getType());
-        collectVarTypes(fn->getDeclarations(),
-                        callableVarTypes[fn->getIdentifier()],
-                        &callableVarNames[fn->getIdentifier()],
-                        &callableVarDefaults[fn->getIdentifier()],
-                        &callableAllOrder[fn->getIdentifier()],
-                        &callableInOut[fn->getIdentifier()],
-                        &callableOutputs[fn->getIdentifier()]);
+        registerCallableSignature(unit.get(), fn->getIdentifier(),
+                                  fn->getDeclarations(),
+                                  getType(fn->getType()));
       } else if (auto *ob = llvm::dyn_cast<OrganizationBlockAST>(unit.get())) {
-        functionResultTypes[ob->getIdentifier()] = builder.getNoneType();
-        collectVarTypes(ob->getDeclarations(),
-                        callableVarTypes[ob->getIdentifier()],
-                        &callableVarNames[ob->getIdentifier()],
-                        &callableVarDefaults[ob->getIdentifier()],
-                        &callableAllOrder[ob->getIdentifier()],
-                        &callableInOut[ob->getIdentifier()],
-                        &callableOutputs[ob->getIdentifier()]);
+        registerCallableSignature(unit.get(), ob->getIdentifier(),
+                                  ob->getDeclarations(), builder.getNoneType());
       } else if (auto *fb = llvm::dyn_cast<FunctionBlockAST>(unit.get())) {
-        collectVarTypes(fb->getDeclarations(),
-                        callableVarTypes[fb->getIdentifier()],
-                        &callableVarNames[fb->getIdentifier()],
-                        &callableVarDefaults[fb->getIdentifier()],
-                        &callableAllOrder[fb->getIdentifier()],
-                        &callableInOut[fb->getIdentifier()],
-                        &callableOutputs[fb->getIdentifier()]);
+        registerCallableSignature(unit.get(), fb->getIdentifier(),
+                                  fb->getDeclarations(), nullptr);
         // IEC 61131-3 ed.3 METHODs: registered as functions "<FB>.<METHOD>"
         // whose first parameter is the instance-DB address.
         for (auto &m : fb->getMethods()) {
           std::string mname =
               (fb->getIdentifier() + "." + m->getIdentifier()).str();
-          functionResultTypes[mname] = getType(m->getType());
-          collectVarTypes(m->getDeclarations(), callableVarTypes[mname],
-                          &callableVarNames[mname], &callableVarDefaults[mname],
-                          &callableAllOrder[mname], &callableInOut[mname],
-                          &callableOutputs[mname]);
+          registerCallableSignature(m.get(), mname, m->getDeclarations(),
+                                    getType(m->getType()));
         }
       }
     }
@@ -225,7 +206,11 @@ public:
       auto func = mlirGen(unit.get());
       if (!func || errorOccurred)
         return nullptr;
-      theModule.push_back(func);
+      // A forward declaration arriving AFTER the real definition returns
+      // the already-linked definition op — don't link it into the module
+      // a second time (that corrupts the block).
+      if (func->getParentOp() != theModule)
+        theModule.push_back(func);
       for (auto *op : extraOps)
         theModule.push_back(op);
       extraOps.clear();
@@ -392,6 +377,31 @@ private:
       }
     }
   }
+  /// Register a callable's signature in the pre-pass maps. A unit may be
+  /// declared several times across project files (STEP 7 forward
+  /// declarations, e.g. an empty-body FUNCTION in a Forward-declarations
+  /// file): only the FIRST declaration's parameters are collected — the
+  /// real definition replaces the forward-declared op in the main loop
+  /// below — and a conflicting result type between declarations is an
+  /// error. `resultType` == nullptr means "no result type" (FBs).
+  void registerCallableSignature(const UnitAST *unit, llvm::StringRef name,
+                                 const DeclarationSectionAST *decls,
+                                 mlir::Type resultType) {
+    auto it = functionResultTypes.find(name);
+    if (it != functionResultTypes.end()) {
+      if (resultType && it->second && it->second != resultType)
+        emitError(loc(unit->loc()))
+            << "conflicting result type for '" << name << "'";
+    } else if (resultType) {
+      functionResultTypes[name] = resultType;
+    }
+    if (callableVarTypes.contains(name))
+      return; // already declared (forward declaration)
+    collectVarTypes(decls, callableVarTypes[name], &callableVarNames[name],
+                    &callableVarDefaults[name], &callableAllOrder[name],
+                    &callableInOut[name], &callableOutputs[name]);
+  }
+
   /// Names of all function blocks in the module (for type resolution).
   llvm::StringMap<bool> fbNames;
   /// upper-cased FB name -> original spelling (MLIR symbols are

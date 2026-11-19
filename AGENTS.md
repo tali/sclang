@@ -23,10 +23,11 @@ one-line pointer here.
   (NO new dialect; LangMode threaded through Lexer/Parser/MLIRGen, dialect
   only gains LREAL f64 type + `scl.config` op).
 - `docs/design/` — evolving design plans: memory-areas (phase 1 implemented),
-  awl-frontend, scl-to-awl, multi-file-incremental (project model + per-file
-  content-hash cache + LSP project mode; PLAN ONLY, not implemented — project
-  = one namespace = one MLIR module via ModuleAST unit splicing; the doc's
-  "Implementation proposal" section has the phase/commit breakdown — see it
+  awl-frontend, scl-to-awl, multi-file-incremental (project = one namespace =
+  one MLIR module via ModuleAST unit splicing — phase 1 IMPLEMENTED:
+  multiple positional inputs + `--project=<dir>`, STEP 7 forward
+  declarations, duplicate-POU errors; phases 2-4 = per-file codegen split,
+  content-hash cache, LSP project mode, still plans in that doc — see it
   before touching multi-file code). Update these when the plan changes; add
   new ADRs when a decision becomes fixed.
 - README.md is user-facing (status + build); do not put design detail there.
@@ -36,7 +37,10 @@ one-line pointer here.
 ## Architecture / pipeline
 
 ```
-.scl ──> sclang-gen (SclGen: Lexer → Parser → AST → MLIRGen) ──> scl dialect ops
+.scl... ──> sclang (multi-file: positional list or --project=<dir>; units are
+        spliced into one ModuleAST = one project namespace, see
+        docs/design/multi-file-incremental.md)
+      ──> sclang-gen (SclGen: Lexer → Parser → AST → MLIRGen) ──> scl dialect ops
 .awl ──> sclang-gen -x awl (AwlGen: Lexer → Parser → codegen) ──> awl dialect ops
       both ──> LowerToStd pass (lib/SclTransforms/LowerToStd.cpp + LowerToStd{Scl,Awl,Util}.cpp, partial conversion)
       ──> func/arith/memref/scf/cf (+ calls to the runtime C ABI for % areas)
@@ -312,7 +316,7 @@ has no `\b` — use python3 for regex edits.
 
 - Test methodology and the rationale for each tier (lit / corpora / JIT smoke
   / awlsim oracle / ST traces / differential cross / fuzz, plus the
-  `jit_edge_*` scenario rationale) are in `docs/testing.md`. Current: 141
+  `jit_edge_*` scenario rationale) are in `docs/testing.md`. Current: 145
   lit tests, 92/92 ST traces with cross, plus the LSP smoke test
   (`test/conformance/lsp_smoke.py`, see "LSP mode" above).
 - lit tests live in `test/SclGen/Parse`, `test/SclGen/MLIR`, `test/SclTransforms`,

@@ -1,0 +1,12 @@
+// RUN: sclang --emit=mlir %s | FileCheck %s
+// Callee of the multi-file project tests (multi_file.scl). Also a valid
+// single-file test on its own.
+// CHECK-LABEL: scl.function @double_it
+function double_it : int
+var_input
+  x : int;
+end_var
+begin
+  // CHECK: scl.add {{.*}} : !scl.int
+  double_it := x + 10;
+end_function
