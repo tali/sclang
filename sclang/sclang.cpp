@@ -178,6 +178,14 @@ static cl::opt<enum Action> emitAction(
                           "dialect (skips the AWL text print/re-parse "
                           "round-trip used by --emit=awl + -x=awl)")));
 
+// The Action enum above is ordered by pipeline depth (None < DumpAST < ... <
+// RunJITAwl). These predicates are the ONLY places that rely on that order;
+// keep them updated when adding a new action so a reordering/insertion can
+// never silently change what a comparison means.
+static bool actionLowersToStd() { return emitAction >= Action::DumpMLIRStd; }
+static bool actionLowersToLLVM() { return emitAction >= Action::DumpMLIRLLVM; }
+static bool actionOutputsMLIR() { return emitAction <= Action::DumpMLIRLLVM; }
+
 static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
 // Run as a minimal LSP server (JSON-RPC over stdio) instead of a batch
 // compile: see sclang/Lsp.cpp and AGENTS.md "LSP mode".
@@ -647,8 +655,8 @@ int processModule(mlir::MLIRContext &context,
   pm.enableVerifier(verifyEach);
 
   // Check to see what granularity of MLIR we are compiling to.
-  bool isLoweringToStd = emitAction >= Action::DumpMLIRStd;
-  bool isLoweringToLLVM = emitAction >= Action::DumpMLIRLLVM;
+  bool isLoweringToStd = actionLowersToStd();
+  bool isLoweringToLLVM = actionLowersToLLVM();
 
   if (enableOpt || isLoweringToStd) {
     mlir::OpPassManager &optFC = pm.nest<mlir::scl::FunctionOp>();
@@ -1232,7 +1240,7 @@ int main(int argc, char **argv) {
     return error;
 
   // If we aren't exporting to non-mlir, then we are done.
-  bool isOutputingMLIR = emitAction <= Action::DumpMLIRLLVM;
+  bool isOutputingMLIR = actionOutputsMLIR();
   if (isOutputingMLIR) {
     module->print(llvm::outs());
     return 0;
