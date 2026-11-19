@@ -1,4 +1,4 @@
-add_llvm_library(SclDialect
+add_mlir_dialect_library(SclDialect
   ${SCLANG_MAIN_INCLUDE_DIR}/sclang/SclDialect/Dialect.h
   ${SCLANG_MAIN_INCLUDE_DIR}/sclang/SclDialect/SclBase.td
   ${SCLANG_MAIN_INCLUDE_DIR}/sclang/SclDialect/SclTypes.h

@@ -24,3 +24,5 @@ target_link_libraries(sclang-lsp-server PRIVATE
   MLIRSupport
   LLVMSupportLSP
 )
+
+llvm_update_compile_flags(sclang-lsp-server)

@@ -28,3 +28,5 @@ target_link_libraries(sclang-opt PRIVATE
   MLIRSupport
   MLIROptLib
 )
+
+llvm_update_compile_flags(sclang-opt)

@@ -56,3 +56,5 @@ target_link_libraries(sclang
     MLIRTargetLLVMIRExport
     MLIRTransforms
 )
+
+llvm_update_compile_flags(sclang)

@@ -224,6 +224,12 @@ ninja check-sclang              # run all lit tests (background it; poll the log
 ./bin/sclang --opt --emit=jit test/sclang/jit_for.scl # manual JIT run
 ```
 
+CMake follows the standard out-of-tree template (mlir/examples/standalone):
+dialect libs use add_mlir_dialect_library (auto-registered in
+MLIR_DIALECT_LIBS), other libs add_mlir_library, tools get
+llvm_update_compile_flags, standalone mode uses find_package(MLIR) +
+link_directories/add_definitions, C++17.
+
 Build system: CMake ONLY (Bazel support was dropped in 2026 after research
 showed the whole out-of-tree MLIR ecosystem — CIRCT, onnx-mlir, torch-mlir,
 Triton, IREE — builds with CMake against a pinned/installed LLVM, while Bazel

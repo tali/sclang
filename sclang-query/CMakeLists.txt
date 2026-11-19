@@ -20,3 +20,5 @@ target_link_libraries(sclang-query PRIVATE
   MLIRParser
   MLIRSupport
 )
+
+llvm_update_compile_flags(sclang-query)

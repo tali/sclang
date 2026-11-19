@@ -1,4 +1,4 @@
-add_llvm_library(AwlDialect
+add_mlir_dialect_library(AwlDialect
   ${SCLANG_MAIN_INCLUDE_DIR}/sclang/AwlDialect/Dialect.h
   ${SCLANG_MAIN_INCLUDE_DIR}/sclang/AwlDialect/AwlBase.td
   ${SCLANG_MAIN_INCLUDE_DIR}/sclang/AwlDialect/AwlOps.td

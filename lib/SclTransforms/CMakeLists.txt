@@ -1,4 +1,4 @@
-add_llvm_library(SclTransforms
+add_mlir_library(SclTransforms
   ${SCLANG_MAIN_INCLUDE_DIR}/sclang/SclTransforms/Passes.h
   LowerToStd.cpp
   LowerToStdInternal.h

@@ -15,7 +15,7 @@ if( CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR )
 #-------------------------------------------------------------------------------
   project(sclang LANGUAGES CXX C)
 
-  set(CMAKE_CXX_STANDARD 14)
+  set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard to conform to")
   set(CMAKE_CXX_STANDARD_REQUIRED YES)
 
 #-------------------------------------------------------------------------------
@@ -51,8 +51,11 @@ endif ()
   include(AddMLIR)
   include(HandleLLVMOptions)
 
-  set(CIRCT_BUILT_STANDALONE 1)
-  set(BACKEND_PACKAGE_STRING "LLVM ${LLVM_PACKAGE_VERSION}")
+  # Standard out-of-tree setup (mlir/examples/standalone):
+  link_directories(${LLVM_BUILD_LIBRARY_DIR})
+  add_definitions(${LLVM_DEFINITIONS})
+
+  set(SCLANG_PACKAGE_STRING "LLVM ${LLVM_PACKAGE_VERSION}")
 else()
   set(MLIR_MAIN_SRC_DIR ${LLVM_MAIN_SRC_DIR}/../mlir ) # --src-root
   set(MLIR_INCLUDE_DIR ${MLIR_MAIN_SRC_DIR}/include ) # --includedir
@@ -61,7 +64,7 @@ else()
   include_directories(SYSTEM ${MLIR_INCLUDE_DIR})
   include_directories(SYSTEM ${MLIR_TABLEGEN_OUTPUT_DIR})
 
-  set(BACKEND_PACKAGE_STRING "${PACKAGE_STRING}")
+  set(SCLANG_PACKAGE_STRING "${PACKAGE_STRING}")
 endif()
 
 # Define the default arguments to use with 'lit', and an option for the user to

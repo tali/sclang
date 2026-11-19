@@ -37,3 +37,5 @@ target_link_libraries(sclang-gen
     MLIRSideEffectInterfaces
     MLIRTransforms
 )
+
+llvm_update_compile_flags(sclang-gen)

@@ -27,3 +27,5 @@ target_link_libraries(sclang-translate PRIVATE
   LLVMCore
   LLVMSupport
 )
+
+llvm_update_compile_flags(sclang-translate)

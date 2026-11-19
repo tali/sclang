@@ -1,4 +1,4 @@
-add_llvm_library(SclGen
+add_mlir_library(SclGen
   ${SCLANG_MAIN_INCLUDE_DIR}/sclang/SclGen/AST.h
   ${SCLANG_MAIN_INCLUDE_DIR}/sclang/SclGen/Lexer.h
   ${SCLANG_MAIN_INCLUDE_DIR}/sclang/SclGen/Parser.h
