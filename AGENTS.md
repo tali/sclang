@@ -223,6 +223,10 @@ has no `\b` — use python3 for regex edits.
   non-null, DirectType db/byte/bit/width) and the type PARSERS validate the
   same ranges so crafted `.mlir` text is rejected with a diagnostic at
   parse time (asserts are off, so `TypeBase::get` alone would not check).
+- Parser diagnostics: `parseError` prints line/col, the expected item and
+  the actual token (the Token printer is total — unknown bytes print as
+  `<token N> 'c'`). The parser aborts at the first error on purpose: no
+  panic-mode recovery, so a broken program is never silently mis-compiled.
   Op verifiers: GetDirectOp (attrs match the direct type), LoadOp/StoreOp
   (direct-address access width; stores allow any scalar — assignment
   converts implicitly), GetIndexOp (index count == array rank),
