@@ -224,6 +224,20 @@ ninja check-sclang              # run all lit tests (background it; poll the log
 ./bin/sclang --opt --emit=jit test/sclang/jit_for.scl # manual JIT run
 ```
 
+Build-system status (researched 2026, see "Repo hygiene" for details):
+CMake is the PRIMARY build (in-tree via LLVM_EXTERNAL_PROJECTS in build.23, or
+standalone with find_package(MLIR)); this matches the whole out-of-tree MLIR
+ecosystem (CIRCT, onnx-mlir, torch-mlir, Triton all build with CMake against a
+pinned/installed LLVM; Bazel is used almost only by Google-style monorepos like
+XLA and by upstream LLVM itself). The Bazel path is currently BROKEN on all
+platforms: `.bazelversion` pins 4.0.0 (pre-arm64-macos, needs >=4.1.0; Bazel 9
+removes WORKSPACE entirely, 8 disables it) and WORKSPACE loads
+`llvm_disable_optional_support_deps`, which LLVM 23's utils/bazel no longer
+exports (verified: `USE_BAZEL_VERSION=7.4.1 bazel query //sclang:all` fails
+exactly there; 7.4.1 itself runs fine natively on arm64 macOS). If Bazel is
+kept at all: bump to 7.x and fix WORKSPACE — but the ecosystem direction says
+CMake-first, so treat Bazel as best-effort (CI job may be dropped).
+
 CMake was configured with `-DCMAKE_MAKE_PROGRAM=/opt/homebrew/bin/ninja
 -DLLVM_TARGETS_TO_BUILD=AArch64 -DLLVM_HOST_TRIPLE=arm64-apple-darwin
 -DLLVM_DEFAULT_TARGET_TRIPLE=arm64-apple-darwin -DLLVM_ENABLE_ASSERTIONS=OFF
